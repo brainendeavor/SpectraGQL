@@ -1,5 +1,6 @@
 # SpectraGQL Architecture & Strategy
-**The CQRS Command Gateway for GraphQL**
+**The Write-Path Gateway for GraphQL**
+*Transforming GraphQL mutations into high-performance event streams*
 
 ---
 
@@ -15,6 +16,8 @@ GraphQL is widely praised for giving frontend teams expressive control over data
 GraphQL inherently provides the architectural boundary needed for **Command Query Responsibility Segregation (CQRS)**:
 - `Query` operations are explicitly **Reads** (idempotent, cacheable, fan-out friendly).
 - `Mutation` operations are explicitly **Commands** (intents to alter state, subject to domain validation and destined for an immutable, ordered event log).
+
+> For a deep dive into the architectural debate, deconstructing the mutation anti-pattern critique, and why GraphQL mutations belong on the event-driven write path, see **[Philosophy & Core Thesis](philosophy.md)**.
 
 ```
                       ┌───────────────────────────────────────────────┐
@@ -251,4 +254,4 @@ Milestone 5: Developer Experience & Ecosystem
 
 SpectraGQL does not need to compete with Apollo or Cosmo on complex schema stitching or federated query planning. 
 
-Its true wedge is **solving the Write side of GraphQL**: turning an undisciplined, brittle RPC mutation layer into a robust, high-performance, event-sourced CQRS command engine. By leveraging Cloudflare Pingora and modern streaming backends like Apache Iggy, SierraDB, and NATS, SpectraGQL provides the missing architectural backbone that enterprise GraphQL has needed for years.
+Its true wedge is **solving the Write side of GraphQL**: transforming GraphQL mutations into a robust, high-performance, event-sourced CQRS command engine. By leveraging Cloudflare Pingora and modern streaming backends like Apache Iggy, SierraDB, and NATS, SpectraGQL provides the missing architectural backbone that enterprise GraphQL has needed for years.

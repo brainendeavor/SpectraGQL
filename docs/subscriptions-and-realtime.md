@@ -134,11 +134,126 @@ With this pattern, the frontend gets **instant perceived performance** (<2ms mut
 
 ## 5. Implementation Path in SpectraGQL Proxy
 
-1. **Protocol Support:**
-   - Implement **Server-Sent Events (SSE)** first: Since Pingora natively handles chunked HTTP responses, SSE requires zero WebSocket protocol upgrade machinery and works out of the box over HTTP/1.1 and HTTP/2.
-   - Implement **WebSocket (`graphql-ws`)** using `tokio-tungstenite` or Pingora's raw stream hijacking for full bidirectional support.
-2. **Topic Mapping Engine:**
-   - Map subscription operation names and arguments directly to broker subjects:
-     `subscription OrderUpdates($id: ID!)` -> `spectra.events.order.<id>`
-3. **Connection Lifecycle & Multiplexing:**
-   - Allow a single WebSocket connection from a client to host multiple active subscriptions (`sub-1`, `sub-2`), with SpectraGQL demultiplexing events from different broker subjects onto the same socket.
+### 5.1 Protocol Decision: `graphql-transport-ws` as First-Class Citizen
+
+While Server-Sent Events (SSE) offer simpler proxying over HTTP chunked transfer, the enterprise GraphQL ecosystem (Apollo Client, Relay, urql, iOS/Android Apollo) treats the **`graphql-transport-ws`** subprotocol as the canonical standard for subscriptions. 
+
+To deliver a transparent edge proxy that requires **zero custom client SDKs**, SpectraGQL prioritizes **`graphql-ws` edge termination**.
+
+---
+
+### 5.2 Technical Deep Dive: WebSocket Edge Termination in Pingora
+
+In standard proxy scenarios, gateways either blindly tunnel TCP connections or proxy WebSockets to a stateful upstream server. In SpectraGQL's CQRS architecture, **there is no stateful upstream subscription server**; resolvers are stateless event consumers. SpectraGQL must **terminate** the WebSocket connection at the edge, manage its lifecycle, and pump events directly from the message broker to the client.
+
+We evaluated two architectural paths for terminating WebSockets inside Cloudflare Pingora:
+
+```
+                  ┌─────────────────────────────────────────────────────────┐
+                  │                 SpectraGQL Proxy (Pingora)              │
+                  │                                                         │
+Client            │   1. HTTP GET /graphql (Upgrade: websocket)             │
+───────────────>  │   2. Pingora validates Sec-WebSocket-Key                │
+                  │   3. Respond HTTP 101 (Sec-WebSocket-Protocol)          │
+                  │                                                         │
+                  │             ┌─────────────────────────────┐             │
+                  │             │  Pingora Connection Hijack  │             │
+                  │             └──────────────┬──────────────┘             │
+                  │                            │ Underlying IO Stream       │
+                  │                            ▼                            │
+                  │             ┌─────────────────────────────┐             │
+                  │             │   tokio-tungstenite Engine  │             │
+                  │             │  (RFC 6455 Frame / Masking) │             │
+                  │             └──────────────┬──────────────┘             │
+                  │                            │ Decoded Frames             │
+                  │                            ▼                            │
+                  │             ┌─────────────────────────────┐             │
+                  │             │  graphql-transport-ws State │             │
+                  │             │  - connection_init / ack    │             │
+                  │             │  - subscribe / complete     │             │
+                  │             │  - ping / pong heartbeat    │             │
+                  │             └──────────────┬──────────────┘             │
+                  └────────────────────────────┼────────────────────────────┘
+                                               │
+                                       Subscribe / Events
+                                               │
+                                               ▼
+                                ┌─────────────────────────────┐
+                                │ Event Broker (NATS / Iggy / │
+                                │ Redis Streams / Kafka)      │
+                                └─────────────────────────────┘
+```
+
+#### Option 1: Pingora Raw Stream Hijacking + `tokio-tungstenite` (Recommended)
+
+* **How it Works:**
+  1. **Handshake Interception:** Pingora intercepts the incoming HTTP request in `early_request_filter` / `request_filter`. It validates headers (`Upgrade: websocket`, `Connection: Upgrade`, `Sec-WebSocket-Key`, and `Sec-WebSocket-Protocol: graphql-transport-ws`).
+  2. **101 Switching Protocols:** Pingora synthesizes the SHA-1 acceptance key (`Sec-WebSocket-Accept`), commits the HTTP 101 Switching Protocols response header, and flushes it to the client socket.
+  3. **Connection Hijacking:** Pingora detaches and yields the raw underlying bidirectional socket stream (TCP or BoringSSL/TLS stream) from the Pingora `Session` lifecycle.
+  4. **Tungstenite Wrapping:** The raw socket stream is passed to Tokio:
+     ```rust
+     let ws_stream = tokio_tungstenite::WebSocketStream::from_raw_socket(
+         raw_stream,
+         tokio_tungstenite::tungstenite::protocol::Role::Server,
+         Some(websocket_config),
+     ).await;
+     ```
+  5. **Spawn Dedicated Connection Actor:** Tokio spawns a lightweight task managing the WebSocket framing and subprotocol state machine for that client.
+* **Trade-Offs:**
+  * **Pros:**
+    * 100% compliant RFC 6455 implementation out of the box (binary/text framing, unmasking, control frames, close handshakes).
+    * Eliminates thousands of lines of brittle custom WebSocket framing code.
+    * Highly optimized zero-copy Rust performance natively integrated with Tokio.
+    * Isolates long-lived WebSocket actors from Pingora's HTTP request-response worker thread pool.
+  * **Cons:** Requires clean socket handoff from Pingora's session engine into an independent Tokio task.
+
+#### Option 2: Native Pingora Custom Frame Parser & Upgrade Pipeline
+
+* **How it Works:**
+  - Build custom Layer 7 frame decoder directly within Pingora's internal filters (`request_body_filter` and raw streaming callbacks) without external libraries like `tokio-tungstenite`.
+* **Trade-Offs:**
+  * **Pros:** Keeps the entire connection lifecycle unified strictly within Pingora's internal abstractions.
+  * **Cons:** Substantial implementation and maintenance overhead. RFC 6455 requires handling frame fragmentation, payload masking, UTF-8 validation, control frame interleaving (pings arriving between fragmented data frames), and graceful close handshakes. Not an 80/20 decision.
+
+> [!TIP]
+> **Architecture Decision:** **Option 1 (Stream Hijacking + `tokio-tungstenite`)** is the optimal strategy. Pingora excels as the wire-speed TLS terminator and routing gateway, while `tokio-tungstenite` provides a rock-solid, production-proven WebSocket framing engine.
+
+---
+
+### 5.3 Protocol State Machine (`graphql-transport-ws`)
+
+SpectraGQL's WebSocket handler implements the official `graphql-transport-ws` protocol state machine:
+
+| Client Message | Direction | Payload | Gateway Action |
+| :--- | :--- | :--- | :--- |
+| `connection_init` | Client $\to$ Gateway | Optional `{ "headers": { "Authorization": "..." } }` | Authenticate/ratify credentials. Return `connection_ack` on success, or close with `4401 Unauthorized`. |
+| `ping` | Client $\leftrightarrow$ Gateway | Optional payload | Echo back `pong` (or send periodic heartbeat `ping` to prevent NAT timeouts). |
+| `subscribe` | Client $\to$ Gateway | `{ "id": "sub_1", "payload": { "query": "...", "variables": {...} } }` | 1. Parse AST with `apollo-parser`.<br>2. Extract subscription root field and arguments.<br>3. Compute broker subject (e.g. `spectra.events.orders.42`).<br>4. Bind consumer listener.<br>5. Register in connection subscription registry. |
+| `next` | Gateway $\to$ Client | `{ "id": "sub_1", "payload": { "data": { ... } } }` | Transmit event payload to client when broker emits message. |
+| `complete` | Client $\to$ Gateway | `{ "id": "sub_1" }` | Unbind broker consumer and deregister subscription from registry. |
+| `complete` | Gateway $\to$ Client | `{ "id": "sub_1" }` | Emitted by gateway for **Mode C ephemeral one-shot subscriptions** immediately after delivering the command result. |
+
+---
+
+### 5.4 Multiplexing & Connection Registry Architecture
+
+A single client connection (e.g. a browser tab or mobile app instance) frequently runs multiple concurrent subscriptions simultaneously (e.g. `orderUpdates` and `unreadNotifications`).
+
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│                        Client Connection Actor                         │
+│                                                                        │
+│  Active Subscriptions (Map<SubId, SubscriptionHandle>):                │
+│  ├── sub-1: "orders.42"      ──> [NATS Consumer: spectra.events.42]   │
+│  └── sub-2: "notifications"   ──> [NATS Consumer: user.notifications]  │
+│                                                                        │
+│  Outgoing MPSC Channel (Bounded):                                      │
+│  [ next(sub-1) ] ──> [ next(sub-2) ] ──> Socket Sink (Wire Speed)      │
+└────────────────────────────────────────────────────────────────────────┘
+```
+
+1. **Connection-Local Multiplexer:** Each connection actor maintains a thread-safe registry of its active subscriptions (`HashMap<String, BoundedSender>`).
+2. **Reverse Broker Event Pump:** When a domain event is published by an async resolver to NATS, Iggy, or Redis Streams:
+   - SpectraGQL's shared broker listener matches the subject against the gateway's topic routing table.
+   - The event is dispatched to all matching client connection channels.
+3. **Slow Client Protection & Backpressure:** Each WebSocket sink uses a bounded Tokio MPSC channel (e.g., buffer capacity 256). If a mobile client on a degraded connection stalls, incoming events do not cause unbounded gateway memory growth. When buffers fill, the gateway can selectively drop intermediate progress events or terminate the slow connection according to policy.

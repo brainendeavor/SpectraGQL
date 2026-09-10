@@ -2,7 +2,7 @@
 name = "spectragql"
 version = "0.1.0"
 edition = "2024"
-description = "The CQRS Command Gateway for GraphQL built on Cloudflare Pingora"
+description = "The Write-Path Gateway for GraphQL built on Cloudflare Pingora"
 license = "MIT"
 repository = "https://github.com/brainendeavor/SpectraGQL"
 homepage = "https://spectragql.dev"
@@ -33,13 +33,12 @@ mlua = { version = "0.10", features = [
     "async",
     "send",
 ] }
-pingora = { path = "/Users/bmo/code/github/pingora/pingora", features = [
+pingora = { version = "0.9.0", features = [
     "boringssl",
     "proxy",
     "cache",
     "lb",
 ] }
-# pingora = { version = "^0.4", features = ["lb"] }
 serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json = { version = "1.0.140", features = ["raw_value"] }
 serde_yaml = "0.9.34"

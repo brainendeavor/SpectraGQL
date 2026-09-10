@@ -5,8 +5,8 @@
 </p>
 
 <p align="center">
-  <strong>The CQRS Command Gateway for GraphQL</strong><br>
-  <em>High-performance wire-speed reverse proxy built on Cloudflare Pingora in Rust</em>
+  <strong>The Write-Path Gateway for GraphQL</strong><br>
+  <em>Transforming GraphQL mutations into high-performance event streams</em>
 </p>
 
 <p align="center">
@@ -86,6 +86,7 @@ SpectraGQL bridges existing REST/GraphQL servers and modern event-driven backend
 
 ## Core Documentation
 
+- **[Philosophy & Core Thesis](docs/philosophy.md)**: Deconstructing the mutation debate, CQRS, and durable event sourcing across microservices.
 - **[Architecture & Strategy](docs/architecture-and-strategy.md)**: Deep dive into the Pingora pipeline, thesis, and roadmap.
 - **[Modes of Operation](docs/modes-of-operation.md)**: Detailed sequence flows for Mode A, Mode B, and Mode C.
 - **[Subscriptions & Realtime](docs/subscriptions-and-realtime.md)**: The reverse event queue architecture and connection termination.

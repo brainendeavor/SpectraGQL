@@ -63,7 +63,6 @@ impl SpectraConfig {
     pub(crate) fn new() -> Result<Self, ConfigError> {
         let spectra_env = env::var("SPECTRA_ENV")
             .or_else(|_| env::var("SPECTRAGQL_ENV"))
-            .or_else(|_| env::var("MUTANT_ENV"))
             .unwrap_or_else(|_| "development".into());
 
         let config_builder = Config::builder()
@@ -78,11 +77,8 @@ impl SpectraConfig {
             .set_default("rest.paths", "/api,/api/{*path}")?
             .add_source(File::with_name("spectra").required(false))
             .add_source(File::with_name(&format!("{spectra_env}-spectra")).required(false))
-            .add_source(File::with_name("mutant").required(false))
-            .add_source(File::with_name(&format!("{spectra_env}-mutant")).required(false))
             .add_source(Environment::with_prefix("spectra").separator("_"))
             .add_source(Environment::with_prefix("spectragql").separator("_"))
-            .add_source(Environment::with_prefix("mutant").separator("_"))
             .build()?;
 
         config_builder.try_deserialize()
