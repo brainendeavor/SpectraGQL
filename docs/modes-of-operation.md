@@ -1,59 +1,89 @@
 # SpectraGQL Modes of Operation: Detailed Architecture
 
-This document breaks down the three operational modes supported by **SpectraGQL Proxy**: **Mode A**, **Mode B**, and **Mode C**.
-
-The fundamental challenge SpectraGQL solves is bridging **two different worlds**:
-1. **The Client World:** Standard GraphQL clients (Apollo Client, Relay, urql) that expect synchronous HTTP request/response semantics (`useMutation()` returning immediate data).
-2. **The Backend World:** Event-driven, event-sourced architectures (CQRS, NATS JetStream, Apache Iggy, Kafka, SierraDB) where state changes are commands and domain events processed by asynchronous workers.
+This document defines the operational architecture supported by **SpectraGQL Proxy**:
+- **Mode A (The Workhorse Gateway):** The primary, battle-tested operational mode for 90% of real-world GraphQL microservice architectures.
+- **Mode B (The Event-Native Gateway):** Pure async CQRS for high-throughput, bulk ingestion, or long-running workflows.
+- **Mode C (The Mirage - Evaluated & Retired):** An analysis of coordinated request-reply, why it was evaluated, and why engineering decided "not today".
 
 ---
 
 ## Quick Comparison Matrix
 
-| Dimension | Mode A: Edge Outbox (Dual Dispatch) | Mode B: Pure CQRS (Async Command Receipt) | Mode C: Coordinated Request-Reply (The Bridge) |
+| Dimension | Mode A: The Workhorse Gateway (Pragmatic Proxy) | Mode B: The Event-Native Gateway (Pure CQRS) | Mode C: The Mirage ("Not Today") |
 | :--- | :--- | :--- | :--- |
-| **Client Requirement** | **Unchanged (Standard / Dumb)**<br>Expects normal GraphQL response | **Smart / Async-Aware**<br>Expects receipt (`ACCEPTED`), listens via Subscription / WebSocket / polling | **Unchanged (Standard / Dumb)**<br>Expects normal GraphQL response |
-| **Backend Requirement** | **Legacy HTTP Server**<br>(e.g. Apollo Server, Rails, Spring Boot) | **Event Consumer**<br>(Subscribes to broker, no HTTP server needed) | **Event Consumer**<br>(Subscribes to broker, no HTTP server needed) |
-| **Upstream HTTP Hop** | **Yes** (SpectraGQL proxies HTTP to backend) | **No** (SpectraGQL talks only to broker) | **No** (SpectraGQL talks only to broker) |
-| **Event Bus Role** | Shadow log / Audit stream / CDC mirror | Primary command bus & event log | Primary command bus with reply inbox |
-| **Timeout Risk** | Dependent on legacy HTTP server SLA | **Zero timeout risk** (Instant ACK) | Subject to event consumer SLA (Configurable timeout) |
-| **Adoption Target** | **Brownfield / Legacy**<br>Zero code changes across frontend and backend | **Greenfield / High-Scale**<br>Modern event-driven frontend + backend | **Greenfield Backend / Legacy Frontend**<br>Rewrite backend resolvers as event workers without touching frontend |
+| **Primary Philosophy** | **Pragmatic Event Choreography** | **Pure Asynchronous CQRS** | **Compromise / Hybrid** |
+| **Status** | **Flagship (Recommended)** | **Specialized / Greenfield** | **Retired / Architectural Case Study** |
+| **Client Requirement** | **Unchanged (100% Transparent)**<br>Full Apollo/Relay cache normalization | **Async-Aware**<br>Expects receipt (`ACCEPTED`), listens via Subscription/WS | **Unchanged (Standard)**<br>Standard sync response |
+| **Backend Requirement** | **Standard HTTP Service / Microservice**<br>(Executes core write, returns entity) | **Event Consumer**<br>(Subscribes to broker, no HTTP needed) | **Event Consumer with Reply Inbox**<br>(Must compute selection set for reply) |
+| **Upstream HTTP Hop** | **Yes** (Fast local write in primary context) | **No** (Terminates immediately at edge) | **No** (Waits on broker inbox) |
+| **Event Bus Role** | Domain event stream for downstream microservices | Primary command queue & domain log | Command bus + ephemeral reply topic |
+| **Timeout Risk** | Dependent on core service SLA (typically < 100ms) | **Zero timeout risk** (Instant ACK) | Subject to worker SLA + broker latency |
+| **Cache Normalization** | **Fully preserved** (Standard GraphQL return) | **Bypassed** (Requires subscription glue) | **Preserved** (If worker computes selection set) |
+| **Adoption Target** | **Microservices & Brownfield**<br>Zero frontend changes, instant decoupling | **Bulk ingestion, IoT, Video, Long Sagas** | **N/A (Retired)** |
 
 ---
 
-## Mode A: Edge Outbox / Dual Dispatch (The Brownfield Wedge)
+## Mode A: The Workhorse Gateway (Pragmatic Event Choreography)
 
 ### The Concept
-Mode A is a **smart reverse proxy** that sits transparently in front of your existing GraphQL server. It fulfills the legacy HTTP request while asynchronously "shadowing" the mutation to your event stream.
+Mode A is the **flagship mode** of SpectraGQL. It acts as an intelligent Layer 7 reverse proxy sitting in front of your primary GraphQL service. 
 
-### Sequence Flow
-```
-Client                     SpectraGQL Proxy                   Legacy Backend                 Event Broker
-  │                              │                                  │                             │
-  │── 1. POST Mutation ─────────>│                                  │                             │
-  │                              │── 2. Ratify & Parse              │                             │
-  │                              │                                  │                             │
-  │                              │── 3. Dispatch Command Event ──────────────────────────────────>│
-  │                              │                                  │                             │
-  │                              │── 4. Forward HTTP Request ──────>│                             │
-  │                              │                                  │ (Executes DB write)         │
-  │                              │<── 5. Return HTTP Response ──────│                             │
-  │                              │                                                                │
-  │                              │── 6. Dispatch Response/Result Event ──────────────────────────>│
-  │<── 7. Return GQL Response ───│                                                                │
-```
+It preserves synchronous client expectations (and automatic Apollo/Relay cache normalization) while using the mutation response to emit a rich, reliable domain event to your broker (NATS JetStream, Apache Iggy, SierraDB, Kafka). Downstream subsystems (loyalty, inventory, notifications, search indexing) consume this event **choreographically** rather than forcing the core resolver into a brittle, synchronous fan-out.
 
-### Why Use Mode A?
-- **Zero code changes:** No changes to your iOS, Android, or React web apps. No changes to your backend resolvers.
-- **Instant Event-Driven Enablement:** New squads in your company can immediately start consuming mutation events from NATS or Kafka to build new microservices, notification systems, or search indexing without asking the core backend team to build webhooks or Kafka producers.
-- **Edge Audit Log:** Every mutation attempt and its resulting response is cryptographically stamped with a UUID and recorded in an immutable log.
+### Sequence Flow (Post-Response Gateway Outbox)
+```
+Client                     SpectraGQL Proxy                    Primary Backend                 Event Broker
+  │                              │                                   │                             │
+  │── 1. POST Mutation ─────────>│                                   │                             │
+  │                              │── 2. Ratify & Stash in Memory     │                             │
+  │                              │      (Idempotency & HLC Clock)    │                             │
+  │                              │                                   │                             │
+  │                              │── 3. Forward HTTP Request ───────>│                             │
+  │                              │                                   │ (Fast DB Commit & Return)   │
+  │                              │<── 4. Return HTTP 200 (Result) ───│                             │
+  │                              │                                                                 │
+  │                              │── 5. Dispatch Completed Domain Event ──────────────────────────>│
+  │                              │      (Stashed Request Args + Response Data)                     ├─► [Loyalty Worker]
+  │<── 6. Return GQL Response ───│                                                                 ├─► [Notification Worker]
+  │   (Normal GQL Data)          │                                                                 └─► [Search Worker]
+```
 
 ---
 
-## Mode B: Pure CQRS / Asynchronous Command (The Architectural Ideal)
+### Mode A Event Dispatch Options
+
+Different organizations have different risk tolerances regarding failures and in-flight tracking. Mode A provides **three configurable dispatch policies**:
+
+#### Option 1: Response-Only Events (Default / Cleanest)
+* **Mechanic:** SpectraGQL intercepts the mutation, forwards it to the primary backend, and only publishes an event to the broker upon receiving an HTTP 2xx response.
+* **Payload:** The published event contains both the stashed request parameters (operation name, variables, client identity, HLC timestamp) and the response data.
+* **Pros:** 
+  * Exactly one event per successful state change.
+  * **Zero phantom writes:** If the backend rejects the mutation (400 validation error, unique constraint violation, 500 crash), no event is emitted.
+  * Downstream consumers have trivial logic—no need to correlate or filter out aborted requests.
+* **Cons:** If the upstream backend hangs or crashes mid-request, downstream services have no visibility into the failed attempt.
+
+#### Option 2: Response-Only + In-Flight Stash (Failure / Timeout Emission)
+* **Mechanic:** Leverages SpectraGQL's built-in **`IdempotencyEngine`** memory stash:
+  1. When a mutation arrives, the key, arguments, and HLC are registered in an in-memory ring buffer.
+  2. On HTTP 2xx: SpectraGQL emits `TerminalEvent::Success` and clears the stash.
+  3. On Upstream Timeout or Connection Drop: SpectraGQL automatically emits an explicit `TerminalEvent::Failure` (with reason `UPSTREAM_TIMEOUT` or `BACKEND_ERROR`) to a dead-letter or failure topic before returning an error to the client.
+* **Pros:** 
+  * Best-in-class operational visibility without polluting the happy-path event stream.
+  * Downstream recovery workers can detect abandoned or aborted mutations and trigger alerts or compensations.
+* **Cons:** Requires slight in-memory bookkeeping inside the proxy (already standard for idempotency deduplication).
+
+#### Option 3: Raw Audit Stream (Dual Ingress / Egress Dispatch)
+* **Mechanic:** Dispatches an event on request ingress (`MutationInitiated`), forwards upstream, then dispatches a second event on response egress (`MutationCompleted` or `MutationFailed`).
+* **Pros:** Provides a strict, real-time audit tap of all incoming network attempts, even if the backend process crashes instantly.
+* **Cons:** Downstream application consumers must maintain state machines to correlate UUIDs across topics and avoid acting on uncommitted requests. Recommended primarily for compliance, security taps, and telemetry rather than business choreography.
+
+---
+
+## Mode B: The Event-Native Gateway (Pure CQRS)
 
 ### The Concept
-Mode B is **pure CQRS**. Mutations are treated strictly as **Commands**. There is **no legacy HTTP server** involved in the mutation path. SpectraGQL receives the mutation, validates/ratifies it at the edge, commits it to the event stream, and immediately returns an HTTP `202 Accepted` style receipt to the client.
+Mode B is **pure, asynchronous CQRS**. Mutations are treated strictly as **Commands**. There is no upstream HTTP backend in the write path. SpectraGQL receives the mutation, ratifies it (verifying idempotency keys, schema constraints, and WASM policies), commits it to the event stream, and immediately returns a deterministic `202 Accepted` command receipt.
 
 ### Sequence Flow
 ```
@@ -72,133 +102,78 @@ Client                     SpectraGQL Proxy                                     
   │<── 8. (Optional) Realtime Update via GQL Subscription / WebSocket / SSE ──────────────────────│
 ```
 
-### Why Use Mode B?
-- **Extreme Throughput & Resilience:** The edge gateway terminates the connection in microseconds. Backends cannot be DOS'd by write spikes; writes sit durably in the broker queue (Kafka/Iggy/NATS) and are processed at the consumer's maximum sustainable rate.
-- **Client Requirements:** The client must be designed for eventual consistency:
-  - It displays optimistic UI updates.
-  - It tracks `commandId`.
-  - It listens for completion via a GraphQL Subscription, WebSocket channel, or polling.
+### When to Use Mode B:
+* **High-Throughput Ingestion:** Telemetry, IoT command streams, high-frequency bidding, or gaming actions.
+* **Long-Running Workflows:** Video transcoding, bulk catalog imports, report generation, or multi-step payment sagas.
+* **Client Expectation:** The frontend must be designed for eventual consistency, tracking the `commandId` and listening for completion via a GraphQL Subscription or polling.
 
 ---
 
-## Mode C: Coordinated Request-Reply (The Greenfield Bridge)
+## Mode C: "The Mirage" (Evaluated & Retired — "Not Today")
 
-### The Concept
-Mode C answers the question: **"What if we want to write our backend resolvers as pure event-sourced consumers (like in Mode B), but our frontend clients still expect a standard synchronous GraphQL response (like in Mode A)?"**
+### What was Mode C?
+Mode C ("Coordinated Request-Reply") was conceived as an attempt to hedge between Mode A and Mode B:
+1. Allow backend engineers to write pure event consumers (subscribing to NATS/Kafka topics with no HTTP servers).
+2. While holding the client's HTTP connection open at the SpectraGQL proxy using a temporary NATS `reply_to` inbox subject.
+3. Once the event worker finished, it would reply to the inbox, and SpectraGQL would synthesize the synchronous GraphQL response.
 
-In Mode C:
-- There is **no upstream HTTP server**.
-- Your backend resolvers are **event consumers** listening to the message broker.
-- SpectraGQL uses the **Request-Reply pattern** (native to NATS and supported in Kafka via correlation IDs) to wait for the consumer to finish and return the result synchronously over the original HTTP connection.
-
-### Sequence Flow
 ```
-Client                     SpectraGQL Proxy                                                 Event Broker             Async Consumer / Resolver
-  │                              │                                                                │                               │
-  │── 1. POST Mutation ─────────>│                                                                │                               │
-  │                              │── 2. Ratify & Parse                                            │                               │
-  │                              │── 3. Publish Command with `reply_to` inbox subject ───────────>│                               │
-  │                              │                                                                │── 4. Consume Command ────────>│
-  │                              │   (SpectraGQL waits on inbox with timeout, e.g. 500ms)             │                               │ (Executes logic & DB write)
-  │                              │                                                                │<── 5. Publish Result to Inbox ─│
-  │                              │<── 6. Receive Reply ───────────────────────────────────────────│                               │
-  │<── 7. Return GQL Response ───│                                                                │                               │
-  │   { data: { order: {...} } } │                                                                │                               │
-  │                              │                                                                │                               │
-  │   [If timeout expires]:      │                                                                │                               │
-  │<── 7b. Return GQL Error ─────│                                                                │                               │
-  │   "Consumer timed out"       │                                                                │                               │
+[Client] ──(HTTP)──► [SpectraGQL Proxy] ──(NATS Request)──► [Event Worker]
+                         │                                       │
+                         │◄──────(NATS Reply Inbox)──────────────┘
+[Client] ◄──(HTTP 200)───┘
 ```
 
-### Mode C Delivery Flavors: Beyond the Synchronous Connection Hold
+### Why We Evaluated "The Mirage" and Decided "Not Today":
+Upon rigorous distributed systems review, Mode C proved to be an **uncanny valley** that combines the worst trade-offs of both paradigms:
 
-Mode C is fundamentally about **coordinating an asynchronous event consumer with a client that needs a result**. While the baseline pattern holds the original HTTP connection open, SpectraGQL can deliver that result across several lightweight delivery flavors:
+1. **Compensating for Mode B's Awkwardness:** Mode C was designed because Mode B breaks synchronous client expectations. But rather than embracing true asynchronous CQRS, it attempts to cosmetically disguise an asynchronous worker as a synchronous RPC endpoint.
+2. **Double Fragility:** It inherits the full operational overhead of an asynchronous message broker, worker pools, and correlation routing, while **retaining the exact same synchronous connection hold, timeout vulnerability, and gateway resource locking** of legacy HTTP.
+3. **The Selection Set Dilemma:** In GraphQL, clients request specific nested selection sets. In Mode C, the event worker either has to become a full GraphQL execution engine itself or coordinate with other services to resolve nested fields—re-introducing the exact synchronous cross-service fan-out SpectraGQL exists to prevent.
+4. **Mode A Is Strictly Superior for Synchronous Clients:** If a client requires a synchronous response and cache normalization, simply running Mode A (where the primary domain service handles the write and SpectraGQL choreographs downstream side-effects) is orders of magnitude simpler, more reliable, and battle-tested.
 
-### Client Compatibility Assessment: Zero Custom Client Required
-
-A core design principle of SpectraGQL is **never requiring a proprietary "SpectraGQL Client SDK"**. Frontend teams should continue using standard, off-the-shelf GraphQL clients (Apollo Client, Relay, urql, Swift/iOS Apollo, Kotlin/Android Apollo).
-
-Here is how the delivery mechanisms evaluate against standard GraphQL clients:
-
-| Approach | Client Compatibility | Standard Client Mechanism | Requires Custom Client / SDK? |
-| :--- | :--- | :--- | :--- |
-| **1. Synchronous Hold** (Fast Ops) | **100% Universal** | Standard `useMutation()` | **NO.** Standard HTTP response. |
-| **2. One-Shot Subscription** (Long Ops) | **100% Spec Compliant** | Standard `useSubscription()` | **NO.** Closes cleanly on spec `complete` frame. |
-| **3. Multipart Streaming (`@defer`)** | Experimental | Draft RFC (Multipart HTTP) | **Partial.** Supported in modern Apollo Web, but breaks many mobile/legacy clients. |
-| **4. Webhook Callbacks** | B2B / Server-to-Server | Standard HTTP POST receiver | **NO.** But only applicable to backend-to-backend consumers. |
-| **5. Custom REST Endpoint** | Non-GraphQL | Custom `fetch()` / EventSource | **YES.** Breaks GraphQL caching and client paradigms. |
-
-> **The Winning Formula:** To maintain 100% client transparency without custom SDKs, SpectraGQL focuses on **Approach 1 (Synchronous Hold)** for operations $< 1$ second, and **Approach 2 (Ephemeral One-Shot Subscription)** for operations $> 1$ second.
+> **Decision:** Mode C is officially archived. SpectraGQL focuses entirely on **Mode A (The Workhorse)** for pragmatic microservice adoption and **Mode B (Pure CQRS)** for specialized asynchronous pipelines.
 
 ---
 
-#### 1. Baseline: Synchronous Request-Reply (Connection Hold)
-- **Mechanic:** SpectraGQL holds the open HTTP connection and subscribes to a temporary NATS `reply_to` inbox. When the consumer replies, SpectraGQL returns the HTTP response and closes.
-- **Best for:** Fast operations (< 1000ms) like checkout, user updates, or balance checks.
-
-#### 2. Ephemeral "One-Shot" Subscription (Auto-Closing Event Stream)
-- **Mechanic:** Traditional GraphQL subscriptions remain open indefinitely for continuous event streams (e.g., chat feeds). An **Ephemeral One-Shot Subscription** is registered specifically for a single command completion:
-  ```graphql
-  subscription OnCommandDone {
-    commandResult(commandId: "cmd-999") {
-      status
-      result
-      error
-    }
-  }
-  ```
-- **Behavior:** SpectraGQL binds to the broker reply subject (`spectra.replies.cmd-999`). The instant the worker emits the completion event, SpectraGQL pushes a single `next` frame down the WebSocket/SSE followed immediately by a `complete` frame, auto-closing the subscription.
-- **Best for:** Operations taking 2–30 seconds where keeping an HTTP connection open is risky due to mobile network drops or reverse proxy timeouts.
-
-#### 3. Incremental Delivery / Chunked HTTP Streaming (`@defer`)
-- **Mechanic:** Client issues the mutation over standard HTTP with multipart/mixed chunked transfer.
-- **Behavior:** SpectraGQL immediately sends Chunk 1:
-  ```json
-  { "data": { "processVideo": { "status": "PENDING", "commandId": "cmd-88" } }, "hasNext": true }
-  ```
-  When the event consumer publishes the finished result to the broker, SpectraGQL emits Chunk 2 over the *same* HTTP connection:
-  ```json
-  { "data": { "processVideo": { "status": "COMPLETED", "videoUrl": "https://..." } }, "hasNext": false }
-  ```
-  Connection cleanly closes without requiring WebSockets.
-
-#### 3. Webhook Dispatch (Outbound Server-to-Server Integration)
-*Note: As an architectural distinction, Webhooks belong to the **outbound mutation dispatch engine** rather than interactive client transports, since the receiving party must host a reachable HTTP endpoint.*
-- **Mechanic:** For B2B integrations, external partners, or third-party webhooks (e.g. Zapier, Slack, partner APIs), the mutation processing pipeline dispatches an HTTP POST directly to the configured endpoint upon mutation ratification or command completion.
-- **Role:** Implemented via SpectraGQL's `WebhookDispatch` adapter in the dispatch layer, running alongside NATS/Kafka.
-- **Mechanic:** For B2B or third-party consumers calling mutations, the client includes an `X-Callback-URL: https://partner.com/webhook` header or passes a callback argument.
-- **Behavior:** SpectraGQL terminates the HTTP call with an ACK. When the async event worker finishes, SpectraGQL's dispatch engine fires an HTTP POST webhook containing the completed GraphQL payload directly to the partner's callback endpoint.
-
-### Why Use Mode C?
-- **Starting Greenfield without Legacy Baggage:** If you are building a new system or rewriting your backend, you do NOT have to stand up an Express/Apollo HTTP server just to satisfy GraphQL mutation semantics. You write pure event-driven consumers in Go, Rust, or Python that consume from NATS/Iggy/Kafka.
-- **Frontend Stays Simple:** Frontend developers do not need to rewrite their apps with complex subscription glue code. They continue using standard `useMutation()` hooks.
-- **Graceful Fallback:** If a consumer takes longer than the configured timeout (e.g. 1000ms), SpectraGQL can return an informative GraphQL error or automatically fall back to returning the `commandId` receipt so the client can check back later.
-
----
-
-## The Evolutionary Journey: Mode A $
-ightarrow$ Mode C $
-ightarrow$ Mode B
-
-SpectraGQL allows you to configure modes **per mutation route**:
+## Configuration Example (`spectra.toml`)
 
 ```toml
-# spectra.toml example configuration
+bind_addr = "0.0.0.0:8000"
 
-[gql.mutations.legacy_user_update]
-path = "updateUserProfile"
-mode = "A"                     # Proxies to legacy monolith + emits event to NATS
+[upstream]
+addr = "127.0.0.1:4000"
+name = "core_graphql_backend"
 
-[gql.mutations.modern_order_checkout]
-path = "checkoutOrder"
-mode = "C"                     # NATS Request-Reply with 800ms timeout to order-consumer
-timeout_ms = 800
+[gql]
+paths = "/graphql"
+ops_to_dispatch = "mutation"
 
-[gql.mutations.batch_video_upload]
+# Mode A: The Default Workhorse
+[gql.mode_a]
+enabled = true
+# Options: "response_only" (Option 1), "response_with_failure" (Option 2), "raw_audit" (Option 3)
+dispatch_policy = "response_with_failure"
+timeout_ms = 3000
+
+# Mode B: Per-route pure async override
+[gql.routes.bulk_import]
 path = "importCatalog"
-mode = "B"                     # Pure async: returns immediate commandId receipt
+mode = "B"
+receipt_status = "ACCEPTED"
+
+# Event Broker Dispatch
+[dispatch]
+method = "NATS"
+addr = "127.0.0.1:4222"
+topic_prefix = "spectra.events"
 ```
 
-1. **Phase 1 (Day 1):** Deploy SpectraGQL in **Mode A** across all existing mutations. Immediate observability, audit log, and shadow streaming with zero risk.
-2. **Phase 2 (Modernizing Backends):** As squads rewrite brittle resolvers into event-sourced consumers, flip those specific routes to **Mode C**. Frontend apps don't notice any change.
-3. **Phase 3 (True Eventual Consistency):** For high-scale operations (payments, bulk imports, order processing), flip routes to **Mode B** and wire frontend UIs to GraphQL Subscriptions.
+---
+
+## Summary: The Evolutionary Path
+
+Rather than a complex 3-step migration, teams adopt SpectraGQL with clear, low-risk steps:
+
+1. **Day 1 (Mode A across all routes):** Drop SpectraGQL in front of your existing GraphQL server. Zero client changes. Standard cache normalization. Immediate, reliable event stream on NATS/Iggy for new microservices and data pipelines.
+2. **Selective Optimization (Mode B for heavy ops):** For specific, high-scale or long-running operations (e.g., bulk uploads, reports, async sagas), mark individual mutation routes as `mode = "B"` and wire the client to GraphQL Subscriptions.

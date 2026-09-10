@@ -64,13 +64,13 @@ GraphQL gives frontend teams expressive control over data retrieval. However, in
 
 ## Operational Modes
 
-SpectraGQL bridges existing REST/GraphQL servers and modern event-driven backends across three distinct operational modes:
+SpectraGQL bridges existing REST/GraphQL servers and modern event-driven backends across two focused operational modes:
 
-| Mode | Upstream Hop | Event Role | Client Requirement | Adoption Target |
+| Mode | Upstream Hop | Event Role | Client Requirement | Primary Role |
 | :--- | :--- | :--- | :--- | :--- |
-| **Mode A: Edge Outbox** | **Yes** (Forward to backend) | Shadow / Audit Stream | Standard GraphQL Client (Sync) | **Brownfield / Legacy**<br>Zero code changes across frontend and backend |
-| **Mode B: Pure CQRS** | **No** (Broker only) | Primary Command Bus | Async-Aware Client (`202 Accepted`) | **Greenfield / High-Scale**<br>Decoupled event workers |
-| **Mode C: Coordinated Request-Reply** | **No** (Broker only) | Command Bus + Reply Inbox | Standard GraphQL Client (Sync) | **Modern Backend / Legacy Client**<br>Event resolvers with sync HTTP return |
+| **Mode A: The Workhorse Gateway** | **Yes** (Forward to backend) | Event Choreography Stream | Standard GraphQL Client (Sync) | **Flagship (90% of workloads)**<br>Zero frontend changes; full cache normalization; decouples microservices. |
+| **Mode B: The Event-Native Gateway** | **No** (Broker only) | Primary Command Bus | Async-Aware Client (`202 Accepted`) | **Specialized / High-Scale**<br>Pure CQRS for IoT, telemetry, and long-running sagas. |
+| *Mode C: The Mirage* | *Retired* | *Coordinated Request-Reply* | *Standard Client* | *Evaluated and archived ("not today") in favor of Mode A simplicity.* |
 
 ---
 
