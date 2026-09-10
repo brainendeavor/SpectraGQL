@@ -1,0 +1,18 @@
+bind_addr = "0.0.0.0:8000"
+
+[upstream]
+addr = "localhost:4000"
+name = "default"
+
+[gql]
+paths = "/gql,/graphql"
+dispatch_query = true
+dispatch_mutation = true
+dispatch_subscription = true
+ops_to_dispatch = "query, mutation, subscription"
+dispatch.name = "gql"
+dispatch.method = "NATS"
+dispatch.addr = "127.0.0.1:4222"
+
+[rest]
+paths = "/api,/api/{*path}"

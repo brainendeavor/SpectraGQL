@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="100%" height="100%">
+  <title>SpectraGQL Logo (Transparent)</title>
+  <desc>The CQRS Command Gateway for GraphQL</desc>
+  <!-- Spartan S Mark -->
+  <g id="mark">
+    <polygon points="361,128 778,128 634,285 434,285 556,365 430,491 232,365" fill="#FFFFFF"/>
+    <polygon points="598,391 789,515 654,759 251,759 395,598 595,598 476,515" fill="#00F0FF"/>
+  </g>
+  <!-- Wordmark -->
+  <text x="512" y="885" text-anchor="middle" font-family="system-ui, -apple-system, 'SF Pro Display', Roboto, 'Segoe UI', sans-serif" font-weight="800" font-size="74" letter-spacing="1.5">
+    <tspan fill="#FFFFFF">SPECTRA</tspan><tspan fill="#00F0FF">GQL</tspan>
+  </text>
+</svg>
