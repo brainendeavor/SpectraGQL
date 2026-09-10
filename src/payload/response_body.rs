@@ -20,23 +20,17 @@ impl ResponseBody {
             || raw_body.trim().starts_with('{')
             || raw_body.trim().starts_with('[');
         let raw_value_json = if is_json_candidate {
-            // uncomment for no syntactic json, when serde_json attempts to serialize will nullify
-            // let raw_body_string = raw_body.to_string();
-
-            // attempt to parse/validate json syntax
-            let raw_body_string = json::parse(raw_body)
-                .unwrap_or(json::JsonValue::Null)
-                .dump();
-            log::info!(
-                "content-type: {} json::parse: {}",
-                content_type,
-                raw_body_string
-            );
-            // if raw_body isn't valid json, then fall back to text
-            if raw_body_string.eq("null") {
-                text = Some(raw_body.to_string());
-            };
-            serde_json::value::RawValue::from_string(raw_body_string).unwrap_or_default()
+            match serde_json::from_str::<serde_json::Value>(raw_body) {
+                Ok(val) => {
+                    let serialized = val.to_string();
+                    log::info!("content-type: {} serde_json: {}", content_type, serialized);
+                    serde_json::value::RawValue::from_string(serialized).unwrap_or_default()
+                }
+                Err(_) => {
+                    text = Some(raw_body.to_string());
+                    Default::default()
+                }
+            }
         } else {
             text = Some(raw_body.to_string());
             Default::default()

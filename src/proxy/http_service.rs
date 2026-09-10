@@ -13,7 +13,7 @@ impl HttpServiceProxy {
     pub fn new(
         dispatch_method: &str,
         dispatch_endpoint: &str,
-        extra_params: ExtraServiceParams,
+        _extra_params: ExtraServiceParams,
     ) -> Self {
         // TODO: make this configurable if lua code file exists
         // no file => HttpRequestRatifier::new().into()

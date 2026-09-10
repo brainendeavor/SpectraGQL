@@ -76,6 +76,7 @@ impl HlcClock {
     }
 
     /// Updates local clock causality upon receiving a remote HLC timestamp.
+    #[allow(dead_code)]
     pub fn update(&self, remote: HlcTimestamp) -> HlcTimestamp {
         let physical_now = Self::get_physical_time();
         let mut state = self.state.lock().unwrap();

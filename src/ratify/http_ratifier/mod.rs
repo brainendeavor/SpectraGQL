@@ -10,6 +10,7 @@ use std::collections::HashSet;
 pub struct HttpRequestRatifier {}
 
 impl HttpRequestRatifier {
+    #[allow(dead_code)]
     pub fn new() -> Self {
         HttpRequestRatifier {}
     }

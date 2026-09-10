@@ -9,6 +9,7 @@ use crate::ratify::{RatifyResponseAction, RequestRatification};
 
 #[derive(Clone)]
 pub struct GraphQLRatifier {
+    #[allow(dead_code)]
     ops_to_dispatch: HashSet<GraphQLOperationType>,
 }
 
@@ -49,7 +50,7 @@ impl RequestRatification for GraphQLRatifier {
         Ok(request_info)
     }
 
-    fn ratify_response(&self, request_info: &RequestInfo) -> Result<HashSet<RatifyResponseAction>> {
+    fn ratify_response(&self, _request_info: &RequestInfo) -> Result<HashSet<RatifyResponseAction>> {
         let mut response_action = HashSet::new();
         response_action.insert(RatifyResponseAction::Respond);
 

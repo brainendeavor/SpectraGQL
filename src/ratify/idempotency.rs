@@ -205,6 +205,7 @@ impl IdempotencyEngine {
     }
 
     /// Public method to prune expired entries.
+    #[allow(dead_code)]
     pub fn prune_expired(&self) {
         let mut write_guard = self.records.write().unwrap();
         self.prune_expired_locked(&mut write_guard, Instant::now());

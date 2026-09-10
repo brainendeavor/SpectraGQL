@@ -6,7 +6,7 @@ pub mod response_body;
 pub mod response_info;
 pub mod terminal_event;
 
-pub use gql_parser::{ParsedGraphQLOperation, parse_graphql_operation};
+pub use gql_parser::parse_graphql_operation;
 
 pub use gql_request_info::GraphQLRequestInfo;
 pub use http_request_info::HttpRequestInfo;
@@ -24,5 +24,4 @@ use std::fmt::Debug;
 pub enum PayloadType {
     Request,
     Response,
-    Raw,
 }

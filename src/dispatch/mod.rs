@@ -10,8 +10,6 @@ use enum_dispatch::enum_dispatch;
 pub enum DispatchMethod {
     NatsJetstream(nats::NatsDispatch),
     Webhook(webhook::WebhookDispatch),
-    // GrepTimeDb(),
-    // InfluxDb(),
 }
 
 pub fn find_dispatch_handler_by_method(
@@ -31,6 +29,7 @@ pub fn find_dispatch_handler_by_method(
 pub trait DispatchHandler {
     fn get_dispatch_topic(&self, request_info: &RequestInfo) -> String;
     async fn dispatch_request_info(&self, request_info: &RequestInfo) -> pingora::Result<()>;
+    #[allow(dead_code)]
     async fn dispatch_response_info(
         &self,
         dispatch_topic: &str,
@@ -41,6 +40,7 @@ pub trait DispatchHandler {
         dispatch_topic: &str,
         terminal_event: &TerminalEvent,
     ) -> pingora::Result<()>;
+    #[allow(dead_code)]
     async fn dispatch_payload(&self, topic: &str, payload: &str) -> pingora::Result<()>;
 }
 

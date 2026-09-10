@@ -4,15 +4,16 @@ use anyhow::{Result, anyhow};
 use serde::{Deserialize, Serialize};
 use strum_macros::{Display, EnumIs, EnumString};
 
-#[derive(Serialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct GraphQLRequestBody {
     pub query: String,
     pub operation_name: Option<String>,
-    pub variables: Option<String>,
-    pub extensions: Option<String>,
+    pub variables: Option<serde_json::Value>,
+    pub extensions: Option<serde_json::Value>,
 }
 
+#[allow(dead_code)]
 impl GraphQLRequestBody {
     pub fn new(query: String) -> Self {
         GraphQLRequestBody {
@@ -24,21 +25,14 @@ impl GraphQLRequestBody {
     }
 
     pub fn new_from_json_str(json_body: &str) -> Result<Self> {
-        let gql_json = json::parse(json_body)?;
-        log::info!("GraphQLRequest.gql_json: {:?}", gql_json);
-        Ok(GraphQLRequestBody::new_from_json_value(&gql_json))
+        let parsed: Self = serde_json::from_str(json_body)?;
+        log::info!("GraphQLRequest.parsed: {:?}", parsed);
+        Ok(parsed)
     }
 
-    pub fn new_from_json_value(json_value: &json::JsonValue) -> Self {
-        let mut gql_json = json_value.to_owned();
-        GraphQLRequestBody {
-            query: gql_json["query"]
-                .take_string()
-                .unwrap_or_else(|| gql_json.to_string()),
-            operation_name: gql_json["operationName"].take_string(),
-            variables: gql_json["variables"].take_string(),
-            extensions: gql_json["extensions"].take_string(),
-        }
+    pub fn new_from_json_value(val: &serde_json::Value) -> Result<Self> {
+        let parsed: Self = serde_json::from_value(val.clone())?;
+        Ok(parsed)
     }
 }
 
@@ -60,30 +54,18 @@ pub enum GraphQLOperationType {
 #[serde(rename_all = "camelCase")]
 pub struct GraphQLRequestInfo {
     pub operation_type: GraphQLOperationType,
-    pub operation_name: Option<String>, // redundant if well formed json in body
-    // pub request_body: GraphQLRequestBody,
+    pub operation_name: Option<String>,
     raw_body: Option<String>,
-
-    #[serde(serialize_with = "json_body_string")]
-    json_body: json::JsonValue,
+    json_body: serde_json::Value,
 }
 
-fn json_body_string<S>(json_body: &json::JsonValue, serializer: S) -> Result<S::Ok, S::Error>
-where
-    S: serde::Serializer,
-{
-    serializer.serialize_str(&json_body.dump())
-}
-
-// The intent here is the extract this data from the body. Theoretically possible to
-// include the complete AST but right now, just provide the operation type and extract a name.
 impl GraphQLRequestInfo {
     pub fn new(request_json: &str) -> Self {
         let mut gql_request_info = GraphQLRequestInfo {
             operation_type: GraphQLOperationType::Unknown,
             operation_name: None,
             raw_body: None,
-            json_body: json::JsonValue::Null,
+            json_body: serde_json::Value::Null,
         };
         if let Err(e) = gql_request_info.set_request_json(request_json) {
             log::error!("Invalid JSON for gql request: {}", e);
@@ -93,19 +75,19 @@ impl GraphQLRequestInfo {
 
     pub fn set_request_json(&mut self, request_json: &str) -> Result<&mut Self> {
         self.raw_body = Some(request_json.to_string());
-        // self.json_body = json::parse(request_json)?;
-        return Ok(self);
+        if let Ok(val) = serde_json::from_str(request_json) {
+            self.json_body = val;
+        }
+        Ok(self)
     }
 
     pub fn gql_request_body(&self) -> Result<GraphQLRequestBody> {
         match self.raw_body.as_ref() {
             Some(json_body) => {
-                let parsed_json_body = json::parse(&json_body)?;
-                return Ok(GraphQLRequestBody::new_from_json_value(&parsed_json_body));
+                let parsed_body: GraphQLRequestBody = serde_json::from_str(json_body)?;
+                Ok(parsed_body)
             }
-            None => {
-                return Err(anyhow!("Request body has not been set."));
-            }
+            None => Err(anyhow!("Request body has not been set.")),
         }
     }
 
@@ -113,12 +95,8 @@ impl GraphQLRequestInfo {
         if let Some(raw) = self.raw_body.as_mut() {
             *raw = sanitizer.sanitize_json_str(raw);
         }
-        let dump = self.json_body.dump();
-        if !dump.is_empty() && dump != "null" {
-            let sanitized = sanitizer.sanitize_json_str(&dump);
-            if let Ok(parsed) = json::parse(&sanitized) {
-                self.json_body = parsed;
-            }
+        if !self.json_body.is_null() {
+            sanitizer.sanitize_value(&mut self.json_body);
         }
     }
 }

@@ -79,7 +79,7 @@ SpectraGQL bridges existing REST/GraphQL servers and modern event-driven backend
 - **Built on Cloudflare Pingora:** Zero-allocation network pipeline operating at wire speed in Rust.
 - **AST Routing:** Parses GraphQL operations to automatically bifurcate queries and mutations.
 - **Edge Ratification:** Idempotency key tracking, argument sanitization, and correlation headers (`x-spectra-request-id`, `x-spectra-hlc`).
-- **Multi-Broker Dispatch:** NATS JetStream, Apache Iggy, Kafka, SierraDB, InfluxDB, GreptimeDB, and Webhooks.
+- **Multi-Broker Dispatch:** NATS JetStream, Redis Streams, Apache Iggy, Kafka / Redpanda, SierraDB, RabbitMQ, and Webhooks.
 - **Realtime Termination:** Edge WebSocket (`graphql-ws`) and SSE termination completing the CQRS loop without backend connection storms.
 
 ---

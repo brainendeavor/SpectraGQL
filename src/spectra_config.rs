@@ -12,6 +12,7 @@ use config::{Config, ConfigError, Environment, File};
 use serde::Deserialize;
 
 #[derive(Clone, Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct SpectraUpstreamConfig {
     pub name: String,
     pub description: Option<String>,
@@ -19,6 +20,7 @@ pub struct SpectraUpstreamConfig {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct SpectraDispatchConfig {
     pub name: String,
     pub description: Option<String>,
@@ -27,16 +29,8 @@ pub struct SpectraDispatchConfig {
 }
 
 #[derive(Clone, Debug, Deserialize)]
-pub struct SpectraRatificationConfig {}
-
-#[derive(Clone, Debug, Deserialize)]
-#[allow(unused)]
 pub struct SpectraGqlConfig {
-    pub description: Option<String>,
     pub paths: String,
-    pub dispatch_query: bool,
-    pub dispatch_mutation: bool,
-    pub dispatch_subscription: bool,
     pub ops_to_dispatch: String,
     pub upstream: Option<SpectraUpstreamConfig>,
     pub dispatch: Option<SpectraDispatchConfig>,
