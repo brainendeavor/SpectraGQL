@@ -1,8 +1,7 @@
 use crate::payload::RequestInfo;
-use crate::ratify::{RatifyResponseAction, RequestRatification};
+use crate::ratify::RequestRatification;
 use anyhow::{Result, anyhow};
 use mlua::prelude::*;
-use std::collections::HashSet;
 
 #[derive(Clone)]
 pub struct HttpRequestRatifierLua {}
@@ -64,15 +63,5 @@ impl RequestRatification for HttpRequestRatifierLua {
                 return Err(anyhow!("Failed to ratify: {}", e));
             }
         }
-    }
-
-    fn ratify_response(
-        &self,
-        _request_info: &RequestInfo,
-    ) -> Result<HashSet<RatifyResponseAction>> {
-        Ok(HashSet::from_iter([
-            RatifyResponseAction::Respond,
-            RatifyResponseAction::Dispatch,
-        ]))
     }
 }

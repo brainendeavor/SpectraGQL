@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use crate::payload::{RequestInfo, TerminalEvent};
+use crate::payload::{RequestInfo, SanitizedPayload, TerminalEvent};
 
 /// Atomic transport sink for event publishing.
 /// Implementing adapters only need to manage socket/connection semantics
@@ -14,6 +14,14 @@ pub trait EventSink: Send + Sync {
 pub trait EventEncoder: Send + Sync {
     fn encode_request(&self, request: &RequestInfo) -> pingora::Result<Vec<u8>>;
     fn encode_completion(&self, completion: &TerminalEvent) -> pingora::Result<Vec<u8>>;
+
+    /// Encodes a verified, sanitized request info payload.
+    fn encode_sanitized_request(
+        &self,
+        request: &SanitizedPayload<RequestInfo>,
+    ) -> pingora::Result<Vec<u8>> {
+        self.encode_request(request)
+    }
 }
 
 /// Standard JSON event encoder using serde_json.
@@ -45,6 +53,13 @@ impl EventEncoder for JsonEventEncoder {
 impl JsonEventEncoder {
     pub fn encode_request(&self, request: &RequestInfo) -> pingora::Result<Vec<u8>> {
         <Self as EventEncoder>::encode_request(self, request)
+    }
+
+    pub fn encode_sanitized_request(
+        &self,
+        request: &SanitizedPayload<RequestInfo>,
+    ) -> pingora::Result<Vec<u8>> {
+        <Self as EventEncoder>::encode_sanitized_request(self, request)
     }
 
     pub fn encode_completion(&self, completion: &TerminalEvent) -> pingora::Result<Vec<u8>> {

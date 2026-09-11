@@ -9,7 +9,6 @@ use crate::clock::HlcTimestamp;
 use crate::payload::{GraphQLRequestInfo, HttpRequestInfo, PayloadType};
 
 const REQUEST_INFO_VERSION: u8 = 1;
-// const PAYLOAD_TYPE: &str = "request";
 
 #[derive(Serialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -75,6 +74,12 @@ impl RequestInfo {
                 *body = sanitized.into_bytes();
             }
         }
+    }
+
+    /// Transforms this request into a compile-time verified `SanitizedPayload<RequestInfo>`.
+    pub fn into_sanitized(mut self) -> crate::payload::SanitizedPayload<Self> {
+        self.sanitize();
+        crate::payload::SanitizedPayload::new_unchecked(self)
     }
 }
 

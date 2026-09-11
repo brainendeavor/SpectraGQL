@@ -11,11 +11,11 @@ pub use http_service::HttpServiceProxy as HttpService;
 
 use crate::dispatch::DispatchMethod;
 use crate::payload::ResponseBody;
-use crate::ratify::{RatificationProtocol, RatifyResponseAction};
+use crate::ratify::RatificationProtocol;
 use anyhow::{Result, anyhow};
 use enum_dispatch::enum_dispatch;
 use matchit::Router;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use uuid::Uuid;
 
 pub const REQUEST_ID_HEADER: &str = "x-spectra-request-id";
@@ -46,8 +46,6 @@ pub struct SpectraProxyCtx {
     pub request_info: Option<crate::payload::RequestInfo>,
     pub response_parts: Option<http::response::Parts>,
     pub response_body: Option<ResponseBody>,
-    #[allow(dead_code)]
-    pub response_actions: HashSet<RatifyResponseAction>,
     pub buffer: Vec<u8>,
     pub idempotency_key: Option<String>,
     pub is_replay: bool,

@@ -5,12 +5,12 @@ use std::str::FromStr;
 use crate::payload::{
     GraphQLOperationType, GraphQLRequestInfo, RequestInfo,
 };
-use crate::ratify::{RatifyResponseAction, RequestRatification};
+use crate::ratify::RequestRatification;
 
 #[derive(Clone)]
 pub struct GraphQLRatifier {
     #[allow(dead_code)]
-    ops_to_dispatch: HashSet<GraphQLOperationType>,
+    pub ops_to_dispatch: HashSet<GraphQLOperationType>,
 }
 
 impl GraphQLRatifier {
@@ -52,16 +52,5 @@ impl RequestRatification for GraphQLRatifier {
         request_info.gql = Some(gql_request_info);
 
         Ok(request_info)
-    }
-
-    fn ratify_response(&self, _request_info: &RequestInfo) -> Result<HashSet<RatifyResponseAction>> {
-        let mut response_action = HashSet::new();
-        response_action.insert(RatifyResponseAction::Respond);
-
-        if self.ops_to_dispatch.contains(&GraphQLOperationType::Query) {
-            response_action.insert(RatifyResponseAction::Dispatch);
-        };
-
-        Ok(response_action)
     }
 }

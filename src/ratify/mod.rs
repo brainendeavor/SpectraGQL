@@ -8,16 +8,8 @@ pub use sanitizer::Sanitizer;
 
 use anyhow::Result;
 use enum_dispatch::enum_dispatch;
-use std::collections::HashSet;
 
 use crate::payload::RequestInfo;
-
-#[derive(Clone, PartialEq, Eq, Hash)]
-#[allow(dead_code)]
-pub enum RatifyResponseAction {
-    Respond,
-    Dispatch,
-}
 
 #[enum_dispatch]
 pub trait RequestRatification {
@@ -28,8 +20,6 @@ pub trait RequestRatification {
         http_request_parts: http::request::Parts,
         http_request_body: &str,
     ) -> Result<RequestInfo>;
-    #[allow(dead_code)]
-    fn ratify_response(&self, request_info: &RequestInfo) -> Result<HashSet<RatifyResponseAction>>;
 }
 
 #[derive(Clone)]

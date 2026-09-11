@@ -1,4 +1,5 @@
 use crate::clock::HlcTimestamp;
+use crate::payload::GraphQLErrorResponse;
 use crate::proxy::REQUEST_ID_HEADER;
 use crate::ratify::{IdempotencyEngine, IdempotencyOutcome};
 use pingora::proxy::Session;
@@ -100,11 +101,7 @@ impl IdempotencyFilter {
         let _ = header.insert_header("content-type", "application/json");
         let _ = header.insert_header(REQUEST_ID_HEADER, request_id.to_string());
         let _ = header.insert_header("x-spectra-hlc", hlc.to_compact_string());
-        let body = format!(
-            r#"{{"errors":[{{"message":"A mutation with idempotency key '{}' is currently in flight","extensions":{{"code":"CONFLICT","hlc":"{}"}}}}]}}"#,
-            key,
-            conflict_hlc.to_compact_string()
-        );
+        let body = GraphQLErrorResponse::conflict(Some(key), conflict_hlc).to_json_string();
         session.set_keepalive(None);
         session.write_response_header(Box::new(header), false).await?;
         session.write_response_body(Some(bytes::Bytes::from(body)), true).await?;
@@ -121,10 +118,7 @@ impl IdempotencyFilter {
         let _ = header.insert_header("content-type", "application/json");
         let _ = header.insert_header(REQUEST_ID_HEADER, request_id.to_string());
         let _ = header.insert_header("x-spectra-hlc", hlc.to_compact_string());
-        let body = format!(
-            r#"{{"errors":[{{"message":"A mutation with idempotency key is currently in flight","extensions":{{"code":"CONFLICT","hlc":"{}"}}}}]}}"#,
-            conflict_hlc.to_compact_string()
-        );
+        let body = GraphQLErrorResponse::conflict(None, conflict_hlc).to_json_string();
         session.set_keepalive(None);
         session.write_response_header(Box::new(header), false).await?;
         session.write_response_body(Some(bytes::Bytes::from(body)), true).await?;

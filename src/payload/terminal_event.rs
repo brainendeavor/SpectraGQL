@@ -2,7 +2,7 @@ use serde::Serialize;
 use uuid::Uuid;
 
 use crate::clock::HlcTimestamp;
-use crate::payload::{PayloadType, RequestInfo, ResponseInfo};
+use crate::payload::{PayloadType, RequestInfo, ResponseInfo, SanitizedPayload};
 
 #[derive(Serialize, Debug, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -25,7 +25,7 @@ pub struct CompletionEvent {
     pub status: OperationOutcome,
     pub duration_ms: u64,
     pub operation_name: Option<String>,
-    pub request: RequestInfo,
+    pub request: SanitizedPayload<RequestInfo>,
     pub response: Option<ResponseInfo>,
     pub error: Option<String>,
     #[serde(rename = "type")]
@@ -40,17 +40,16 @@ impl CompletionEvent {
         hlc: HlcTimestamp,
         duration_ms: u64,
         operation_name: Option<String>,
-        mut request: RequestInfo,
+        request: impl Into<SanitizedPayload<RequestInfo>>,
         response: ResponseInfo,
     ) -> Self {
-        request.sanitize();
         CompletionEvent {
             id,
             hlc,
             status: OperationOutcome::Success,
             duration_ms,
             operation_name,
-            request,
+            request: request.into(),
             response: Some(response),
             error: None,
             payload_type: PayloadType::Response,
@@ -62,18 +61,17 @@ impl CompletionEvent {
         hlc: HlcTimestamp,
         duration_ms: u64,
         operation_name: Option<String>,
-        mut request: RequestInfo,
+        request: impl Into<SanitizedPayload<RequestInfo>>,
         response: Option<ResponseInfo>,
         error: String,
     ) -> Self {
-        request.sanitize();
         CompletionEvent {
             id,
             hlc,
             status: OperationOutcome::Failed,
             duration_ms,
             operation_name,
-            request,
+            request: request.into(),
             response,
             error: Some(error),
             payload_type: PayloadType::Response,
@@ -85,17 +83,16 @@ impl CompletionEvent {
         hlc: HlcTimestamp,
         duration_ms: u64,
         operation_name: Option<String>,
-        mut request: RequestInfo,
+        request: impl Into<SanitizedPayload<RequestInfo>>,
         reason: String,
     ) -> Self {
-        request.sanitize();
         CompletionEvent {
             id,
             hlc,
             status: OperationOutcome::Rejected,
             duration_ms,
             operation_name,
-            request,
+            request: request.into(),
             response: None,
             error: Some(reason),
             payload_type: PayloadType::Response,

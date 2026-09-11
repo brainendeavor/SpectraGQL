@@ -19,7 +19,7 @@ use pingora::ErrorType::ConnectNoRoute;
 use pingora::http::ResponseHeader;
 use pingora::proxy::{ProxyHttp, Session};
 use pingora::upstreams::peer::HttpPeer;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::net::ToSocketAddrs;
 use std::sync::Arc;
 use std::time::Duration;
@@ -291,7 +291,6 @@ impl ProxyHttp for CompositeServiceProxy {
             request_info: None,
             response_parts: None,
             response_body: None,
-            response_actions: HashSet::new(),
             buffer: vec![],
             idempotency_key: None,
             is_replay: false,

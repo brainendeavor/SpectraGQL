@@ -73,21 +73,7 @@ impl GuardRejection {
     /// Renders a GraphQL error response JSON string matching the standard GraphQL spec:
     /// `{"errors": [{"message": "...", "extensions": {"code": "..."}}]}`
     pub fn to_graphql_response(&self) -> String {
-        let mut err_obj = serde_json::json!({
-            "message": self.message,
-            "extensions": {
-                "code": self.code,
-            }
-        });
-        if let Some(details) = &self.details {
-            if let Some(map) = err_obj.get_mut("extensions").and_then(|e| e.as_object_mut()) {
-                map.insert("details".to_string(), details.clone());
-            }
-        }
-        serde_json::json!({
-            "errors": [err_obj]
-        })
-        .to_string()
+        crate::payload::GraphQLErrorResponse::from(self).to_json_string()
     }
 }
 

@@ -2,9 +2,8 @@ pub mod lua;
 pub use lua::HttpRequestRatifierLua as LuaRatifier;
 
 use crate::payload::RequestInfo;
-use crate::ratify::{RatifyResponseAction, RequestRatification};
+use crate::ratify::RequestRatification;
 use anyhow::Result;
-use std::collections::HashSet;
 
 #[derive(Clone)]
 pub struct HttpRequestRatifier {}
@@ -26,15 +25,5 @@ impl RequestRatification for HttpRequestRatifier {
     ) -> Result<RequestInfo> {
         log::info!("enum_dispatch RequestRatification -> HttpRequestRatifier!");
         Ok(RequestInfo::new(request_id, hlc, http_request_parts))
-    }
-
-    fn ratify_response(
-        &self,
-        _request_info: &RequestInfo,
-    ) -> Result<HashSet<RatifyResponseAction>> {
-        Ok(HashSet::from_iter([
-            RatifyResponseAction::Respond,
-            RatifyResponseAction::Dispatch,
-        ]))
     }
 }

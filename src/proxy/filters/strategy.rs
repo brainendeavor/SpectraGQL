@@ -9,6 +9,15 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
+/// Standardized GraphQL command receipt conforming to Mode B edge contract.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CommandReceipt {
+    pub command_id: String,
+    pub hlc: String,
+    pub status: String,
+}
+
 /// Generates a standardized GraphQL command receipt conforming to Mode B edge contract.
 pub fn generate_command_receipt(
     field_or_op: &str,
@@ -16,13 +25,14 @@ pub fn generate_command_receipt(
     hlc: &crate::clock::HlcTimestamp,
     receipt_status: &str,
 ) -> serde_json::Value {
+    let receipt = CommandReceipt {
+        command_id: command_id.to_string(),
+        hlc: hlc.to_compact_string(),
+        status: receipt_status.to_string(),
+    };
     serde_json::json!({
         "data": {
-            field_or_op: {
-                "commandId": command_id.to_string(),
-                "hlc": hlc.to_compact_string(),
-                "status": receipt_status
-            }
+            field_or_op: receipt
         }
     })
 }
@@ -54,8 +64,9 @@ impl StrategyRouter {
         log::info!("Executing Mode B edge termination for operation: {}", route.operation);
         ctx.proxy_context.is_mode_b_terminated = true;
 
-        // Commit command to event broker
-        let dispatch_result = dispatch_method.dispatch_request_info(request_info).await;
+        // Commit command to event broker (guaranteed sanitized)
+        let sanitized_request = request_info.clone().into_sanitized();
+        let dispatch_result = dispatch_method.dispatch_request_info(&sanitized_request).await;
         let dispatch_ok = match &dispatch_result {
             Ok(_) => true,
             Err(e) => {
@@ -158,7 +169,8 @@ impl StrategyRouter {
     ) {
         match policy {
             ModeADispatchPolicy::RawAudit => {
-                let _ = dispatch_method.dispatch_request_info(request_info).await;
+                let sanitized_request = request_info.clone().into_sanitized();
+                let _ = dispatch_method.dispatch_request_info(&sanitized_request).await;
             }
             ModeADispatchPolicy::ResponseOnly | ModeADispatchPolicy::ResponseWithFailure => {
                 // Defer dispatch until response logging
