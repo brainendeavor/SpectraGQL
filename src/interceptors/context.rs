@@ -3,9 +3,9 @@ use uuid::Uuid;
 use crate::clock::HlcTimestamp;
 use crate::payload::GraphQLOperationType;
 
-/// Execution context passed through RequestGuard and ResponseGuard pipelines.
+/// Execution context passed through RequestInterceptor and ResponseInterceptor pipelines.
 #[derive(Debug, Clone)]
-pub struct GuardContext {
+pub struct InterceptorContext {
     pub request_id: Uuid,
     pub hlc: HlcTimestamp,
     pub operation_name: Option<String>,
@@ -14,7 +14,9 @@ pub struct GuardContext {
     pub extensions: HashMap<String, serde_json::Value>,
 }
 
-impl GuardContext {
+pub use InterceptorContext as GuardContext;
+
+impl InterceptorContext {
     pub fn new(request_id: Uuid, hlc: HlcTimestamp) -> Self {
         Self {
             request_id,
@@ -46,16 +48,45 @@ pub enum GuardVerdict {
     Mutated,
 }
 
-/// Rejection returned when a guard blocks an inbound request or outbound response.
-#[derive(Debug, Clone)]
-pub struct GuardRejection {
+/// Verdict returned by an interceptor.
+/// Allows pure pass-through, defensive rejection, or active payload transformation (e.g. anonymization, shaping).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InterceptorVerdict {
+    /// The request/response passed without modification.
+    Pass,
+    /// The request/response was rejected due to a contract or policy violation.
+    Reject(InterceptorRejection),
+    /// The headers, query, or body were transformed.
+    Transform {
+        headers: Option<http::HeaderMap>,
+        body: Option<Vec<u8>>,
+    },
+}
+
+impl From<GuardVerdict> for InterceptorVerdict {
+    fn from(v: GuardVerdict) -> Self {
+        match v {
+            GuardVerdict::Pass => InterceptorVerdict::Pass,
+            GuardVerdict::Mutated => InterceptorVerdict::Transform {
+                headers: None,
+                body: None,
+            },
+        }
+    }
+}
+
+/// Rejection returned when an interceptor blocks an inbound request or outbound response.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InterceptorRejection {
     pub status_code: http::StatusCode,
     pub code: String,
     pub message: String,
     pub details: Option<serde_json::Value>,
 }
 
-impl GuardRejection {
+pub use InterceptorRejection as GuardRejection;
+
+impl InterceptorRejection {
     pub fn new(status_code: http::StatusCode, code: impl Into<String>, message: impl Into<String>) -> Self {
         Self {
             status_code,
@@ -77,17 +108,17 @@ impl GuardRejection {
     }
 }
 
-impl std::fmt::Display for GuardRejection {
+impl std::fmt::Display for InterceptorRejection {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "GuardRejection({}: [{} - {}])",
+            "InterceptorRejection({}: [{} - {}])",
             self.status_code, self.code, self.message
         )
     }
 }
 
-impl std::error::Error for GuardRejection {}
+impl std::error::Error for InterceptorRejection {}
 
 /// Errors produced during rule evaluation.
 #[derive(Debug, Clone, PartialEq, Eq)]

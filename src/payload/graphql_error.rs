@@ -84,8 +84,8 @@ impl GraphQLErrorResponse {
     }
 }
 
-impl From<&crate::guards::GuardRejection> for GraphQLErrorResponse {
-    fn from(rejection: &crate::guards::GuardRejection) -> Self {
+impl From<&crate::interceptors::InterceptorRejection> for GraphQLErrorResponse {
+    fn from(rejection: &crate::interceptors::InterceptorRejection) -> Self {
         let mut err = GraphQLError::new(&rejection.message).with_code(&rejection.code);
         if let Some(details) = &rejection.details {
             err = err.with_extension("details", details.clone());
@@ -94,8 +94,8 @@ impl From<&crate::guards::GuardRejection> for GraphQLErrorResponse {
     }
 }
 
-impl From<crate::guards::GuardRejection> for GraphQLErrorResponse {
-    fn from(rejection: crate::guards::GuardRejection) -> Self {
+impl From<crate::interceptors::InterceptorRejection> for GraphQLErrorResponse {
+    fn from(rejection: crate::interceptors::InterceptorRejection) -> Self {
         GraphQLErrorResponse::from(&rejection)
     }
 }

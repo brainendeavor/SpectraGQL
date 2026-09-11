@@ -260,3 +260,57 @@ fn test_guard_pipeline_orchestration() {
             .is_ok()
     );
 }
+
+#[test]
+fn test_response_interceptor_transform_anonymization() {
+    use spectragql::guards::{InterceptorVerdict, ResponseInterceptor, ResponseInterceptorPipeline};
+
+    struct CustomerAnonymizerInterceptor;
+
+    impl ResponseInterceptor for CustomerAnonymizerInterceptor {
+        fn intercept_response(
+            &self,
+            _ctx: &GuardContext,
+            _parts: &mut http::response::Parts,
+            body: &[u8],
+        ) -> InterceptorVerdict {
+            if let Ok(mut val) = serde_json::from_slice::<serde_json::Value>(body) {
+                // Anonymize user names and emails
+                if let Some(user) = val.pointer_mut("/data/viewer") {
+                    if user.get("name").is_some() {
+                        user["name"] = serde_json::json!("ANONYMIZED_USER");
+                    }
+                    if user.get("email").is_some() {
+                        user["email"] = serde_json::json!("redacted@example.com");
+                    }
+                }
+                let modified = serde_json::to_vec(&val).unwrap();
+                return InterceptorVerdict::Transform {
+                    headers: None,
+                    body: Some(modified),
+                };
+            }
+            InterceptorVerdict::Pass
+        }
+    }
+
+    let pipeline = ResponseInterceptorPipeline::new().with_interceptor(CustomerAnonymizerInterceptor);
+    let ctx = GuardContext::new(Uuid::new_v4(), test_hlc());
+    let mut resp = http::Response::builder().body(()).unwrap().into_parts().0;
+
+    let original_body = br#"{"data":{"viewer":{"id":"usr_123","name":"John Doe","email":"john@secret.org"}}}"#;
+    let verdict = pipeline.intercept_response(&ctx, &mut resp, original_body);
+
+    match verdict {
+        InterceptorVerdict::Transform { body: Some(new_body), .. } => {
+            let json_str = String::from_utf8(new_body).expect("Valid UTF-8");
+            assert!(json_str.contains("ANONYMIZED_USER"));
+            assert!(json_str.contains("redacted@example.com"));
+            assert!(!json_str.contains("John Doe"));
+            assert!(!json_str.contains("john@secret.org"));
+            assert!(json_str.contains("usr_123")); // Preserved ID
+        }
+        _ => panic!("Expected InterceptorVerdict::Transform"),
+    }
+}
+

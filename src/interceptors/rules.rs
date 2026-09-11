@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-use crate::guards::context::RuleEvaluationError;
+use crate::interceptors::context::RuleEvaluationError;
 
 /// Abstract rule evaluation port.
 /// Allows native Rust closures, expression evaluators, or future Wasmtime plugins
