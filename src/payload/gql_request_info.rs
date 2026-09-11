@@ -55,6 +55,7 @@ pub enum GraphQLOperationType {
 pub struct GraphQLRequestInfo {
     pub operation_type: GraphQLOperationType,
     pub operation_name: Option<String>,
+    pub root_fields: Vec<String>,
     raw_body: Option<String>,
     json_body: serde_json::Value,
 }
@@ -64,6 +65,7 @@ impl GraphQLRequestInfo {
         let mut gql_request_info = GraphQLRequestInfo {
             operation_type: GraphQLOperationType::Unknown,
             operation_name: None,
+            root_fields: Vec::new(),
             raw_body: None,
             json_body: serde_json::Value::Null,
         };
@@ -71,6 +73,15 @@ impl GraphQLRequestInfo {
             log::error!("Invalid JSON for gql request: {}", e);
         }
         gql_request_info
+    }
+
+    pub fn matches_operation(&self, target: &str) -> bool {
+        if let Some(name) = &self.operation_name {
+            if name.eq_ignore_ascii_case(target) {
+                return true;
+            }
+        }
+        self.root_fields.iter().any(|f| f.eq_ignore_ascii_case(target))
     }
 
     pub fn set_request_json(&mut self, request_json: &str) -> Result<&mut Self> {

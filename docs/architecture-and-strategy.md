@@ -223,25 +223,86 @@ The initial prototype proved the viability of Pingora and Lua ratification. The 
 
 To eliminate friction and demolish the "DevOps tax" perception often associated with event-driven architectures, SpectraGQL provides pre-packaged, single-container **Developer Appliances**. 
 
-Rather than requiring developers to configure a distributed messaging cluster, each appliance packages the compiled SpectraGQL Pingora reverse proxy alongside an embedded, lightweight broker:
+Rather than requiring developers to configure an external distributed messaging cluster, each appliance packages the compiled SpectraGQL Pingora reverse proxy alongside an embedded, lightweight broker.
 
-### The Three Appliance Flavors:
+### Appliance Matrix & The Kafka-Compatible Developer Experience (DX)
 
-| Appliance | Embedded Engine | Focus & Differentiator | Best For |
+A crucial insight for developer adoption is that **the Kafka wire protocol is ubiquitous**. Every enterprise language ecosystem already has production-ready Kafka client libraries (`librdkafka`, `kafkajs`, `confluent-kafka-python`, `kafka-go`). Supporting the Kafka protocol inside an appliance allows developers to consume SpectraGQL mutation events using tools they already know:
+
+| Appliance Image | Embedded Engine | Protocol / Focus | Best For |
 | :--- | :--- | :--- | :--- |
-| **`spectragql/appliance:nats`** | **NATS JetStream** | The Swiss Army Knife: Zero-dependency Go binary, ultra-fast pub/sub, KV store, and mature client SDKs in every language. | General microservice adoption, multi-language teams, immediate dev onboarding. |
-| **`spectragql/appliance:iggy`** | **Apache Iggy** | Pure Rust Speed: Byte-level streaming engine built for high-throughput NVMe drives, cache locality, and sub-millisecond tail latencies. | Pure-Rust ecosystems, high-throughput ingestion, zero-allocation requirements. |
-| **`spectragql/appliance:sierradb`** | **SierraDB** | The Event-Store Specialist: Immutable event sourcing, built-in aggregate reconstruction, temporal projections, and database queries. | Teams practicing Domain-Driven Design (DDD) and native Event Sourcing who need DB semantics over simple pub/sub. |
+| **`spectragql/appliance:nats`** | **NATS JetStream** | NATS protocol | **The Swiss Army Knife:** Single static Go binary (<30MB), ultra-low memory, pub/sub, KV, and multi-language client SDKs. |
+| **`spectragql/appliance:nisshi`** | **Nisshi (Rust Kafka)** | Kafka wire protocol | **Lightweight Kafka DX:** Pure-Rust Kafka-compatible broker backed by SQLite or in-memory storage. Zero JVM, instant startup. |
+| **`spectragql/appliance:redpanda`** | **Redpanda (C++)** | Kafka wire protocol | **Enterprise Kafka Parity:** Production-grade Kafka API compatibility in C++ Seastar dev-container mode. |
+| **`spectragql/appliance:iggy`** | **Apache Iggy** | Iggy binary / TCP / QUIC | **Pure Rust Speed:** Byte-level streaming engine built for high-throughput NVMe drives, cache locality, and sub-millisecond tail latencies. |
+| **`spectragql/appliance:sierradb`** | **SierraDB** | SierraDB event stream | **The Event-Store Specialist:** Immutable event sourcing, built-in aggregate reconstruction, temporal projections, and database queries. |
+
+> **Emerging & Experimental Log Engines Evaluated:**
+> - **Walrus (`nubskr/walrus`):** A high-throughput, io_uring-based streaming log written in Rust. Features segment-based sharding and metadata-only Raft (>1M writes/sec). High potential as an embedded storage core for extreme NVMe performance.
+> - **Jocko (`travisjeffery/jocko`):** An early pure-Go Kafka implementation. While historically interesting as a pioneer in eliminating the JVM for Kafka, it is largely unmaintained and superseded by modern engines like Redpanda and Nisshi.
 
 ```bash
 # Instant local gateway with embedded NATS JetStream
 docker run -p 8000:8000 -p 4222:4222 spectragql/appliance:nats --upstream http://localhost:4000
+
+# Instant local gateway speaking the Kafka wire protocol via Nisshi
+docker run -p 8000:8000 -p 9092:9092 spectragql/appliance:nisshi --upstream http://localhost:4000
 ```
-This enables an engineer to start streaming live GraphQL mutations to worker scripts in under 60 seconds with zero infrastructure setup.
 
 ---
 
-## 7. Objective Analysis: Skeptic Objections & Realistic Scenario Suitability
+## 7. Downstream Ecosystem: Consuming SpectraGQL Events
+
+A write-path gateway is only as valuable as the downstream systems that consume its events. Once SpectraGQL ratifies and dispatches GraphQL mutations, what does a real-world downstream consumer architecture look like?
+
+Downstream consumers typically fall into four distinct architectural archetypes:
+
+```
+                               ┌────────────────────────────────────────────────────────┐
+                               │               SpectraGQL Mode A Proxy                  │
+                               └──────────────────────────┬─────────────────────────────┘
+                                                          │
+                                         Dispatches Completed Mutation Event
+                                                          │
+                                                          ▼
+                                ┌──────────────────────────────────────────────────┐
+                                │      Event Backbone (NATS / Kafka / Iggy)        │
+                                └──┬──────────────┬───────────────┬──────────────┬─┘
+                                   │              │               │              │
+                   ┌───────────────┘              │               │              └───────────────┐
+                   ▼                              ▼               ▼                              ▼
+    ┌───────────────────────────┐  ┌───────────────────────────┐  ┌───────────────────────────┐  ┌───────────────────────────┐
+    │     Stream Processing     │  │     Complex Event (CEP)   │  │   Saga & Workflow Engine  │  │   Search & Projection Sync│
+    │          (Arroyo)         │  │         (ArkFlow)         │  │     (Temporal / Inngest)  │  │   (Meilisearch / Redis)   │
+    │  - Real-time SQL on stream│  │  - Tokio async pipeline   │  │  - Multi-day workflows    │  │  - Zero-lag search index   │
+    │  - Materialized views     │  │  - Inline AI inference    │  │  - Payment retries        │  │  - Normalized read cache   │
+    │  - Rolling aggregations   │  │  - Anomaly detection      │  │  - Compensation sagas     │  │  - Cache invalidation      │
+    └───────────────────────────┘  └───────────────────────────┘  └───────────────────────────┘  └───────────────────────────┘
+```
+
+### 1. Stateful Stream Processing & Real-Time Projections: Arroyo (`ArroyoSystems/arroyo`)
+* **What it is:** A distributed stream processing engine written in **Rust** (often described as "Apache Flink rewritten in modern Rust").
+* **How it pairs with SpectraGQL:**
+  * Arroyo consumes the raw GraphQL mutation stream from Kafka or NATS.
+  * It executes continuous, stateful **Streaming SQL** over tumbling/sliding windows (e.g. `SELECT tenant_id, COUNT(*), SUM(amount) FROM mutations GROUP BY TUMBLE(interval '1 minute')`).
+  * **Completing the CQRS Loop:** Arroyo continuously outputs **Materialized Views** into Redis, PostgreSQL, or ClickHouse. When frontend clients send GraphQL `Query` operations, they read from Arroyo's pre-computed, sub-millisecond materialized read models!
+  * Arroyo can also function as a direct dispatch target via HTTP/SSE ingestion.
+
+### 2. Complex Event Processing (CEP) & Real-Time AI Inference: ArkFlow (`arkflow-rs/arkflow`)
+* **What it is:** A high-performance stream processing and complex event processing engine written in **Rust** on Tokio (enlisted in the CNCF Cloud Native Landscape).
+* **How it pairs with SpectraGQL:**
+  * ArkFlow is designed for low-latency rule evaluation, anomaly detection, and AI/ML model inference.
+  * When a mutation arrives (e.g., `createComment` or `submitTransaction`), ArkFlow intercepts the event stream, runs inline Python UDFs or ONNX AI models for content moderation, fraud classification, or spam filtering, and emits enriched domain events or triggers automated policy alerts without burdening the primary GraphQL backend.
+
+### 3. Saga & Long-Running Workflow Orchestration (Temporal, Hatchet, Inngest)
+* For operations that require distributed coordination across third-party APIs (Stripe charges, shipping provider label generation, multi-day KYC verification), a dedicated workflow worker consumes the mutation event from the broker and orchestrates durable, retryable sagas with automated compensation logic.
+
+### 4. Read Projection & Search Synchronization (Meilisearch, TypeSense, Redis)
+* Mutation events stream directly to search index workers. When a `updateProductCatalog` mutation succeeds, the Meilisearch or Elasticsearch index is updated within milliseconds, completely eliminating the need for periodic full-database re-indexing sweeps.
+
+---
+
+## 8. Objective Analysis: Skeptic Objections & Realistic Scenario Suitability
 
 A rigorous product strategy requires acknowledging where a technology fits and where it should **not** be chosen.
 
@@ -258,7 +319,7 @@ A rigorous product strategy requires acknowledging where a technology fits and w
 5. **"Why not use Database-Level CDC (Debezium / Postgres WAL) instead of a Gateway Outbox?"**
    * **Verdict: The 99% practical compromise.** While DB-level CDC guarantees atomic commits at the storage layer, setting up Debezium, Kafka Connect, and schema registries across 20 legacy microservices requires 6–18 months of platform team effort. SpectraGQL's Mode A provides a **Gateway Outbox** that achieves 99.9% of the practical decoupling in 10 minutes with zero database migrations.
 6. **"The DevOps Tax / Kafka PTSD?"**
-   * **Verdict: Solved by Pingora + NATS/Iggy appliances.** Event-driven architectures no longer require multi-gigabyte JVM heaps, ZooKeeper clusters, or dedicated SREs.
+   * **Verdict: Solved by Pingora + NATS/Iggy/Nisshi appliances.** Event-driven architectures no longer require multi-gigabyte JVM heaps, ZooKeeper clusters, or dedicated SREs.
 7. **"Synchronous Resolver Fan-out vs. Selection Set Resolution?"**
    * **Verdict: Solved by Event Choreography.** In Mode A, the primary resolver executes only its core write and returns the entity immediately. Downstream systems consume the event choreographically, isolating faults and eliminating p99 latency compounding.
 
@@ -270,7 +331,7 @@ A rigorous product strategy requires acknowledging where a technology fits and w
 | :--- | :--- | :--- |
 | **Microservices with GraphQL API (3+ services)** | **Flagship (High)** | Solves synchronous resolver fan-out; gives new services instant event streams via Mode A with zero frontend changes. |
 | **High-Volume Ingestion / Long-Running Sagas** | **Ideal (High)** | Mode B provides true async CQRS, edge ratification, and broker queue buffering for telemetry, IoT, and heavy batch jobs. |
-| **Rapid Prototyping / Local Dev** | **High** | Dev Appliances (`:nats`, `:iggy`, `:sierradb`) spin up a complete CQRS gateway in one command. |
+| **Rapid Prototyping / Local Dev** | **High** | Dev Appliances (`:nats`, `:nisshi`, `:redpanda`, `:iggy`, `:sierradb`) spin up a complete CQRS gateway in one command. |
 | **Single Monolith + Single Relational DB** | **Zero (Overkill)** | ACID transactions already solve the write path natively. |
 | **Full Apollo Federation v2 Subgraph Mesh** | **Low / Niche** | Requires federated entity resolution and distributed query planning across subgraphs. |
 | **Public / Partner GraphQL APIs** | **Moderate (Mode A only)** | Third-party clients require synchronous spec contracts. Mode A works for internal side-effects; Mode B cannot be used. |
@@ -278,7 +339,7 @@ A rigorous product strategy requires acknowledging where a technology fits and w
 
 ---
 
-## 8. Strategic Roadmap & Milestones
+## 9. Strategic Roadmap & Milestones
 
 ```
 Milestone 1: Core Engine Modernization
@@ -290,6 +351,7 @@ Milestone 2: Pluggable Dispatch Architecture
 ├── Abstract DispatchAdapter trait
 ├── Implement Apache Iggy native Rust adapter
 ├── Implement SierraDB native event-store adapter
+├── Implement Arroyo stream-processing integration
 └── Maintain NATS JetStream & Kafka adapters
 
 Milestone 3: Ratification & Governance Layer
@@ -306,14 +368,19 @@ Milestone 4: Operational Modes & Dispatch Policies
 └── Archive Mode C ("The Mirage")
 
 Milestone 5: Developer Appliances & Ecosystem
-├── Docker appliance builds (spectragql/appliance:nats, :iggy, :sierradb)
+├── Docker appliance builds:
+│   ├── spectragql/appliance:nats (NATS JetStream)
+│   ├── spectragql/appliance:nisshi (Rust-native Kafka protocol + SQLite)
+│   ├── spectragql/appliance:redpanda (Enterprise Kafka protocol)
+│   ├── spectragql/appliance:iggy (Apache Iggy pure-Rust)
+│   └── spectragql/appliance:sierradb (SierraDB event-sourcing)
 ├── Beast GUI (Tauri / Svelte dashboard for observing mutation streams)
 └── End-to-end integration test harness with mock brokers
 ```
 
 ---
 
-## 9. Conclusion
+## 10. Conclusion
 
 SpectraGQL does not need to compete with Apollo or Cosmo on complex federated query planning. 
 

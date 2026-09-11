@@ -8,6 +8,19 @@ use crate::payload::GraphQLOperationType;
 pub struct ParsedGraphQLOperation {
     pub operation_type: GraphQLOperationType,
     pub operation_name: Option<String>,
+    pub root_fields: Vec<String>,
+}
+
+impl ParsedGraphQLOperation {
+    #[allow(dead_code)]
+    pub fn matches_operation(&self, target: &str) -> bool {
+        if let Some(name) = &self.operation_name {
+            if name.eq_ignore_ascii_case(target) {
+                return true;
+            }
+        }
+        self.root_fields.iter().any(|f| f.eq_ignore_ascii_case(target))
+    }
 }
 
 pub fn parse_graphql_operation(query_str: &str) -> Result<ParsedGraphQLOperation> {
@@ -40,9 +53,21 @@ pub fn parse_graphql_operation(query_str: &str) -> Result<ParsedGraphQLOperation
 
             let operation_name = op.name().map(|n| n.text().to_string());
 
+            let mut root_fields = Vec::new();
+            if let Some(selection_set) = op.selection_set() {
+                for selection in selection_set.selections() {
+                    if let apollo_parser::cst::Selection::Field(f) = selection {
+                        if let Some(name) = f.name() {
+                            root_fields.push(name.text().to_string());
+                        }
+                    }
+                }
+            }
+
             return Ok(ParsedGraphQLOperation {
                 operation_type,
                 operation_name,
+                root_fields,
             });
         }
     }
@@ -91,5 +116,34 @@ mod tests {
         let q = "query { hero { ";
         let res = parse_graphql_operation(q);
         assert!(res.is_err());
+    }
+
+    #[test]
+    fn test_parse_mutation_root_fields_and_matching() {
+        let q = "mutation AdjustInventoryMutation { adjustInventory(itemId: \"42\") { id status } }";
+        let parsed = parse_graphql_operation(q).unwrap();
+        assert_eq!(parsed.operation_type, GraphQLOperationType::Mutation);
+        assert_eq!(parsed.operation_name, Some("AdjustInventoryMutation".to_string()));
+        assert_eq!(parsed.root_fields, vec!["adjustInventory".to_string()]);
+
+        // Matches operation name
+        assert!(parsed.matches_operation("AdjustInventoryMutation"));
+        assert!(parsed.matches_operation("adjustinventorymutation"));
+        // Matches root field
+        assert!(parsed.matches_operation("adjustInventory"));
+        assert!(parsed.matches_operation("ADJUSTINVENTORY"));
+        // Does not match unrelated
+        assert!(!parsed.matches_operation("deleteUser"));
+    }
+
+    #[test]
+    fn test_parse_anonymous_mutation_with_multiple_root_fields() {
+        let q = "mutation { updateCustomerAddress(id: 1) { ok } adjustInventory(id: 2) { ok } }";
+        let parsed = parse_graphql_operation(q).unwrap();
+        assert_eq!(parsed.operation_type, GraphQLOperationType::Mutation);
+        assert_eq!(parsed.operation_name, None);
+        assert_eq!(parsed.root_fields, vec!["updateCustomerAddress".to_string(), "adjustInventory".to_string()]);
+        assert!(parsed.matches_operation("updateCustomerAddress"));
+        assert!(parsed.matches_operation("adjustInventory"));
     }
 }

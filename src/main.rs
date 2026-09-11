@@ -63,7 +63,12 @@ fn main() -> Result<()> {
     // Composite Service -> Pingora
     // ------------------------------------------------------------------------
 
-    let mut composite_service = CompositeService::new();
+    let named_upstreams = spectra_configuration.resolve_all_upstreams()?;
+    let mut composite_service = CompositeService::new().with_routing(
+        named_upstreams,
+        spectra_configuration.gql.mode_a.clone(),
+        spectra_configuration.gql.routes.clone(),
+    );
     composite_service.add_service_config(gql_service);
     composite_service.add_service_config(rest_service);
     let mut proxy_service =

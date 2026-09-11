@@ -49,6 +49,9 @@ pub struct SpectraProxyCtx {
     pub buffer: Vec<u8>,
     pub idempotency_key: Option<String>,
     pub is_replay: bool,
+    pub target_upstream_addr: Option<std::net::SocketAddr>,
+    pub is_mode_b_terminated: bool,
+    pub dispatch_policy: crate::spectra_config::ModeADispatchPolicy,
 }
 
 #[derive(Clone)]

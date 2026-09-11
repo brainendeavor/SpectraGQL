@@ -45,6 +45,7 @@ impl RequestRatification for GraphQLRatifier {
         let parsed_op = parse_graphql_operation(&gql_request_body.query)?;
         gql_request_info.operation_name = parsed_op.operation_name;
         gql_request_info.operation_type = parsed_op.operation_type;
+        gql_request_info.root_fields = parsed_op.root_fields;
         request_info.gql = Some(gql_request_info);
 
         Ok(request_info)

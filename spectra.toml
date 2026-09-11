@@ -1,18 +1,52 @@
 bind_addr = "0.0.0.0:8000"
 
+# Default Upstream (e.g. Core Monolith or primary query backend)
 [upstream]
-addr = "localhost:4000"
+addr = "127.0.0.1:4000"
 name = "default"
+
+# Additional Named Microservice Upstreams
+[upstreams.inventory]
+addr = "127.0.0.1:5001"
+name = "inventory"
+
+[upstreams.crm]
+addr = "127.0.0.1:5002"
+name = "crm"
 
 [gql]
 paths = "/gql,/graphql"
-dispatch_query = true
-dispatch_mutation = true
-dispatch_subscription = true
 ops_to_dispatch = "query, mutation, subscription"
-dispatch.name = "gql"
-dispatch.method = "NATS"
-dispatch.addr = "127.0.0.1:4222"
+
+# Mode A: The Default Workhorse Gateway
+[gql.mode_a]
+enabled = true
+# Options: "response_with_failure" (default), "response_only", "raw_audit"
+dispatch_policy = "response_with_failure"
+timeout_ms = 3000
+
+# Mode A Route Overrides: Route specific mutations to dedicated microservices
+[gql.routes.inventory_update]
+operation = "adjustInventory"
+mode = "A"
+upstream = "inventory"
+
+[gql.routes.customer_address]
+operation = "updateCustomerAddress"
+mode = "A"
+upstream = "crm"
+
+# Mode B Route Overrides: Pure async command receipts (edge-terminated)
+[gql.routes.bulk_import]
+operation = "importCatalog"
+mode = "B"
+receipt_status = "ACCEPTED"
+
+[dispatch]
+method = "NATS"
+addr = "127.0.0.1:4222"
+name = "default"
 
 [rest]
 paths = "/api,/api/{*path}"
+
