@@ -341,6 +341,37 @@ impl IdempotencyEngine {
         }
     }
 
+    /// Returns the backend type name ("memory" or "redis").
+    pub fn backend_name(&self) -> &'static str {
+        match &self.backend {
+            IdempotencyBackend::Memory { .. } => "memory",
+            IdempotencyBackend::Redis { .. } => "redis",
+        }
+    }
+
+    /// Returns the configured idempotency TTL in seconds.
+    pub fn ttl_secs(&self) -> u64 {
+        self.ttl.as_secs()
+    }
+
+    /// Returns the maximum configured capacity (for in-memory backend).
+    pub fn max_capacity(&self) -> usize {
+        match &self.backend {
+            IdempotencyBackend::Memory { max_capacity, .. } => *max_capacity,
+            IdempotencyBackend::Redis { .. } => 0,
+        }
+    }
+
+    /// Returns the count of active records currently held in memory.
+    pub fn active_record_count(&self) -> usize {
+        match &self.backend {
+            IdempotencyBackend::Memory { records, .. } => {
+                records.read().map(|r| r.len()).unwrap_or(0)
+            }
+            IdempotencyBackend::Redis { .. } => 0,
+        }
+    }
+
     /// Prunes expired records under an active write guard.
     fn prune_expired_locked(
         records: &mut HashMap<String, IdempotencyRecord>,

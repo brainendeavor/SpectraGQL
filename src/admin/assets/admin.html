@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SpectraGQL Admin Console</title>
+  <style>
+    :root {
+      --bg: #0d1117;
+      --card-bg: #161b22;
+      --border: #30363d;
+      --text: #c9d1d9;
+      --text-bright: #f0f6fc;
+      --text-muted: #8b949e;
+      --primary: #58a6ff;
+      --success: #3fb950;
+      --warning: #d29922;
+      --accent-purple: #bc8cff;
+      --danger: #f85149;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+    body { background: var(--bg); color: var(--text); padding: 24px; min-height: 100vh; }
+    .container { max-width: 1200px; margin: 0 auto; }
+    
+    /* Header */
+    header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 16px; margin-bottom: 24px; }
+    .logo-group { display: flex; align-items: center; gap: 12px; }
+    .logo-badge { background: linear-gradient(135deg, #1f6feb, #8957e5); color: white; padding: 6px 14px; border-radius: 6px; font-weight: bold; font-size: 14px; letter-spacing: 0.5px; }
+    h1 { font-size: 22px; color: var(--text-bright); }
+    .status-badge { display: inline-flex; align-items: center; gap: 6px; padding: 4px 12px; border-radius: 12px; font-size: 13px; font-weight: 600; }
+    .status-live { background: rgba(63, 185, 80, 0.15); color: var(--success); border: 1px solid rgba(63, 185, 80, 0.4); }
+    .status-dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+
+    /* Grid */
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; margin-bottom: 24px; }
+    .card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; padding: 18px; }
+    .card-title { font-size: 12px; text-transform: uppercase; letter-spacing: 0.6px; color: var(--text-muted); margin-bottom: 6px; font-weight: 600; }
+    .card-value { font-size: 24px; font-weight: bold; color: var(--text-bright); }
+    .card-meta { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
+
+    /* Migration Progress Bar */
+    .section-card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; padding: 20px; margin-bottom: 24px; }
+    .section-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
+    .section-title { font-size: 16px; font-weight: 600; color: var(--text-bright); }
+    .progress-track { height: 16px; background: #21262d; border-radius: 8px; overflow: hidden; display: flex; margin-bottom: 12px; }
+    .progress-seg { height: 100%; transition: width 0.3s ease; }
+    .seg-strangled { background: var(--success); }
+    .seg-mode-b { background: var(--primary); }
+    .seg-monolith { background: #484f58; }
+    .progress-legend { display: flex; gap: 20px; font-size: 13px; flex-wrap: wrap; }
+    .legend-item { display: flex; align-items: center; gap: 6px; }
+    .legend-box { width: 12px; height: 12px; border-radius: 3px; }
+
+    /* Drift Alert */
+    .drift-alert { background: rgba(210, 153, 34, 0.15); border: 1px solid var(--warning); border-radius: 6px; padding: 12px 16px; margin-bottom: 20px; color: #e3b341; font-size: 14px; }
+    .drift-alert ul { margin-left: 20px; margin-top: 6px; }
+
+    /* Tables */
+    table { width: 100%; border-collapse: collapse; font-size: 14px; text-align: left; }
+    th { padding: 10px 14px; background: #21262d; color: var(--text-muted); font-weight: 600; border-bottom: 1px solid var(--border); }
+    td { padding: 12px 14px; border-bottom: 1px solid var(--border); }
+    tr:last-child td { border-bottom: none; }
+    .pill { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: 600; }
+    .pill-strangled { background: rgba(63, 185, 80, 0.2); color: var(--success); }
+    .pill-mode-b { background: rgba(88, 166, 255, 0.2); color: var(--primary); }
+    .pill-monolith { background: rgba(139, 148, 158, 0.2); color: var(--text-muted); }
+    .pill-upstream { background: rgba(188, 140, 255, 0.2); color: var(--accent-purple); }
+
+    /* Buttons */
+    .btn { background: #21262d; border: 1px solid var(--border); color: var(--text-bright); padding: 6px 14px; border-radius: 6px; font-size: 13px; cursor: pointer; transition: 0.2s; }
+    .btn:hover { background: #30363d; border-color: #8b949e; }
+    .btn-primary { background: #1f6feb; border-color: #1f6feb; color: white; }
+    .btn-primary:hover { background: #388bfd; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div class="logo-group">
+        <div class="logo-badge">SpectraGQL</div>
+        <h1>Appliance Gateway Admin</h1>
+      </div>
+      <div style="display: flex; align-items: center; gap: 14px;">
+        <span id="uptime-display" style="font-size: 13px; color: var(--text-muted);">Uptime: --</span>
+        <div class="status-badge status-live">
+          <span class="status-dot"></span>
+          <span id="gateway-status">ONLINE</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- KPI Grid -->
+    <div class="grid">
+      <div class="card">
+        <div class="card-title">Broker Protocol</div>
+        <div class="card-value" id="kpi-broker-method">--</div>
+        <div class="card-meta" id="kpi-broker-addr">Target: --</div>
+      </div>
+      <div class="card">
+        <div class="card-title">Strangler Migration</div>
+        <div class="card-value" id="kpi-migration-pct">0%</div>
+        <div class="card-meta" id="kpi-migration-meta">0 / 0 Mutations Offloaded</div>
+      </div>
+      <div class="card">
+        <div class="card-title">Subscriptions Hub</div>
+        <div class="card-value" id="kpi-subs-conns">0</div>
+        <div class="card-meta" id="kpi-subs-topics">Active topics: 0</div>
+      </div>
+      <div class="card">
+        <div class="card-title">Idempotency Backend</div>
+        <div class="card-value" id="kpi-idemp-backend">--</div>
+        <div class="card-meta" id="kpi-idemp-meta">TTL: -- | In-flight: 0</div>
+      </div>
+    </div>
+
+    <!-- Strangler-Fig Migration Progress -->
+    <div class="section-card">
+      <div class="section-header">
+        <div>
+          <div class="section-title">Upstream Schema Strangler-Fig Coverage</div>
+          <div style="font-size: 13px; color: var(--text-muted); margin-top: 4px;">
+            Introspection coverage of root mutations offloaded to microservices vs. edge-terminated vs. monolith fallback.
+          </div>
+        </div>
+        <button class="btn btn-primary" onclick="refreshSchema()" id="btn-refresh-schema">Refresh Schema</button>
+      </div>
+
+      <div class="progress-track">
+        <div id="seg-strangled" class="progress-seg seg-strangled" style="width: 0%"></div>
+        <div id="seg-mode-b" class="progress-seg seg-mode-b" style="width: 0%"></div>
+        <div id="seg-monolith" class="progress-seg seg-monolith" style="width: 100%"></div>
+      </div>
+
+      <div class="progress-legend">
+        <div class="legend-item"><div class="legend-box seg-strangled"></div> Strangled Microservices (<span id="count-strangled">0</span>)</div>
+        <div class="legend-item"><div class="legend-box seg-mode-b"></div> Edge-Terminated Mode B (<span id="count-mode-b">0</span>)</div>
+        <div class="legend-item"><div class="legend-box seg-monolith"></div> Monolith Fallback (<span id="count-monolith">0</span>)</div>
+      </div>
+
+      <div id="drift-container" style="display: none; margin-top: 16px;" class="drift-alert">
+        <strong>⚠️ Schema Drift Detected:</strong> Configured routes that no longer exist in the upstream GraphQL schema:
+        <ul id="drift-list"></ul>
+      </div>
+    </div>
+
+    <!-- GraphQL Mutations Inspection Table -->
+    <div class="section-card">
+      <div class="section-title" style="margin-bottom: 14px;">Introspected GraphQL Mutations</div>
+      <table>
+        <thead>
+          <tr>
+            <th>Mutation Field Name</th>
+            <th>Migration Status</th>
+            <th>Mode</th>
+            <th>Target Upstream / Receipt</th>
+          </tr>
+        </thead>
+        <tbody id="table-schema-mutations">
+          <tr><td colspan="4" style="text-align: center; color: var(--text-muted);">Awaiting upstream introspection...</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Configured Routes Table -->
+    <div class="section-card">
+      <div class="section-title" style="margin-bottom: 14px;">Active Gateway Route Table</div>
+      <table>
+        <thead>
+          <tr>
+            <th>Route ID</th>
+            <th>Operation Name</th>
+            <th>Mode</th>
+            <th>Upstream Target</th>
+            <th>Target Address</th>
+            <th>Receipt Status</th>
+          </tr>
+        </thead>
+        <tbody id="table-routes">
+          <tr><td colspan="6" style="text-align: center; color: var(--text-muted);">Loading route mapping...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <script>
+    async function fetchJSON(url, options = {}) {
+      try {
+        const res = await fetch(url, options);
+        if (!res.ok) return null;
+        return await res.json();
+      } catch (e) {
+        console.error('Fetch error for', url, e);
+        return null;
+      }
+    }
+
+    function formatUptime(secs) {
+      const h = Math.floor(secs / 3600);
+      const m = Math.floor((secs % 3600) / 60);
+      const s = secs % 60;
+      if (h > 0) return `${h}h ${m}m ${s}s`;
+      if (m > 0) return `${m}m ${s}s`;
+      return `${s}s`;
+    }
+
+    async function loadStatus() {
+      const status = await fetchJSON('/admin/api/v1/status');
+      if (status) {
+        document.getElementById('uptime-display').innerText = 'Uptime: ' + formatUptime(status.uptime_seconds);
+        document.getElementById('kpi-broker-method').innerText = status.broker_method;
+        document.getElementById('kpi-broker-addr').innerText = 'Target: ' + status.broker_addr;
+        document.getElementById('gateway-status').innerText = status.broker_status.toUpperCase();
+      }
+    }
+
+    async function loadRoutes() {
+      const data = await fetchJSON('/admin/api/v1/routes');
+      if (!data) return;
+
+      const tbody = document.getElementById('table-routes');
+      if (!data.routes || data.routes.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: var(--text-muted);">No custom mutation routes configured. All traffic falls through to default monolith.</td></tr>';
+        return;
+      }
+
+      tbody.innerHTML = data.routes.map(r => `
+        <tr>
+          <td><code>${r.name}</code></td>
+          <td><strong>${r.operation}</strong></td>
+          <td><span class="pill ${r.mode === 'B' ? 'pill-mode-b' : 'pill-strangled'}">Mode ${r.mode}</span></td>
+          <td><span class="pill pill-upstream">${r.upstream}</span></td>
+          <td><code>${r.upstream_addr}</code></td>
+          <td><code>${r.receipt_status}</code></td>
+        </tr>
+      `).join('');
+    }
+
+    async function loadSchema() {
+      const data = await fetchJSON('/admin/api/v1/schema');
+      if (!data) return;
+
+      // Update KPI
+      const pct = (data.coverage_percent || 0).toFixed(1);
+      document.getElementById('kpi-migration-pct').innerText = pct + '%';
+      document.getElementById('kpi-migration-meta').innerText = `${data.strangled_count + data.mode_b_count} / ${data.total_mutations} Mutations Offloaded`;
+
+      // Update Progress Bar
+      const total = data.total_mutations || 1;
+      const strangledPct = ((data.strangled_count / total) * 100).toFixed(1);
+      const modeBPct = ((data.mode_b_count / total) * 100).toFixed(1);
+      const monolithPct = ((data.monolith_fallback_count / total) * 100).toFixed(1);
+
+      document.getElementById('seg-strangled').style.width = strangledPct + '%';
+      document.getElementById('seg-mode-b').style.width = modeBPct + '%';
+      document.getElementById('seg-monolith').style.width = monolithPct + '%';
+
+      document.getElementById('count-strangled').innerText = data.strangled_count;
+      document.getElementById('count-mode-b').innerText = data.mode_b_count;
+      document.getElementById('count-monolith').innerText = data.monolith_fallback_count;
+
+      // Drift alert
+      const driftBox = document.getElementById('drift-container');
+      const driftList = document.getElementById('drift-list');
+      if (data.drifted_routes && data.drifted_routes.length > 0) {
+        driftBox.style.display = 'block';
+        driftList.innerHTML = data.drifted_routes.map(d => `<li>${d}</li>`).join('');
+      } else {
+        driftBox.style.display = 'none';
+      }
+
+      // Mutation list table
+      const tbody = document.getElementById('table-schema-mutations');
+      if (!data.mutations || data.mutations.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="4" style="text-align: center; color: var(--text-muted);">No mutations discovered from upstream introspection.</td></tr>';
+        return;
+      }
+
+      tbody.innerHTML = data.mutations.map(m => {
+        let pillClass = 'pill-monolith';
+        let label = 'Monolith Fallback';
+        let target = m.target_upstream || 'default (monolith)';
+
+        if (m.classification === 'Strangled') {
+          pillClass = 'pill-strangled';
+          label = 'Strangled (Microservice)';
+        } else if (m.classification === 'EdgeTerminatedModeB') {
+          pillClass = 'pill-mode-b';
+          label = 'Edge-Terminated Mode B';
+          target = `Async Receipt (${m.receipt_status || 'ACCEPTED'})`;
+        }
+
+        return `
+          <tr>
+            <td><strong>${m.field_name}</strong></td>
+            <td><span class="pill ${pillClass}">${label}</span></td>
+            <td><code>${m.mode || 'A'}</code></td>
+            <td>${m.target_upstream ? `<span class="pill pill-upstream">${target}</span>` : `<code>${target}</code>`}</td>
+          </tr>
+        `;
+      }).join('');
+    }
+
+    async function loadSubsAndIdemp() {
+      const subs = await fetchJSON('/admin/api/v1/subscriptions');
+      if (subs) {
+        document.getElementById('kpi-subs-conns').innerText = subs.active_connections;
+        document.getElementById('kpi-subs-topics').innerText = `Active topics: ${subs.active_topics_count} (${subs.topic_prefix})`;
+      }
+
+      const idemp = await fetchJSON('/admin/api/v1/idempotency');
+      if (idemp) {
+        document.getElementById('kpi-idemp-backend').innerText = idemp.backend.toUpperCase();
+        document.getElementById('kpi-idemp-meta').innerText = `TTL: ${idemp.ttl_secs}s | Max: ${idemp.max_capacity} | Active: ${idemp.active_records}`;
+      }
+    }
+
+    async function refreshSchema() {
+      const btn = document.getElementById('btn-refresh-schema');
+      btn.innerText = 'Refreshing...';
+      btn.disabled = true;
+      try {
+        await fetch('/admin/api/v1/schema/refresh', { method: 'POST' });
+        await loadSchema();
+      } finally {
+        btn.innerText = 'Refresh Schema';
+        btn.disabled = false;
+      }
+    }
+
+    async function refreshAll() {
+      await Promise.all([loadStatus(), loadRoutes(), loadSchema(), loadSubsAndIdemp()]);
+    }
+
+    // Initial load and periodic polling
+    refreshAll();
+    setInterval(refreshAll, 3000);
+  </script>
+</body>
+</html>

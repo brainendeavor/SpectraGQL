@@ -1,4 +1,5 @@
 mod clock;
+pub mod admin;
 mod dispatch;
 mod payload;
 mod proxy;
@@ -92,6 +93,14 @@ fn main() -> Result<()> {
 
     let named_upstreams = spectra_configuration.resolve_all_upstreams()?;
     let subscription_hub = std::sync::Arc::new(crate::subscriptions::SubscriptionHub::new());
+
+    let admin_engine = crate::admin::AdminEngine::new(
+        spectra_configuration.admin.clone(),
+        &spectra_configuration,
+        std::sync::Arc::new(named_upstreams.clone()),
+        std::sync::Arc::new(spectra_configuration.gql.routes.clone()),
+    );
+
     let mut composite_service = CompositeService::new()
         .with_routing(
             named_upstreams,
@@ -99,7 +108,8 @@ fn main() -> Result<()> {
             spectra_configuration.gql.routes.clone(),
         )
         .with_idempotency_engine(idempotency_engine)
-        .with_subscriptions(subscription_hub, spectra_configuration.subscriptions.clone());
+        .with_subscriptions(subscription_hub, spectra_configuration.subscriptions.clone())
+        .with_admin(admin_engine);
     composite_service.add_service_config(gql_service);
     composite_service.add_service_config(rest_service);
     let mut proxy_service =

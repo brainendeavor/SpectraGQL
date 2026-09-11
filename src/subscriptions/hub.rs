@@ -184,6 +184,16 @@ impl SubscriptionHub {
 
         sent_count
     }
+
+    /// Returns the number of currently active client connections.
+    pub async fn active_connection_count(&self) -> usize {
+        self.connections.read().await.len()
+    }
+
+    /// Returns a list of all currently active subscription topics.
+    pub async fn active_topics(&self) -> Vec<String> {
+        self.topics.read().await.keys().cloned().collect()
+    }
 }
 
 #[cfg(test)]

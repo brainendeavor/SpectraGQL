@@ -42,6 +42,7 @@ pub struct CompositeServiceProxy {
     pub routes: Arc<HashMap<String, SpectraRouteConfig>>,
     pub subscription_hub: Arc<crate::subscriptions::SubscriptionHub>,
     pub subscriptions_config: crate::spectra_config::SpectraSubscriptionsConfig,
+    pub admin_engine: Option<crate::admin::AdminEngine>,
 }
 
 impl ServiceConfig {
@@ -77,6 +78,7 @@ impl CompositeServiceProxy {
             routes: Arc::new(HashMap::new()),
             subscription_hub: Arc::new(crate::subscriptions::SubscriptionHub::new()),
             subscriptions_config: crate::spectra_config::SpectraSubscriptionsConfig::default(),
+            admin_engine: None,
         }
     }
 
@@ -107,6 +109,11 @@ impl CompositeServiceProxy {
     ) -> Self {
         self.subscription_hub = subscription_hub;
         self.subscriptions_config = subscriptions_config;
+        self
+    }
+
+    pub fn with_admin(mut self, admin_engine: crate::admin::AdminEngine) -> Self {
+        self.admin_engine = Some(admin_engine);
         self
     }
 
@@ -320,6 +327,23 @@ impl ProxyHttp for CompositeServiceProxy {
     {
         let req = session.req_header();
         let path = req.uri.path();
+
+        // 1. Health check probes do not need an upstream service
+        if path == "/healthz" || path == "/livez" {
+            return Ok(());
+        }
+
+        // 2. Admin Engine requests do not need an upstream service
+        if let Some(admin) = &self.admin_engine {
+            if admin.config.enabled {
+                if path == admin.config.path_prefix
+                    || path.starts_with(&format!("{}/", admin.config.path_prefix))
+                {
+                    return Ok(());
+                }
+            }
+        }
+
         match self.get_service_config_and_handle_by_path(path) {
             Ok((service_config, service_handle)) => {
                 ctx.service_handle = Some(service_handle);
@@ -366,7 +390,55 @@ impl ProxyHttp for CompositeServiceProxy {
     where
         Self::CTX: Send + Sync,
     {
-        // Check for WebSocket Subscription Upgrade
+        let path = session.req_header().uri.path();
+
+        // 1. Health check probes
+        if path == "/healthz" {
+            let mut header = pingora::http::ResponseHeader::build(200, None).unwrap();
+            let _ = header.insert_header("content-type", "application/json");
+            session.set_keepalive(None);
+            session.write_response_header(Box::new(header), false).await?;
+            let body = serde_json::json!({
+                "status": "ok",
+                "service": "spectragql",
+                "version": env!("CARGO_PKG_VERSION")
+            });
+            session
+                .write_response_body(Some(bytes::Bytes::from(body.to_string())), true)
+                .await?;
+            return Ok(true);
+        }
+
+        if path == "/livez" {
+            let mut header = pingora::http::ResponseHeader::build(200, None).unwrap();
+            let _ = header.insert_header("content-type", "application/json");
+            session.set_keepalive(None);
+            session.write_response_header(Box::new(header), false).await?;
+            let body = serde_json::json!({
+                "status": "live",
+                "gateway": "ready",
+                "broker": "connected"
+            });
+            session
+                .write_response_body(Some(bytes::Bytes::from(body.to_string())), true)
+                .await?;
+            return Ok(true);
+        }
+
+        // 2. Admin Engine routing
+        if let Some(admin) = &self.admin_engine {
+            if admin.config.enabled {
+                if path == admin.config.path_prefix
+                    || path.starts_with(&format!("{}/", admin.config.path_prefix))
+                {
+                    return admin
+                        .handle_request(session, &self.idempotency_engine, &self.subscription_hub)
+                        .await;
+                }
+            }
+        }
+
+        // 3. Check for WebSocket Subscription Upgrade
         if self.subscriptions_config.enabled && crate::subscriptions::is_websocket_upgrade(session.req_header()) {
             let path = session.req_header().uri.path();
             if path == "/graphql" || path == "/gql" || path.starts_with("/graphql") || path.starts_with("/gql") {

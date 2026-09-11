@@ -177,6 +177,54 @@ pub struct SpectraRestConfig {
     pub dispatch: Option<SpectraDispatchConfig>,
 }
 
+fn default_admin_enabled() -> bool {
+    false
+}
+
+fn default_admin_bind_addr() -> String {
+    "0.0.0.0:8000".to_string()
+}
+
+fn default_admin_path_prefix() -> String {
+    "/admin".to_string()
+}
+
+fn default_allowed_ips() -> Vec<String> {
+    vec![
+        "127.0.0.1".to_string(),
+        "::1".to_string(),
+        "10.0.0.0/8".to_string(),
+        "172.16.0.0/12".to_string(),
+        "192.168.0.0/16".to_string(),
+    ]
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct SpectraAdminConfig {
+    #[serde(default = "default_admin_enabled")]
+    pub enabled: bool,
+    #[serde(default = "default_admin_bind_addr")]
+    pub bind_addr: String,
+    #[serde(default = "default_admin_path_prefix")]
+    pub path_prefix: String,
+    #[serde(default = "default_allowed_ips")]
+    pub allowed_ips: Vec<String>,
+    #[serde(default = "default_true")]
+    pub enable_ui: bool,
+}
+
+impl Default for SpectraAdminConfig {
+    fn default() -> Self {
+        SpectraAdminConfig {
+            enabled: default_admin_enabled(),
+            bind_addr: default_admin_bind_addr(),
+            path_prefix: default_admin_path_prefix(),
+            allowed_ips: default_allowed_ips(),
+            enable_ui: true,
+        }
+    }
+}
+
 #[derive(Debug, Deserialize, Clone)]
 pub(crate) struct SpectraConfig {
     pub bind_addr: String,
@@ -190,6 +238,8 @@ pub(crate) struct SpectraConfig {
     pub idempotency: SpectraIdempotencyConfig,
     #[serde(default)]
     pub subscriptions: SpectraSubscriptionsConfig,
+    #[serde(default)]
+    pub admin: SpectraAdminConfig,
 }
 
 impl SpectraConfig {
@@ -217,6 +267,10 @@ impl SpectraConfig {
             .set_default("subscriptions.topic_prefix", "spectra")?
             .set_default("subscriptions.keepalive_secs", 25)?
             .set_default("subscriptions.client_buffer_capacity", 256)?
+            .set_default("admin.enabled", false)?
+            .set_default("admin.bind_addr", "0.0.0.0:8000")?
+            .set_default("admin.path_prefix", "/admin")?
+            .set_default("admin.enable_ui", true)?
             .set_default("rest.paths", "/api,/api/{*path}")?
             .add_source(File::with_name("spectra").required(false))
             .add_source(File::with_name(&format!("{spectra_env}-spectra")).required(false))
@@ -356,6 +410,13 @@ mod tests {
             ttl_secs = 600
             max_capacity = 20000
 
+            [admin]
+            enabled = true
+            bind_addr = "0.0.0.0:8000"
+            path_prefix = "/admin"
+            allowed_ips = ["127.0.0.1", "10.0.0.0/8"]
+            enable_ui = true
+
             [rest]
             paths = "/api,/api/{*path}"
         "#;
@@ -383,6 +444,11 @@ mod tests {
         assert_eq!(cfg.idempotency.addr, Some("127.0.0.1:6379".to_string()));
         assert_eq!(cfg.idempotency.ttl_secs, 600);
         assert_eq!(cfg.idempotency.max_capacity, 20000);
+
+        assert!(cfg.admin.enabled);
+        assert_eq!(cfg.admin.path_prefix, "/admin");
+        assert_eq!(cfg.admin.allowed_ips, vec!["127.0.0.1", "10.0.0.0/8"]);
+        assert!(cfg.admin.enable_ui);
 
         let inv_route = cfg.gql.routes.get("inventory_update").unwrap();
         assert_eq!(inv_route.operation, "adjustInventory");
