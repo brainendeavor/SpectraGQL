@@ -92,6 +92,41 @@ fn default_max_capacity() -> usize {
     10_000
 }
 
+fn default_sub_prefix() -> String {
+    "spectra".to_string()
+}
+
+fn default_keepalive_secs() -> u64 {
+    25
+}
+
+fn default_client_buffer_capacity() -> usize {
+    256
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct SpectraSubscriptionsConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "default_sub_prefix")]
+    pub topic_prefix: String,
+    #[serde(default = "default_keepalive_secs")]
+    pub keepalive_secs: u64,
+    #[serde(default = "default_client_buffer_capacity")]
+    pub client_buffer_capacity: usize,
+}
+
+impl Default for SpectraSubscriptionsConfig {
+    fn default() -> Self {
+        SpectraSubscriptionsConfig {
+            enabled: true,
+            topic_prefix: default_sub_prefix(),
+            keepalive_secs: default_keepalive_secs(),
+            client_buffer_capacity: default_client_buffer_capacity(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct SpectraIdempotencyConfig {
     #[serde(default)]
@@ -153,6 +188,8 @@ pub(crate) struct SpectraConfig {
     pub dispatch: SpectraDispatchConfig,
     #[serde(default)]
     pub idempotency: SpectraIdempotencyConfig,
+    #[serde(default)]
+    pub subscriptions: SpectraSubscriptionsConfig,
 }
 
 impl SpectraConfig {
@@ -176,6 +213,10 @@ impl SpectraConfig {
             .set_default("idempotency.backend", "memory")?
             .set_default("idempotency.ttl_secs", 300)?
             .set_default("idempotency.max_capacity", 10000)?
+            .set_default("subscriptions.enabled", true)?
+            .set_default("subscriptions.topic_prefix", "spectra")?
+            .set_default("subscriptions.keepalive_secs", 25)?
+            .set_default("subscriptions.client_buffer_capacity", 256)?
             .set_default("rest.paths", "/api,/api/{*path}")?
             .add_source(File::with_name("spectra").required(false))
             .add_source(File::with_name(&format!("{spectra_env}-spectra")).required(false))

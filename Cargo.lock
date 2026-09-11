@@ -5503,6 +5503,7 @@ dependencies = [
  "config",
  "enum_dispatch",
  "env_logger",
+ "futures-util",
  "http",
  "http-serde",
  "iggy",
@@ -5521,6 +5522,7 @@ dependencies = [
  "strum 0.27.1",
  "strum_macros 0.27.1",
  "tokio",
+ "tokio-tungstenite",
  "uuid",
 ]
 

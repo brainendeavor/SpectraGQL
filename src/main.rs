@@ -4,6 +4,7 @@ mod payload;
 mod proxy;
 mod ratify;
 mod spectra_config;
+pub mod subscriptions;
 
 use anyhow::Result;
 use pingora::proxy::http_proxy_service_with_name;
@@ -90,13 +91,15 @@ fn main() -> Result<()> {
     };
 
     let named_upstreams = spectra_configuration.resolve_all_upstreams()?;
+    let subscription_hub = std::sync::Arc::new(crate::subscriptions::SubscriptionHub::new());
     let mut composite_service = CompositeService::new()
         .with_routing(
             named_upstreams,
             spectra_configuration.gql.mode_a.clone(),
             spectra_configuration.gql.routes.clone(),
         )
-        .with_idempotency_engine(idempotency_engine);
+        .with_idempotency_engine(idempotency_engine)
+        .with_subscriptions(subscription_hub, spectra_configuration.subscriptions.clone());
     composite_service.add_service_config(gql_service);
     composite_service.add_service_config(rest_service);
     let mut proxy_service =

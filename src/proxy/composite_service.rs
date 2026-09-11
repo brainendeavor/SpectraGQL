@@ -40,6 +40,8 @@ pub struct CompositeServiceProxy {
     pub named_upstreams: Arc<HashMap<String, std::net::SocketAddr>>,
     pub mode_a: SpectraModeAConfig,
     pub routes: Arc<HashMap<String, SpectraRouteConfig>>,
+    pub subscription_hub: Arc<crate::subscriptions::SubscriptionHub>,
+    pub subscriptions_config: crate::spectra_config::SpectraSubscriptionsConfig,
 }
 
 impl ServiceConfig {
@@ -73,6 +75,8 @@ impl CompositeServiceProxy {
             named_upstreams: Arc::new(HashMap::new()),
             mode_a: SpectraModeAConfig::default(),
             routes: Arc::new(HashMap::new()),
+            subscription_hub: Arc::new(crate::subscriptions::SubscriptionHub::new()),
+            subscriptions_config: crate::spectra_config::SpectraSubscriptionsConfig::default(),
         }
     }
 
@@ -93,6 +97,16 @@ impl CompositeServiceProxy {
         idempotency_engine: Arc<crate::ratify::IdempotencyEngine>,
     ) -> Self {
         self.idempotency_engine = idempotency_engine;
+        self
+    }
+
+    pub fn with_subscriptions(
+        mut self,
+        subscription_hub: Arc<crate::subscriptions::SubscriptionHub>,
+        subscriptions_config: crate::spectra_config::SpectraSubscriptionsConfig,
+    ) -> Self {
+        self.subscription_hub = subscription_hub;
+        self.subscriptions_config = subscriptions_config;
         self
     }
 
@@ -142,6 +156,123 @@ impl CompositeServiceProxy {
         return true;
     }
 
+    #[allow(dead_code)]
+    pub fn subscription_hub(&self) -> Arc<crate::subscriptions::SubscriptionHub> {
+        self.subscription_hub.clone()
+    }
+
+    pub async fn handle_websocket_subscription(&self, session: &mut Session) -> pingora::Result<bool> {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let sec_key = session
+            .req_header()
+            .headers
+            .get("sec-websocket-key")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_string();
+
+        if sec_key.is_empty() {
+            let resp = pingora::http::ResponseHeader::build(400, None).unwrap();
+            session.write_response_header(Box::new(resp), false).await?;
+            session.write_response_body(Some(bytes::Bytes::from("Missing Sec-WebSocket-Key")), true).await?;
+            return Ok(true);
+        }
+
+        let accept_key = crate::subscriptions::compute_accept_key(&sec_key);
+
+        let requested_subprotocol = session
+            .req_header()
+            .headers
+            .get("sec-websocket-protocol")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string());
+
+        let mut resp = pingora::http::ResponseHeader::build(101, None).unwrap();
+        let _ = resp.insert_header(http::header::CONNECTION, "Upgrade");
+        let _ = resp.insert_header(http::header::UPGRADE, "websocket");
+        let _ = resp.insert_header("sec-websocket-accept", accept_key);
+        if let Some(subprotocol) = requested_subprotocol {
+            if subprotocol.contains("graphql-transport-ws") {
+                let _ = resp.insert_header("sec-websocket-protocol", "graphql-transport-ws");
+            } else if let Some(first) = subprotocol.split(',').next() {
+                let _ = resp.insert_header("sec-websocket-protocol", first.trim());
+            }
+        }
+
+        session.write_response_header(Box::new(resp), false).await?;
+
+        let (ws_io, mut pingora_io) = tokio::io::duplex(64 * 1024);
+        let actor = crate::subscriptions::ConnectionActor::new(
+            self.subscription_hub.clone(),
+            self.subscriptions_config.topic_prefix.clone(),
+            self.subscriptions_config.keepalive_secs,
+            self.subscriptions_config.client_buffer_capacity,
+        );
+
+        let ws_stream = tokio_tungstenite::WebSocketStream::from_raw_socket(
+            ws_io,
+            tokio_tungstenite::tungstenite::protocol::Role::Server,
+            None,
+        ).await;
+
+        let mut actor_handle = tokio::spawn(async move {
+            let _ = actor.run(ws_stream).await;
+        });
+
+        let mut buf = [0u8; 8192];
+
+        loop {
+            tokio::select! {
+                read_res = session.as_downstream_mut().read_body_or_idle(false) => {
+                    match read_res {
+                        Ok(Some(bytes)) => {
+                            if bytes.is_empty() {
+                                break;
+                            }
+                            if let Err(e) = pingora_io.write_all(&bytes).await {
+                                log::debug!("WebSocket pump: write to ws_io failed: {}", e);
+                                break;
+                            }
+                        }
+                        Ok(None) => {
+                            break;
+                        }
+                        Err(e) => {
+                            log::debug!("WebSocket pump: downstream read error: {}", e);
+                            break;
+                        }
+                    }
+                }
+
+                duplex_read = pingora_io.read(&mut buf) => {
+                    match duplex_read {
+                        Ok(n) if n > 0 => {
+                            let chunk = bytes::Bytes::copy_from_slice(&buf[..n]);
+                            if let Err(e) = session.write_response_body(Some(chunk), false).await {
+                                log::debug!("WebSocket pump: downstream write error: {}", e);
+                                break;
+                            }
+                        }
+                        Ok(_) => {
+                            break;
+                        }
+                        Err(e) => {
+                            log::debug!("WebSocket pump: duplex read error: {}", e);
+                            break;
+                        }
+                    }
+                }
+
+                _ = &mut actor_handle => {
+                    break;
+                }
+            }
+        }
+
+        actor_handle.abort();
+        Ok(true)
+    }
 }
 
 // TODO: absorb SpectraProxyCtx
@@ -235,6 +366,15 @@ impl ProxyHttp for CompositeServiceProxy {
     where
         Self::CTX: Send + Sync,
     {
+        // Check for WebSocket Subscription Upgrade
+        if self.subscriptions_config.enabled && crate::subscriptions::is_websocket_upgrade(session.req_header()) {
+            let path = session.req_header().uri.path();
+            if path == "/graphql" || path == "/gql" || path.starts_with("/graphql") || path.starts_with("/gql") {
+                log::info!("CompositeServiceProxy: terminating WebSocket subscription upgrade on '{}'", path);
+                return self.handle_websocket_subscription(session).await;
+            }
+        }
+
         log::info!(
             "request_filter uuid: {} hlc: {}",
             ctx.proxy_context.request_id,

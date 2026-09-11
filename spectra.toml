@@ -71,6 +71,13 @@ backend = "memory"
 ttl_secs = 300
 max_capacity = 10000
 
+# Realtime Subscriptions Engine: graphql-transport-ws WebSocket Edge Termination
+[subscriptions]
+enabled = true
+topic_prefix = "spectra"
+keepalive_secs = 25
+client_buffer_capacity = 256
+
 [rest]
 paths = "/api,/api/{*path}"
 
