@@ -65,19 +65,83 @@ Here is an objective breakdown of how the landscape handles this today:
 
 | Gateway / Solution | Primary Focus | Write/Mutation Strategy | Limitations for CQRS & Event Sourcing |
 | :--- | :--- | :--- | :--- |
-| **Apollo Router** (Rust) | Apollo Federation v2 query planner | Subgraph HTTP routing | Mutations are treated as simple HTTP POST calls to subgraphs. Event streaming requires building custom Rust plugins or Rhai scripts from scratch with zero architectural guidance. |
-| **WunderGraph Cosmo** (Go) | Open-source GraphQL Federation | Directives (`@edfs__natsPublish`, `@edfs__kafkaPublish`, `@edfs__natsRequest`) | **Closest feature match in the industry**, but tightly coupled to full Apollo Federation v2 schema composition and Cosmo's proprietary control plane. Cannot function as a standalone, transparent L7 proxy in front of legacy monolithic or non-federated GraphQL APIs. Lacks in-flight mutation ratification and schema drift diagnostics. |
-| **Tailcall** (Rust) | High-performance GQL composition | HTTP / gRPC execution | Purely focused on read-side N+1 query optimization and declarative schema composition. |
-| **Hasura / PostGraphile** | Database-to-GraphQL compiler | Database transactions + CDC Event Triggers | Events are emitted *after* database commit (Change Data Capture), tightly coupled to specific SQL engines. Not a gateway for distributed microservices. |
-| **Envoy / Kong / Traefik** | General Layer 7 Gateways | Blind HTTP proxying | GraphQL plugins are limited to basic query cost analysis, depth limiting, and rate limiting. They lack the semantic AST awareness to separate Queries from Mutations into different backend topologies. |
+| **Hive Router** (Rust) | Open-source Apollo Federation v2 router | Subgraph HTTP routing | Purpose-built for high-speed federated query planning. Treats mutations as simple HTTP forwards. Perfect complementary read-path partner. |
+| **Apollo Router** (Rust) | Apollo Federation v2 query planner | Subgraph HTTP routing | Commercial ELv2 license tied to GraphOS. Forwards mutation HTTP calls without CQRS or outbox mechanics. |
+| **WunderGraph Cosmo** (Go) | Open-source GraphQL Federation | Directives (`@edfs__natsPublish`, `@edfs__kafkaPublish`) | Tied to full Federation schema composition and Cosmo control plane. Cannot act as a standalone L7 proxy for non-federated setups. |
+| **Hive Gateway** (JS/Rust) | Schema Stitching & multi-protocol gateway | Subservice HTTP routing | Excels at stitching independent GraphQL, REST, and gRPC services together without Federation subgraphs. Pure read/aggregation focus. |
+| **Tailcall / Grafbase** | *Pivoted / Archived* | N/A | Tailcall pivoted to ForgeCode (AI coding agent); Grafbase Gateway entered maintenance mode for archival by May 2026. |
+| **Envoy / Kong / Traefik** | General Layer 7 Gateways | Blind HTTP proxying | Lack GraphQL semantic AST awareness to bifurcate Queries and Mutations into different backend topologies. |
 | **Stellate** | GraphQL CDN | Edge caching for queries | Completely bypasses mutations. |
 
 ### The Unoccupied White Space
 No tool exists that acts as a **transparent, drop-in CQRS proxy** that:
 - Runs at native wire speed in Rust (via Pingora).
-- Does not demand migrating to a massive, complex Federation schema.
-- Provides an active **Ratification pipeline** for mutation discipline (idempotency, deprecation enforcement, WASM policy).
-- Supports pluggable, modern streaming protocols (NATS JetStream, Apache Iggy, SierraDB, Kafka).
+- Focuses exclusively on the **Write Path**, eliminating synchronous fan-out and driving event choreography.
+- Pairs seamlessly with existing query routers on the read path.
+
+---
+
+### Upstream Read-Path Partners: Pairing SpectraGQL with Query Engines
+
+Because SpectraGQL bifurcates traffic at Layer 7 based on the GraphQL AST, it does not attempt to reinvent distributed query planning. Instead, it delegates GraphQL `Query` operations to specialized upstream query partners:
+
+```
+                                      Client
+                                         │
+                                         ▼
+                             ┌───────────────────────┐
+                             │   SpectraGQL Proxy    │
+                             │ (Pingora L7 in Rust)  │
+                             └───────────┬───────────┘
+                                         │
+                        ┌────────────────┴────────────────┐
+                        ▼ (Query / Read)                  ▼ (Mutation / Write)
+             ┌────────────────────────┐        ┌─────────────────────────────┐
+             │   Upstream Query Hop   │        │   SpectraGQL Write Engine   │
+             │                        │        │                             │
+             │  • Hive Router (Rust)  │        │   • Mode A: Pragmatic Proxy │
+             │    (if Federated)      │        │     (Choreography on 2xx)   │
+             │           OR           │        │   • Mode B: Pure CQRS       │
+             │  • Hive Gateway        │        │     (202 Command Receipt)   │
+             │    (if Not Federated)  │        │                             │
+             │           OR           │        └──────────────┬──────────────┘
+             │  • Cosmo / Apollo      │                       │
+             └──────────┬─────────────┘                       │
+                        │                                     │
+                        ▼                                     ▼
+              [ Microservice Reads ]                  [ Event Broker ]
+              (Direct / Stitched)                  (NATS / Iggy / Kafka)
+```
+
+#### Topology 1: The Pure-Rust Federated Stack (SpectraGQL + Hive Router)
+* **Best For:** Microservices implementing Apollo Federation v2 where the organization demands an uncompromised, 100% Rust architecture.
+* **Flow:**
+  * `Query` $\rightarrow$ SpectraGQL proxies directly to **Hive Router** (`:4000`), which plans the query and fans out across federated subgraphs.
+  * `Mutation` $\rightarrow$ SpectraGQL ratifies at the edge and dispatches to **NATS JetStream**, **Apache Iggy**, or **Nisshi** (Mode A or Mode B).
+* **Configuration:**
+  ```toml
+  # spectra.toml
+  [upstream]
+  addr = "127.0.0.1:4000" # Hive Router
+  name = "hive_federation_router"
+
+  [gql]
+  paths = "/graphql"
+  ops_to_dispatch = "mutation" # Queries pass through to Hive Router
+  ```
+
+#### Topology 2: The Open Federation Stack (SpectraGQL + WunderGraph Cosmo / Apollo Router)
+* **Best For:** Teams already invested in Apollo Federation or WunderGraph Cosmo for schema composition and entity resolution.
+* **Flow:**
+  * SpectraGQL sits at the ingress perimeter.
+  * Read queries pass transparently to **Cosmo Router** or **Apollo Router**.
+  * Write mutations are intercepted by SpectraGQL, stamped with HLC timestamps and idempotency keys, and fed into Kafka or NATS.
+
+#### Topology 3: The Non-Federated Stitching Stack (SpectraGQL + Hive Gateway)
+* **Best For:** Teams whose microservices are **plain REST APIs, gRPC services, or independent GraphQL backends** without Apollo Federation subgraphs.
+* **Flow:**
+  * **Hive Gateway** handles **Schema Stitching**—declaratively mapping REST and GraphQL endpoints into a unified query schema.
+  * SpectraGQL routes `Query` operations to Hive Gateway, while converting `Mutation` operations into clean event streams for downstream microservices.
 
 ---
 

@@ -1,4 +1,7 @@
+pub mod iggy;
+pub mod kafka;
 pub mod nats;
+pub mod rabbitmq;
 pub mod redis_streams;
 pub mod resp;
 pub mod sierradb;
@@ -11,7 +14,10 @@ use enum_dispatch::enum_dispatch;
 #[derive(Clone)]
 #[enum_dispatch(DispatchHandler)]
 pub enum DispatchMethod {
+    Iggy(iggy::IggyDispatch),
+    Kafka(kafka::KafkaDispatch),
     NatsJetstream(nats::NatsDispatch),
+    RabbitMq(rabbitmq::RabbitMqDispatch),
     RedisStreams(redis_streams::RedisStreamsDispatch),
     SierraDb(sierradb::SierraDbDispatch),
     Webhook(webhook::WebhookDispatch),
@@ -29,6 +35,15 @@ pub fn find_dispatch_handler_by_method(
     }
     if sierradb::SierraDbDispatch::supports_dispatch_method(method) {
         return Ok(sierradb::SierraDbDispatch::new(endpoint).into());
+    }
+    if kafka::KafkaDispatch::supports_dispatch_method(method) {
+        return Ok(kafka::KafkaDispatch::new(endpoint).into());
+    }
+    if rabbitmq::RabbitMqDispatch::supports_dispatch_method(method) {
+        return Ok(rabbitmq::RabbitMqDispatch::new(endpoint).into());
+    }
+    if iggy::IggyDispatch::supports_dispatch_method(method) {
+        return Ok(iggy::IggyDispatch::new(endpoint).into());
     }
     if webhook::WebhookDispatch::supports_dispatch_method(method) {
         return Ok(webhook::WebhookDispatch::new(endpoint).into());
@@ -89,6 +104,42 @@ mod tests {
             match handler.unwrap() {
                 DispatchMethod::SierraDb(_) => {}
                 _ => panic!("Expected SierraDb for {}", method),
+            }
+        }
+    }
+
+    #[test]
+    fn test_find_dispatch_kafka() {
+        for method in &["kafka", "redpanda", "kafka-cluster"] {
+            let handler = find_dispatch_handler_by_method(method, "127.0.0.1:9092");
+            assert!(handler.is_ok(), "failed for {}", method);
+            match handler.unwrap() {
+                DispatchMethod::Kafka(_) => {}
+                _ => panic!("Expected Kafka for {}", method),
+            }
+        }
+    }
+
+    #[test]
+    fn test_find_dispatch_rabbitmq() {
+        for method in &["rabbitmq", "rabbit", "amqp", "amqps"] {
+            let handler = find_dispatch_handler_by_method(method, "127.0.0.1:5672");
+            assert!(handler.is_ok(), "failed for {}", method);
+            match handler.unwrap() {
+                DispatchMethod::RabbitMq(_) => {}
+                _ => panic!("Expected RabbitMq for {}", method),
+            }
+        }
+    }
+
+    #[test]
+    fn test_find_dispatch_iggy() {
+        for method in &["iggy", "apache-iggy", "apache_iggy"] {
+            let handler = find_dispatch_handler_by_method(method, "127.0.0.1:8090");
+            assert!(handler.is_ok(), "failed for {}", method);
+            match handler.unwrap() {
+                DispatchMethod::Iggy(_) => {}
+                _ => panic!("Expected Iggy for {}", method),
             }
         }
     }

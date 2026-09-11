@@ -43,9 +43,25 @@ mode = "B"
 receipt_status = "ACCEPTED"
 
 [dispatch]
+# Options: "NATS", "KAFKA", "RABBITMQ", "IGGY", "REDIS_STREAMS", "SIERRADB", "WEBHOOK"
 method = "NATS"
 addr = "127.0.0.1:4222"
 name = "default"
+# Examples for other streaming backends:
+# method = "KAFKA"
+# addr = "127.0.0.1:9092"
+#
+# method = "RABBITMQ"
+# addr = "amqp://guest:guest@127.0.0.1:5672/%2f"
+#
+# method = "IGGY"
+# addr = "iggy://127.0.0.1:8090"
+#
+# method = "REDIS_STREAMS"
+# addr = "redis://127.0.0.1:6379"
+#
+# method = "SIERRADB"
+# addr = "redis://127.0.0.1:7379"
 
 # Idempotency Engine: Local In-Memory or Distributed Redis/Valkey
 [idempotency]

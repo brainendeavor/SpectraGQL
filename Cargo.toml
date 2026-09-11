@@ -45,3 +45,7 @@ uuid = { version = "1.16.0", features = ["v4", "v7", "serde"] }
 sha2 = "0.10"
 regex = "1"
 redis = { version = "0.23.3", default-features = false, features = ["tokio-comp", "connection-manager"] }
+rskafka = "0.6"
+lapin = { version = "4.10", default-features = false, features = ["tokio", "rustls", "rustls--ring"] }
+iggy = "0.10.0"
+

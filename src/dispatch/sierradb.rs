@@ -16,6 +16,7 @@ impl SierraDbDispatch {
         }
     }
 
+    #[allow(dead_code)]
     pub fn with_prefix(addr: &str, prefix: &str) -> Self {
         SierraDbDispatch {
             client: RespClient::new(addr),
