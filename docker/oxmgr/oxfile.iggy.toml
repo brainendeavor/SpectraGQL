@@ -1,0 +1,12 @@
+# oxfile.iggy.toml - SpectraGQL Turnkey Appliance with Apache Iggy Streaming
+
+[processes.iggy]
+command = "iggy-server"
+args = []
+restart = "always"
+
+[processes.spectragql]
+command = "spectragql"
+args = []
+restart = "always"
+depends_on = ["iggy"]

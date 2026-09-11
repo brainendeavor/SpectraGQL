@@ -1,0 +1,12 @@
+# oxfile.redpanda.toml - SpectraGQL Turnkey Appliance with Redpanda Kafka
+
+[processes.redpanda]
+command = "rpk"
+args = ["redpanda", "start", "--mode", "dev-container", "--kafka-addr", "0.0.0.0:9092"]
+restart = "always"
+
+[processes.spectragql]
+command = "spectragql"
+args = []
+restart = "always"
+depends_on = ["redpanda"]

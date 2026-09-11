@@ -1,0 +1,40 @@
+# syntax=docker/dockerfile:1
+# ------------------------------------------------------------------------------
+# SpectraGQL Gateway Dockerfile (Standalone Production Gateway)
+# ------------------------------------------------------------------------------
+
+FROM rust:1.85-slim-bookworm AS builder
+
+WORKDIR /usr/src/spectragql
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    pkg-config \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY Cargo.toml Cargo.lock ./
+COPY src ./src
+
+RUN cargo build --release
+
+# Runtime Image
+FROM debian:bookworm-slim AS runtime
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /usr/src/spectragql/target/release/spectragql /usr/local/bin/spectragql
+COPY spectra.toml /etc/spectragql/spectra.toml
+
+WORKDIR /etc/spectragql
+EXPOSE 8000
+
+ENV SPECTRA_BIND_ADDR="0.0.0.0:8000"
+ENV SPECTRA_UPSTREAM_ADDR="host.docker.internal:4000"
+
+HEALTHCHECK --interval=5s --timeout=3s --retries=3 \
+  CMD curl -f http://localhost:8000/healthz || exit 1
+
+ENTRYPOINT ["spectragql"]

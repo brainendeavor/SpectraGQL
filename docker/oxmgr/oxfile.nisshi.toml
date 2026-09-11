@@ -1,0 +1,12 @@
+# oxfile.nisshi.toml - SpectraGQL Turnkey Appliance with Nisshi (Pure Rust Kafka)
+
+[processes.nisshi]
+command = "nisshi"
+args = ["--port", "9092"]
+restart = "always"
+
+[processes.spectragql]
+command = "spectragql"
+args = []
+restart = "always"
+depends_on = ["nisshi"]

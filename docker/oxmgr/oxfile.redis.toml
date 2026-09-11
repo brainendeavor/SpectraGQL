@@ -1,0 +1,12 @@
+# oxfile.redis.toml - SpectraGQL Turnkey Appliance with Redis/Valkey (Streams & Idempotency)
+
+[processes.redis]
+command = "redis-server"
+args = ["--protected-mode", "no", "--port", "6379", "--save", ""]
+restart = "always"
+
+[processes.spectragql]
+command = "spectragql"
+args = []
+restart = "always"
+depends_on = ["redis"]

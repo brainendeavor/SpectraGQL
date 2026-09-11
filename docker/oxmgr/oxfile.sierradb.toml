@@ -1,0 +1,12 @@
+# oxfile.sierradb.toml - SpectraGQL Turnkey Appliance with SierraDB Native Event Sourcing
+
+[processes.sierradb]
+command = "sierradb"
+args = ["--port", "7379"]
+restart = "always"
+
+[processes.spectragql]
+command = "spectragql"
+args = []
+restart = "always"
+depends_on = ["sierradb"]

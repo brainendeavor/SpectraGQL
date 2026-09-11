@@ -1,0 +1,44 @@
+# syntax=docker/dockerfile:1
+# ------------------------------------------------------------------------------
+# SpectraGQL Dev Appliance: Redpanda Kafka (Enterprise Kafka Wire Protocol)
+# ------------------------------------------------------------------------------
+
+# Stage 1: Build SpectraGQL and oxmgr supervisor
+FROM rust:1.85-slim-bookworm AS builder
+
+WORKDIR /usr/src/spectragql
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    pkg-config ca-certificates curl && rm -rf /var/lib/apt/lists/*
+
+RUN cargo install oxmgr
+
+COPY Cargo.toml Cargo.lock ./
+COPY src ./src
+RUN cargo build --release
+
+# Stage 2: Turnkey Appliance Runtime (Redpanda base)
+FROM redpandadata/redpanda:latest AS appliance
+
+COPY --from=builder /usr/local/cargo/bin/oxmgr /usr/local/bin/oxmgr
+COPY --from=builder /usr/src/spectragql/target/release/spectragql /usr/local/bin/spectragql
+
+COPY docker/oxmgr/oxfile.redpanda.toml /etc/oxmgr/oxfile.toml
+COPY spectra.toml /etc/spectragql/spectra.toml
+
+WORKDIR /etc/spectragql
+
+# Port 8000: Gateway + Admin Console
+# Port 9092: Redpanda Kafka Wire Port
+# Port 9644: Redpanda Admin API
+EXPOSE 8000 9092 9644
+
+ENV SPECTRA_BIND_ADDR="0.0.0.0:8000"
+ENV SPECTRA_UPSTREAM_ADDR="host.docker.internal:4000"
+ENV SPECTRA_DISPATCH_METHOD="KAFKA"
+ENV SPECTRA_DISPATCH_ADDR="127.0.0.1:9092"
+ENV SPECTRA_ADMIN_ENABLED="true"
+
+HEALTHCHECK --interval=5s --timeout=3s --retries=3 \
+  CMD curl -f http://localhost:8000/healthz || exit 1
+
+ENTRYPOINT ["oxmgr", "run", "--config", "/etc/oxmgr/oxfile.toml"]

@@ -78,6 +78,21 @@ topic_prefix = "spectra"
 keepalive_secs = 25
 client_buffer_capacity = 256
 
+# Admin Console & REST API
+[admin]
+enabled = true
+bind_addr = "0.0.0.0:8000"
+path_prefix = "/admin"
+enable_ui = true
+allowed_ips = [
+  "127.0.0.1",
+  "::1",
+  "10.0.0.0/8",
+  "172.16.0.0/12",
+  "192.168.0.0/16"
+]
+
 [rest]
 paths = "/api,/api/{*path}"
+
 

@@ -1,0 +1,49 @@
+# syntax=docker/dockerfile:1
+# ------------------------------------------------------------------------------
+# SpectraGQL Dev Appliance: SierraDB (Native Event Sourcing via RESP3 EAPPEND)
+# ------------------------------------------------------------------------------
+
+# Stage 1: Build SpectraGQL and oxmgr supervisor
+FROM rust:1.85-slim-bookworm AS builder
+
+WORKDIR /usr/src/spectragql
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    pkg-config ca-certificates curl && rm -rf /var/lib/apt/lists/*
+
+RUN cargo install oxmgr
+
+COPY Cargo.toml Cargo.lock ./
+COPY src ./src
+RUN cargo build --release
+
+# Stage 2: Turnkey Appliance Runtime
+FROM debian:bookworm-slim AS appliance
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates curl && rm -rf /var/lib/apt/lists/*
+
+# Install SierraDB binary from release or image
+COPY --from=sierradb/sierradb:latest /usr/local/bin/sierradb /usr/local/bin/sierradb
+
+COPY --from=builder /usr/local/cargo/bin/oxmgr /usr/local/bin/oxmgr
+COPY --from=builder /usr/src/spectragql/target/release/spectragql /usr/local/bin/spectragql
+
+COPY docker/oxmgr/oxfile.sierradb.toml /etc/oxmgr/oxfile.toml
+COPY spectra.toml /etc/spectragql/spectra.toml
+
+WORKDIR /etc/spectragql
+
+# Port 8000: Gateway + Admin Console
+# Port 7379: SierraDB RESP3 Port
+EXPOSE 8000 7379
+
+ENV SPECTRA_BIND_ADDR="0.0.0.0:8000"
+ENV SPECTRA_UPSTREAM_ADDR="host.docker.internal:4000"
+ENV SPECTRA_DISPATCH_METHOD="SIERRADB"
+ENV SPECTRA_DISPATCH_ADDR="redis://127.0.0.1:7379"
+ENV SPECTRA_ADMIN_ENABLED="true"
+
+HEALTHCHECK --interval=5s --timeout=3s --retries=3 \
+  CMD curl -f http://localhost:8000/healthz || exit 1
+
+ENTRYPOINT ["oxmgr", "run", "--config", "/etc/oxmgr/oxfile.toml"]

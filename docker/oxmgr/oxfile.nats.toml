@@ -1,0 +1,12 @@
+# oxfile.nats.toml - SpectraGQL Turnkey Appliance with NATS JetStream
+
+[processes.nats]
+command = "nats-server"
+args = ["-js", "-p", "4222", "-m", "8222"]
+restart = "always"
+
+[processes.spectragql]
+command = "spectragql"
+args = []
+restart = "always"
+depends_on = ["nats"]

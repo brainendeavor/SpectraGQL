@@ -1,0 +1,50 @@
+# syntax=docker/dockerfile:1
+# ------------------------------------------------------------------------------
+# SpectraGQL Dev Appliance: Apache Iggy (NVMe-Optimized Append-Only Streaming)
+# ------------------------------------------------------------------------------
+
+# Stage 1: Build SpectraGQL and oxmgr supervisor
+FROM rust:1.85-slim-bookworm AS builder
+
+WORKDIR /usr/src/spectragql
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    pkg-config ca-certificates curl git && rm -rf /var/lib/apt/lists/*
+
+RUN cargo install oxmgr
+
+COPY Cargo.toml Cargo.lock ./
+COPY src ./src
+RUN cargo build --release
+
+# Stage 2: Turnkey Appliance Runtime
+FROM debian:bookworm-slim AS appliance
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates curl && rm -rf /var/lib/apt/lists/*
+
+# Install Iggy Server from official release or image
+COPY --from=iggyrs/iggy:latest /usr/local/bin/iggy-server /usr/local/bin/iggy-server
+
+COPY --from=builder /usr/local/cargo/bin/oxmgr /usr/local/bin/oxmgr
+COPY --from=builder /usr/src/spectragql/target/release/spectragql /usr/local/bin/spectragql
+
+COPY docker/oxmgr/oxfile.iggy.toml /etc/oxmgr/oxfile.toml
+COPY spectra.toml /etc/spectragql/spectra.toml
+
+WORKDIR /etc/spectragql
+
+# Port 8000: Gateway + Admin Console
+# Port 8090: Iggy TCP Port
+# Port 3000: Iggy HTTP/Dashboard
+EXPOSE 8000 8090 3000
+
+ENV SPECTRA_BIND_ADDR="0.0.0.0:8000"
+ENV SPECTRA_UPSTREAM_ADDR="host.docker.internal:4000"
+ENV SPECTRA_DISPATCH_METHOD="IGGY"
+ENV SPECTRA_DISPATCH_ADDR="iggy://127.0.0.1:8090"
+ENV SPECTRA_ADMIN_ENABLED="true"
+
+HEALTHCHECK --interval=5s --timeout=3s --retries=3 \
+  CMD curl -f http://localhost:8000/healthz || exit 1
+
+ENTRYPOINT ["oxmgr", "run", "--config", "/etc/oxmgr/oxfile.toml"]
