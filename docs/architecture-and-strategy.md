@@ -29,7 +29,7 @@ GraphQL inherently provides the architectural boundary needed for **Command Quer
                       Query   │                      Mutation │ (Command)
                     (Read)    ▼                               ▼
                ┌──────────────────────┐             ┌───────────────────┐
-               │ Legacy API / Backend │             │ Edge Guards:      │
+               │ Legacy API / Backend │             │ Edge Interceptors:│
                │ Query Service / Read │             │ - Syntax & Depth  │
                │ Cache / Replicas     │             │ - Idempotency Lock│
                │                      │             │ - Type-State PII  │
@@ -211,7 +211,7 @@ Session Ingest (Pingora)
        │ (continue)
 [ 3. WebSocketFilter ]   ──(Upgrade: websocket)────► graphql-ws Duplex Pump
        │ (continue)
-[ 4. RequestGuardFilter] ──(malformed / toxic)─────► Reject 400 Bad Request
+[ 4. RequestInterceptorFilter] ──(malformed / toxic)──► Reject 400 Bad Request
        │ (sanitized & verified)
 [ 5. IdempotencyFilter ] ──(in-flight conflict)────► Reject 409 Conflict
        │                 ──(cached replay)─────────► Return Cached Replay (0 Upstream Hops)
@@ -224,8 +224,8 @@ Session Ingest (Pingora)
            [ Proxy to Upstream Microservice ]
                 │
                 ▼
-           [ 7. ResponseGuardFilter ]  ──(PII leak / token)──► Reject 500
-                │
+           [ 7. ResponseInterceptorFilter ] ──(PII leak / rule reject)──► Reject 500
+                │                            ──(transform / anonymize)──► Mutate Payload
                 ▼
            [ 8. TelemetryDispatcher ]  ──(logging phase)────► Publish CompletionEvent to EventSink
                 │
@@ -233,14 +233,14 @@ Session Ingest (Pingora)
            [ Complete Idempotency Cache & Return to Client ]
 ```
 
-### Domain Guards & Type-State Safety
+### Domain Interceptors, Payload Transformation & Type-State Safety
 
-1. **Inbound RequestGuards (`RequestGuard`):**
-   - AST validation, depth & complexity checks, and required header validation before hitting upstreams.
-2. **Outbound ResponseGuards (`ResponseGuard`):**
-   - Body inspection preventing accidental PII leakage or sensitive token exposure to consumers.
-3. **Pluggable Rule Evaluator (`RuleEvaluator`):**
-   - Extensible policy enforcement port (`NativeRuleEvaluator` built-in; ready for WASM/Lua sandbox modules).
+1. **Inbound RequestInterceptors (`RequestInterceptor`):**
+   - AST validation, depth & complexity checks, and required header validation before hitting upstreams or committing commands.
+2. **Outbound ResponseInterceptors (`ResponseInterceptor`):**
+   - Body inspection preventing accidental PII leakage or sensitive token exposure, and active payload transformation (anonymization, JSON reshaping) via `InterceptorVerdict`.
+3. **Declarative CEL & Pluggable Rule Evaluators (`CelRuleEvaluator` & `RuleEvaluator`):**
+   - Sub-microsecond declarative policy evaluation using Google/CNCF Common Expression Language (`cel-rust`) alongside native Rust closure predicates.
 4. **Compile-Time Type-State Security:**
    - Tracks data safety through `RawPayload<T>` and `SanitizedPayload<T>`.
    - `CompletionEvent.request` and event sinks accept **only** `SanitizedPayload<RequestInfo>`, guaranteeing that un-redacted credentials and tokens can never leak into Kafka, NATS, or event logs.
@@ -285,8 +285,8 @@ The codebase has undergone a complete architectural modernization:
    - Extracted reusable library target exporting engine components and composable filters. Converted `main.rs` to a thin binary bootstrap.
 2. **God Object Decomposition (`src/proxy/filters/`):**
    - Deconstructed the 1,038-line `CompositeServiceProxy` into single-responsibility pipeline filters (`HealthFilter`, `AdminFilter`, `IdempotencyFilter`, `StrategyRouter`, `TelemetryDispatcher`).
-3. **Guard Contracts & Rule Port (`src/guards/`):**
-   - Implemented `RequestGuard`, `ResponseGuard`, and `RuleEvaluator` trait ports with zero-overhead native rule execution.
+3. **Interceptor Contracts, Payload Transformation & CEL Evaluator (`src/interceptors/`):**
+   - Implemented `RequestInterceptor`, `ResponseInterceptor`, and `RuleEvaluator` trait ports with `CelRuleEvaluator` for sub-microsecond declarative policy evaluation and in-flight payload transformation.
 4. **Compile-Time Type-State Security (`src/payload/typestate.rs`):**
    - Enforced `RawPayload<T>` to `SanitizedPayload<T>` type transitions. Eliminated PII risk in Mode B edge dispatch.
 5. **Strongly Typed Serde Error Envelopes (`src/payload/graphql_error.rs`):**

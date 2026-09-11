@@ -83,7 +83,7 @@ Different organizations have different risk tolerances regarding failures and in
 ## Mode B: The Event-Native Gateway (Pure CQRS)
 
 ### The Concept
-Mode B (`ExecutionStrategy::AsyncEdgeCommand`) is **pure, asynchronous CQRS**. Mutations are treated strictly as **Commands**. There is no upstream HTTP backend in the write path. SpectraGQL receives the mutation, executes guards (validating syntax, depth, idempotency locks, and redacting PII via compile-time type-states), commits it to the event stream, and immediately returns a deterministic GraphQL command receipt:
+Mode B (`ExecutionStrategy::AsyncEdgeCommand`) is **pure, asynchronous CQRS**. Mutations are treated strictly as **Commands**. There is no upstream HTTP backend in the write path. SpectraGQL receives the mutation, executes interceptors (validating syntax, depth, idempotency locks, and redacting PII via compile-time type-states), commits it to the event stream, and immediately returns a deterministic GraphQL command receipt:
 
 ```json
 {
@@ -108,7 +108,7 @@ If the downstream broker is unreachable or fails to persist the command:
 Client                     SpectraGQL Proxy                                                 Event Broker             Async Consumer / Projection
   │                              │                                                                │                               │
   │── 1. POST Mutation ─────────>│                                                                │                               │
-  │                              │── 2. RequestGuard & Type-State Sanitizer                       │                               │
+  │                              │── 2. RequestInterceptor & Type-State Sanitizer                 │                               │
   │                              │── 3. Commit Sanitized Command to Broker ──────────────────────>│                               │
   │                              │<── 4. Broker ACK ──────────────────────────────────────────────│                               │
   │<── 5. Return Command Receipt ─│                                                                │                               │

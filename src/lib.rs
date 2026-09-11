@@ -2,7 +2,6 @@ pub mod admin;
 pub mod clock;
 pub mod dispatch;
 pub mod interceptors;
-pub use interceptors as guards;
 pub mod payload;
 pub mod proxy;
 pub mod ratify;
@@ -11,9 +10,9 @@ pub mod subscriptions;
 
 pub use dispatch::{EventEncoder, EventSink, JsonEventEncoder};
 pub use interceptors::{
-    CelRuleEvaluator, GuardContext, GuardRejection, GuardVerdict, InterceptorContext,
-    InterceptorRejection, InterceptorVerdict, RequestGuard, RequestInterceptor, ResponseGuard,
-    ResponseInterceptor, RuleEvaluator,
+    CelRuleEvaluator, InterceptorContext, InterceptorRejection, InterceptorVerdict,
+    RequestInterceptor, RequestInterceptorPipeline, ResponseInterceptor,
+    ResponseInterceptorPipeline, RuleEvaluator,
 };
 pub use payload::{CompletionEvent, OperationOutcome, TerminalEvent};
 pub use spectra_config::{ExecutionStrategy, OperationMode, SpectraConfig};

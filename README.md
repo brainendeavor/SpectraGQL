@@ -41,7 +41,7 @@ GraphQL gives frontend teams expressive control over data retrieval. However, in
                       Query   │                      Mutation │ (Command)
                     (Read)    ▼                               ▼
                ┌──────────────────────┐             ┌───────────────────┐
-               │ Legacy API / Backend │             │ Edge Guards:      │
+               │ Legacy API / Backend │             │ Edge Interceptors:│
                │ Query Service / Read │             │ - Syntax & Depth  │
                │ Cache / Replicas     │             │ - Idempotency Lock│
                │                      │             │ - Type-State PII  │
@@ -58,11 +58,15 @@ GraphQL gives frontend teams expressive control over data retrieval. However, in
                                                               │ Atomic EventSink
                                                               ▼
                                                     ┌───────────────────┐
-                                                    │ Event Backbone    │
-                                                    │ NATS / Kafka /    │
-                                                    │ Redis / Iggy /    │
-                                                    │ SierraDB / Rabbit │
-                                                    └─────────┬─────────┘
+                                                    │   Event Sinks     │
+                                                    │   - Kafka / Redp. │
+                                                    │   - NATS JetStream│
+                                                    │   - Redis Streams │
+                                                    │   - RabbitMQ      │
+                                                    │   - Apache Iggy   │
+                                                    │   - SierraDB      │
+                                                    │   - Webhook HTTP  │
+                                                    └───────────────────┘
                                                               │
                                                               ▼
                                                     ┌───────────────────┐
@@ -85,7 +89,7 @@ SpectraGQL bridges existing microservices and event-driven backends through two 
 
 ---
 
-## Architectural Highlights
+## Modern Architecture Highlights
 
 ### 1. Composable Filter Pipeline
 The monolithic proxy architecture has been decomposed into sequential, single-responsibility pipeline filters under `src/proxy/filters/`:
@@ -95,11 +99,11 @@ The monolithic proxy architecture has been decomposed into sequential, single-re
 - **`StrategyRouter`**: Operation-level routing bifurcating traffic between Mode A upstream forwarding and Mode B edge command receipts.
 - **`TelemetryDispatcher`**: Asynchronous logging phase telemetry publication to configured event broker sinks.
 
-### 2. Guard Contracts & Extensible Rule Evaluation
-Located in `src/guards/`, domain guards enforce validation before and after processing:
-- **`RequestGuard`**: Validates inbound GraphQL syntax, operation structure, and required headers prior to upstream forwarding.
-- **`ResponseGuard`**: Inspects outbound response bodies to prevent PII leakage and sensitive token exposure.
-- **`RuleEvaluator`**: Pluggable evaluation port for business-aligned criteria (`NativeRuleEvaluator` built-in, designed for WASM and Lua extensions).
+### 2. Interceptor Pipeline, Payload Transformation & CEL Evaluation
+Located in `src/interceptors/`, interceptors enforce contracts and enable active in-flight transformation:
+- **`RequestInterceptor`**: Validates inbound GraphQL syntax, operation structure, and required headers prior to upstream forwarding or edge command dispatch.
+- **`ResponseInterceptor`**: Inspects and transforms outbound response bodies to prevent PII leakage or actively shape payloads (anonymization, JSON reshaping) via `InterceptorVerdict`.
+- **`CelRuleEvaluator`**: Sub-microsecond declarative policy evaluation using CNCF/Google Common Expression Language (`cel-rust`), with extensible `RuleEvaluator` trait port.
 
 ### 3. Compile-Time Type-State Security
 SpectraGQL enforces sensitive data redaction at compile time using Rust's type-state pattern:
@@ -228,7 +232,7 @@ test result: ok.  6 passed (tests/admin_security.rs)
 test result: ok.  2 passed (tests/dispatch_failure.rs)
 test result: ok.  1 passed (tests/e2e_gateway.rs)
 test result: ok.  4 passed (tests/graphql_parser_edge_cases.rs)
-test result: ok.  7 passed (tests/guard_pipeline.rs)
+test result: ok. 10 passed (tests/interceptor_pipeline.rs)
 test result: ok.  3 passed (tests/idempotency_concurrency.rs)
 test result: ok.  4 passed (tests/sanitizer_edge_cases.rs)
 test result: ok.  5 passed (tests/subscription_protocol.rs)

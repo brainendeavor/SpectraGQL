@@ -5,17 +5,15 @@ pub mod response;
 pub mod rules;
 
 pub use context::{
-    GuardContext, GuardRejection, GuardVerdict, InterceptorContext, InterceptorRejection,
-    InterceptorVerdict, RuleEvaluationError,
+    InterceptorContext, InterceptorRejection, InterceptorVerdict, RuleEvaluationError,
 };
 pub use evaluators::CelRuleEvaluator;
 pub use request::{
-    GraphQLSyntaxGuard, GraphQLSyntaxInterceptor, HeaderValidationGuard,
-    HeaderValidationInterceptor, RequestGuard, RequestGuardPipeline, RequestInterceptor,
+    GraphQLSyntaxInterceptor, HeaderValidationInterceptor, RequestInterceptor,
     RequestInterceptorPipeline,
 };
 pub use response::{
-    ResponseGuard, ResponseGuardPipeline, ResponseInterceptor, ResponseInterceptorPipeline,
-    SensitiveDataResponseGuard, SensitiveDataResponseInterceptor,
+    ResponseInterceptor, ResponseInterceptorPipeline, SensitiveDataResponseInterceptor,
 };
 pub use rules::{NativeRuleEvaluator, RuleEvaluator, RulePredicate};
+

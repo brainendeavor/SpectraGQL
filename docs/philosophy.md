@@ -55,9 +55,9 @@ Rather than retreating from GraphQL or building ad-hoc orchestrators inside reso
                         │   Wire-speed L7 Layer in Rust │
                         └───────────────┬───────────────┘
                                         │
-                    Edge Guards & Filters │ [Idempotency Key Check]
-                                          │ [Causal Ordering via HLC]
-                                          │ [Type-State PII Redaction]
+                    Edge Interceptors & Filters │ [Idempotency Key Check]
+                                                │ [Causal Ordering via HLC]
+                                                │ [Type-State PII Redaction]
                                           ▼
                        ┌───────────────────────────────┐
                        │      Durable Event Log        │

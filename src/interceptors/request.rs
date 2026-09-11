@@ -1,5 +1,5 @@
 use crate::interceptors::context::{
-    GuardVerdict, InterceptorContext, InterceptorRejection, InterceptorVerdict,
+    InterceptorContext, InterceptorRejection, InterceptorVerdict,
 };
 
 /// Inbound contract enforcement and transformation port.
@@ -12,30 +12,11 @@ pub trait RequestInterceptor: Send + Sync {
         parts: &mut http::request::Parts,
         body: &str,
     ) -> InterceptorVerdict;
-
-    /// Compatibility helper for legacy request guard callers.
-    fn guard_request(
-        &self,
-        ctx: &mut InterceptorContext,
-        parts: &mut http::request::Parts,
-        body: &str,
-    ) -> Result<GuardVerdict, InterceptorRejection> {
-        match self.intercept_request(ctx, parts, body) {
-            InterceptorVerdict::Pass => Ok(GuardVerdict::Pass),
-            InterceptorVerdict::Transform { .. } => Ok(GuardVerdict::Mutated),
-            InterceptorVerdict::Reject(rejection) => Err(rejection),
-        }
-    }
 }
-
-/// Backwards compatibility alias for RequestInterceptor.
-pub use RequestInterceptor as RequestGuard;
 
 /// Enforces valid GraphQL syntax and populates InterceptorContext with parsed operation details.
 #[derive(Debug, Default, Clone)]
 pub struct GraphQLSyntaxInterceptor;
-
-pub use GraphQLSyntaxInterceptor as GraphQLSyntaxGuard;
 
 impl RequestInterceptor for GraphQLSyntaxInterceptor {
     fn intercept_request(
@@ -107,41 +88,17 @@ impl RequestInterceptor for GraphQLSyntaxInterceptor {
     }
 }
 
-impl GraphQLSyntaxInterceptor {
-    pub fn guard_request(
-        &self,
-        ctx: &mut InterceptorContext,
-        parts: &mut http::request::Parts,
-        body: &str,
-    ) -> Result<GuardVerdict, InterceptorRejection> {
-        <Self as RequestInterceptor>::guard_request(self, ctx, parts, body)
-    }
-}
-
 /// Validates mandatory HTTP headers (e.g. content-type application/json for POST).
 #[derive(Debug, Clone)]
 pub struct HeaderValidationInterceptor {
     pub require_json_content_type: bool,
 }
 
-pub use HeaderValidationInterceptor as HeaderValidationGuard;
-
 impl Default for HeaderValidationInterceptor {
     fn default() -> Self {
         Self {
             require_json_content_type: true,
         }
-    }
-}
-
-impl HeaderValidationInterceptor {
-    pub fn guard_request(
-        &self,
-        ctx: &mut InterceptorContext,
-        parts: &mut http::request::Parts,
-        body: &str,
-    ) -> Result<GuardVerdict, InterceptorRejection> {
-        <Self as RequestInterceptor>::guard_request(self, ctx, parts, body)
     }
 }
 
@@ -177,8 +134,6 @@ pub struct RequestInterceptorPipeline {
     interceptors: Vec<Box<dyn RequestInterceptor>>,
 }
 
-pub use RequestInterceptorPipeline as RequestGuardPipeline;
-
 impl RequestInterceptorPipeline {
     pub fn new() -> Self {
         Self {
@@ -189,10 +144,6 @@ impl RequestInterceptorPipeline {
     pub fn with_interceptor<I: RequestInterceptor + 'static>(mut self, interceptor: I) -> Self {
         self.interceptors.push(Box::new(interceptor));
         self
-    }
-
-    pub fn with_guard<G: RequestInterceptor + 'static>(self, guard: G) -> Self {
-        self.with_interceptor(guard)
     }
 
     pub fn intercept_request(
@@ -208,18 +159,5 @@ impl RequestInterceptorPipeline {
             }
         }
         InterceptorVerdict::Pass
-    }
-
-    pub fn guard_request(
-        &self,
-        ctx: &mut InterceptorContext,
-        parts: &mut http::request::Parts,
-        body: &str,
-    ) -> Result<GuardVerdict, InterceptorRejection> {
-        match self.intercept_request(ctx, parts, body) {
-            InterceptorVerdict::Pass => Ok(GuardVerdict::Pass),
-            InterceptorVerdict::Transform { .. } => Ok(GuardVerdict::Mutated),
-            InterceptorVerdict::Reject(rejection) => Err(rejection),
-        }
     }
 }

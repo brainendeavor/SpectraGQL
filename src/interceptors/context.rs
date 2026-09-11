@@ -14,8 +14,6 @@ pub struct InterceptorContext {
     pub extensions: HashMap<String, serde_json::Value>,
 }
 
-pub use InterceptorContext as GuardContext;
-
 impl InterceptorContext {
     pub fn new(request_id: Uuid, hlc: HlcTimestamp) -> Self {
         Self {
@@ -39,15 +37,6 @@ impl InterceptorContext {
     }
 }
 
-/// Verdict returned by a guard when evaluation succeeds.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum GuardVerdict {
-    /// The request/response passed guard evaluation without modification.
-    Pass,
-    /// The request/response was mutated by the guard (e.g. headers injected or sanitized).
-    Mutated,
-}
-
 /// Verdict returned by an interceptor.
 /// Allows pure pass-through, defensive rejection, or active payload transformation (e.g. anonymization, shaping).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -63,18 +52,6 @@ pub enum InterceptorVerdict {
     },
 }
 
-impl From<GuardVerdict> for InterceptorVerdict {
-    fn from(v: GuardVerdict) -> Self {
-        match v {
-            GuardVerdict::Pass => InterceptorVerdict::Pass,
-            GuardVerdict::Mutated => InterceptorVerdict::Transform {
-                headers: None,
-                body: None,
-            },
-        }
-    }
-}
-
 /// Rejection returned when an interceptor blocks an inbound request or outbound response.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InterceptorRejection {
@@ -83,8 +60,6 @@ pub struct InterceptorRejection {
     pub message: String,
     pub details: Option<serde_json::Value>,
 }
-
-pub use InterceptorRejection as GuardRejection;
 
 impl InterceptorRejection {
     pub fn new(status_code: http::StatusCode, code: impl Into<String>, message: impl Into<String>) -> Self {

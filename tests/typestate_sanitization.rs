@@ -1,6 +1,6 @@
 use http::{HeaderMap, Request};
 use spectragql::clock::HlcClock;
-use spectragql::guards::GuardRejection;
+use spectragql::interceptors::InterceptorRejection;
 use spectragql::payload::{
     CompletionEvent, EventStatus, GraphQLRequestInfo, GraphQLErrorResponse,
     RawPayload, RequestInfo, ResponseBody, ResponseInfo, SanitizedPayload,
@@ -154,8 +154,8 @@ fn test_graphql_error_response_serialization() {
 }
 
 #[test]
-fn test_guard_rejection_converts_to_graphql_error_response() {
-    let rejection = GuardRejection::new(
+fn test_interceptor_rejection_converts_to_graphql_error_response() {
+    let rejection = InterceptorRejection::new(
         http::StatusCode::BAD_REQUEST,
         "GRAPHQL_SYNTAX_ERROR",
         "Unexpected token at position 12",
