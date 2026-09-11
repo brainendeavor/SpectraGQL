@@ -1,4 +1,7 @@
 pub mod nats;
+pub mod redis_streams;
+pub mod resp;
+pub mod sierradb;
 pub mod webhook;
 
 use crate::payload::{RequestInfo, ResponseInfo, TerminalEvent};
@@ -9,6 +12,8 @@ use enum_dispatch::enum_dispatch;
 #[enum_dispatch(DispatchHandler)]
 pub enum DispatchMethod {
     NatsJetstream(nats::NatsDispatch),
+    RedisStreams(redis_streams::RedisStreamsDispatch),
+    SierraDb(sierradb::SierraDbDispatch),
     Webhook(webhook::WebhookDispatch),
 }
 
@@ -18,6 +23,12 @@ pub fn find_dispatch_handler_by_method(
 ) -> Result<DispatchMethod> {
     if nats::NatsDispatch::supports_dispatch_method(method) {
         return Ok(nats::NatsDispatch::new(endpoint).into());
+    }
+    if redis_streams::RedisStreamsDispatch::supports_dispatch_method(method) {
+        return Ok(redis_streams::RedisStreamsDispatch::new(endpoint).into());
+    }
+    if sierradb::SierraDbDispatch::supports_dispatch_method(method) {
+        return Ok(sierradb::SierraDbDispatch::new(endpoint).into());
     }
     if webhook::WebhookDispatch::supports_dispatch_method(method) {
         return Ok(webhook::WebhookDispatch::new(endpoint).into());
@@ -55,6 +66,30 @@ mod tests {
         match handler.unwrap() {
             DispatchMethod::NatsJetstream(_) => {}
             _ => panic!("Expected NatsJetstream"),
+        }
+    }
+
+    #[test]
+    fn test_find_dispatch_redis() {
+        for method in &["redis", "redis_streams", "valkey", "dragonfly"] {
+            let handler = find_dispatch_handler_by_method(method, "127.0.0.1:6379");
+            assert!(handler.is_ok(), "failed for {}", method);
+            match handler.unwrap() {
+                DispatchMethod::RedisStreams(_) => {}
+                _ => panic!("Expected RedisStreams for {}", method),
+            }
+        }
+    }
+
+    #[test]
+    fn test_find_dispatch_sierradb() {
+        for method in &["sierradb", "sierra", "sierra-db"] {
+            let handler = find_dispatch_handler_by_method(method, "127.0.0.1:8848");
+            assert!(handler.is_ok(), "failed for {}", method);
+            match handler.unwrap() {
+                DispatchMethod::SierraDb(_) => {}
+                _ => panic!("Expected SierraDb for {}", method),
+            }
         }
     }
 

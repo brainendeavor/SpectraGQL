@@ -88,6 +88,14 @@ impl CompositeServiceProxy {
         self
     }
 
+    pub fn with_idempotency_engine(
+        mut self,
+        idempotency_engine: Arc<crate::ratify::IdempotencyEngine>,
+    ) -> Self {
+        self.idempotency_engine = idempotency_engine;
+        self
+    }
+
     pub fn add_service_config(&mut self, service_config: ServiceConfig) {
         let service_handle = self.upstream_services.len();
         let routes = service_config.upstream_routes.clone();
@@ -250,7 +258,7 @@ impl ProxyHttp for CompositeServiceProxy {
 
         // Check for explicit Idempotency-Key in request headers
         if let Some(key) = crate::ratify::IdempotencyEngine::extract_idempotency_key(&session.req_header().headers) {
-            match self.idempotency_engine.check_or_insert(&key, ctx.proxy_context.hlc) {
+            match self.idempotency_engine.check_or_insert(&key, ctx.proxy_context.hlc).await {
                 crate::ratify::IdempotencyOutcome::Conflict { hlc } => {
                     log::warn!("Idempotency conflict for key: {}, in-flight hlc: {}", key, hlc);
                     let mut header = pingora::http::ResponseHeader::build(409, None).unwrap();
@@ -336,7 +344,7 @@ impl ProxyHttp for CompositeServiceProxy {
                             op_name,
                             body_str,
                         );
-                        match self.idempotency_engine.check_or_insert(&fingerprint, ctx.proxy_context.hlc) {
+                        match self.idempotency_engine.check_or_insert(&fingerprint, ctx.proxy_context.hlc).await {
                             crate::ratify::IdempotencyOutcome::Conflict { hlc } => {
                                 log::warn!("Idempotency conflict for fingerprint: {}, in-flight hlc: {}", fingerprint, hlc);
                                 let mut header = pingora::http::ResponseHeader::build(409, None).unwrap();
@@ -409,7 +417,7 @@ impl ProxyHttp for CompositeServiceProxy {
                                 fake_headers.insert("content-type", "application/json".parse().unwrap());
                                 fake_headers.insert(REQUEST_ID_HEADER, ctx.proxy_context.request_id.to_string().parse().unwrap());
                                 fake_headers.insert("x-spectra-hlc", ctx.proxy_context.hlc.to_compact_string().parse().unwrap());
-                                self.idempotency_engine.complete(key, ctx.proxy_context.hlc, 200, &fake_headers, &receipt_body);
+                                self.idempotency_engine.complete(key, ctx.proxy_context.hlc, 200, &fake_headers, &receipt_body).await;
                             }
 
                             let mut header = pingora::http::ResponseHeader::build(200, None).unwrap();
@@ -573,7 +581,7 @@ impl ProxyHttp for CompositeServiceProxy {
         match e {
             Some(error) => {
                 if let Some(key) = ctx.proxy_context.idempotency_key.as_ref() {
-                    self.idempotency_engine.remove(key);
+                    self.idempotency_engine.remove(key).await;
                 }
                 if ctx.proxy_context.dispatch_policy == ModeADispatchPolicy::ResponseOnly {
                     log::info!("Mode A response_only: suppressing event dispatch on connection error: {}", error);
@@ -612,7 +620,7 @@ impl ProxyHttp for CompositeServiceProxy {
 
                 if is_http_err {
                     if let Some(key) = ctx.proxy_context.idempotency_key.as_ref() {
-                        self.idempotency_engine.remove(key);
+                        self.idempotency_engine.remove(key).await;
                     }
                     if ctx.proxy_context.dispatch_policy == ModeADispatchPolicy::ResponseOnly {
                         log::info!(
@@ -646,7 +654,7 @@ impl ProxyHttp for CompositeServiceProxy {
                     if let Some(key) = ctx.proxy_context.idempotency_key.as_ref() {
                         let status_u16 = status_code.map(|s| s.as_u16()).unwrap_or(200);
                         let body_str = response_body.text.as_deref().unwrap_or_else(|| response_body.json.get());
-                        self.idempotency_engine.complete(key, hlc, status_u16, &http_response_headers, body_str);
+                        self.idempotency_engine.complete(key, hlc, status_u16, &http_response_headers, body_str).await;
                     }
 
                     let response_info = ResponseInfo::new(

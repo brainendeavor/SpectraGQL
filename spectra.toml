@@ -47,6 +47,14 @@ method = "NATS"
 addr = "127.0.0.1:4222"
 name = "default"
 
+# Idempotency Engine: Local In-Memory or Distributed Redis/Valkey
+[idempotency]
+# Options: "memory" (default), "redis"
+backend = "memory"
+# addr = "127.0.0.1:6379"
+ttl_secs = 300
+max_capacity = 10000
+
 [rest]
 paths = "/api,/api/{*path}"
 

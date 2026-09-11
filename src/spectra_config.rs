@@ -76,6 +76,44 @@ pub struct SpectraUpstreamConfig {
     pub addr: String,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum IdempotencyBackendType {
+    #[default]
+    Memory,
+    Redis,
+}
+
+fn default_idempotency_ttl_secs() -> u64 {
+    300
+}
+
+fn default_max_capacity() -> usize {
+    10_000
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct SpectraIdempotencyConfig {
+    #[serde(default)]
+    pub backend: IdempotencyBackendType,
+    pub addr: Option<String>,
+    #[serde(default = "default_idempotency_ttl_secs")]
+    pub ttl_secs: u64,
+    #[serde(default = "default_max_capacity")]
+    pub max_capacity: usize,
+}
+
+impl Default for SpectraIdempotencyConfig {
+    fn default() -> Self {
+        SpectraIdempotencyConfig {
+            backend: IdempotencyBackendType::Memory,
+            addr: None,
+            ttl_secs: default_idempotency_ttl_secs(),
+            max_capacity: default_max_capacity(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct SpectraDispatchConfig {
     pub name: String,
@@ -113,6 +151,8 @@ pub(crate) struct SpectraConfig {
     #[serde(default)]
     pub upstreams: HashMap<String, SpectraUpstreamConfig>,
     pub dispatch: SpectraDispatchConfig,
+    #[serde(default)]
+    pub idempotency: SpectraIdempotencyConfig,
 }
 
 impl SpectraConfig {
@@ -133,6 +173,9 @@ impl SpectraConfig {
             .set_default("gql.mode_a.enabled", true)?
             .set_default("gql.mode_a.dispatch_policy", "response_with_failure")?
             .set_default("gql.mode_a.timeout_ms", 3000)?
+            .set_default("idempotency.backend", "memory")?
+            .set_default("idempotency.ttl_secs", 300)?
+            .set_default("idempotency.max_capacity", 10000)?
             .set_default("rest.paths", "/api,/api/{*path}")?
             .add_source(File::with_name("spectra").required(false))
             .add_source(File::with_name(&format!("{spectra_env}-spectra")).required(false))
@@ -266,6 +309,12 @@ mod tests {
             addr = "127.0.0.1:4222"
             name = "default"
 
+            [idempotency]
+            backend = "redis"
+            addr = "127.0.0.1:6379"
+            ttl_secs = 600
+            max_capacity = 20000
+
             [rest]
             paths = "/api,/api/{*path}"
         "#;
@@ -288,6 +337,11 @@ mod tests {
             ModeADispatchPolicy::ResponseOnly
         );
         assert_eq!(cfg.gql.mode_a.timeout_ms, 5000);
+
+        assert_eq!(cfg.idempotency.backend, IdempotencyBackendType::Redis);
+        assert_eq!(cfg.idempotency.addr, Some("127.0.0.1:6379".to_string()));
+        assert_eq!(cfg.idempotency.ttl_secs, 600);
+        assert_eq!(cfg.idempotency.max_capacity, 20000);
 
         let inv_route = cfg.gql.routes.get("inventory_update").unwrap();
         assert_eq!(inv_route.operation, "adjustInventory");

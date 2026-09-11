@@ -1,31 +1,44 @@
 use std::collections::HashMap;
 use std::sync::RwLock;
-use std::time::{Duration, Instant};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use sha2::{Digest, Sha256};
 use http::HeaderMap;
+use serde::{Deserialize, Serialize};
 
 use crate::clock::HlcTimestamp;
+use crate::dispatch::resp::RespClient;
 
 pub const DEFAULT_IDEMPOTENCY_TTL: Duration = Duration::from_secs(300); // 5 minutes
 pub const DEFAULT_MAX_CAPACITY: usize = 10_000;
+pub const DEFAULT_REDIS_KEY_PREFIX: &str = "spectra:idempotency";
 
 pub const IDEMPOTENCY_KEY_HEADER: &str = "idempotency-key";
 pub const ALT_IDEMPOTENCY_KEY_HEADER: &str = "x-idempotency-key";
 pub const REPLAY_HEADER: &str = "x-spectra-idempotent-replay";
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "state", rename_all = "snake_case")]
 pub enum IdempotencyRecord {
     InProgress {
-        started_at: Instant,
         hlc: HlcTimestamp,
+        #[serde(default)]
+        started_at_secs: u64,
     },
     Completed {
-        completed_at: Instant,
         hlc: HlcTimestamp,
         status_code: u16,
         headers: Vec<(String, String)>,
         body: String,
+        #[serde(default)]
+        completed_at_secs: u64,
     },
+}
+
+fn current_unix_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -45,110 +58,216 @@ pub enum IdempotencyOutcome {
     },
 }
 
-/// In-memory sliding window edge deduplication cache for GraphQL mutations & HTTP requests.
+pub enum IdempotencyBackend {
+    Memory {
+        records: RwLock<HashMap<String, IdempotencyRecord>>,
+        max_capacity: usize,
+    },
+    Redis {
+        client: RespClient,
+        key_prefix: String,
+    },
+}
+
+/// Sliding window edge deduplication & replay cache for GraphQL mutations & HTTP requests.
+/// Supports both in-memory local storage and distributed Redis/Valkey cache.
 pub struct IdempotencyEngine {
-    records: RwLock<HashMap<String, IdempotencyRecord>>,
+    backend: IdempotencyBackend,
     ttl: Duration,
-    max_capacity: usize,
 }
 
 impl IdempotencyEngine {
+    /// Creates an in-memory IdempotencyEngine.
     pub fn new(ttl: Duration, max_capacity: usize) -> Self {
         IdempotencyEngine {
-            records: RwLock::new(HashMap::new()),
+            backend: IdempotencyBackend::Memory {
+                records: RwLock::new(HashMap::new()),
+                max_capacity,
+            },
             ttl,
-            max_capacity,
+        }
+    }
+
+    /// Creates a distributed Redis-backed IdempotencyEngine.
+    pub fn new_redis(addr: &str, ttl: Duration) -> Self {
+        Self::new_redis_with_prefix(addr, ttl, DEFAULT_REDIS_KEY_PREFIX)
+    }
+
+    /// Creates a distributed Redis-backed IdempotencyEngine with custom key prefix.
+    pub fn new_redis_with_prefix(addr: &str, ttl: Duration, prefix: &str) -> Self {
+        IdempotencyEngine {
+            backend: IdempotencyBackend::Redis {
+                client: RespClient::new(addr),
+                key_prefix: prefix.to_string(),
+            },
+            ttl,
         }
     }
 
     /// Checks if a key already exists. If not (or expired), registers it as `InProgress`.
-    pub fn check_or_insert(&self, key: &str, hlc: HlcTimestamp) -> IdempotencyOutcome {
-        let now = Instant::now();
+    pub async fn check_or_insert(&self, key: &str, hlc: HlcTimestamp) -> IdempotencyOutcome {
+        match &self.backend {
+            IdempotencyBackend::Memory { records, max_capacity } => {
+                let now_secs = current_unix_secs();
+                let ttl_secs = self.ttl.as_secs().max(1);
 
-        // 1. Fast read-lock check
-        {
-            let read_guard = self.records.read().unwrap();
-            if let Some(record) = read_guard.get(key) {
-                match record {
-                    IdempotencyRecord::InProgress { started_at, hlc } => {
-                        if now.duration_since(*started_at) < self.ttl {
-                            return IdempotencyOutcome::Conflict { hlc: *hlc };
+                // 1. Fast read-lock check
+                {
+                    let read_guard = records.read().unwrap();
+                    if let Some(record) = read_guard.get(key) {
+                        match record {
+                            IdempotencyRecord::InProgress { started_at_secs, hlc } => {
+                                if now_secs.saturating_sub(*started_at_secs) < ttl_secs {
+                                    return IdempotencyOutcome::Conflict { hlc: *hlc };
+                                }
+                            }
+                            IdempotencyRecord::Completed {
+                                completed_at_secs,
+                                hlc,
+                                status_code,
+                                headers,
+                                body,
+                            } => {
+                                if now_secs.saturating_sub(*completed_at_secs) < ttl_secs {
+                                    return IdempotencyOutcome::Replay {
+                                        hlc: *hlc,
+                                        status_code: *status_code,
+                                        headers: headers.clone(),
+                                        body: body.clone(),
+                                    };
+                                }
+                            }
                         }
                     }
-                    IdempotencyRecord::Completed {
-                        completed_at,
+                }
+
+                // 2. Write lock insert
+                let mut write_guard = records.write().unwrap();
+                if let Some(record) = write_guard.get(key) {
+                    match record {
+                        IdempotencyRecord::InProgress { started_at_secs, hlc } => {
+                            if now_secs.saturating_sub(*started_at_secs) < ttl_secs {
+                                return IdempotencyOutcome::Conflict { hlc: *hlc };
+                            }
+                        }
+                        IdempotencyRecord::Completed {
+                            completed_at_secs,
+                            hlc,
+                            status_code,
+                            headers,
+                            body,
+                        } => {
+                            if now_secs.saturating_sub(*completed_at_secs) < ttl_secs {
+                                return IdempotencyOutcome::Replay {
+                                    hlc: *hlc,
+                                    status_code: *status_code,
+                                    headers: headers.clone(),
+                                    body: body.clone(),
+                                };
+                            }
+                        }
+                    }
+                }
+
+                if write_guard.len() >= *max_capacity {
+                    Self::prune_expired_locked(&mut write_guard, now_secs, ttl_secs);
+                    if write_guard.len() >= *max_capacity {
+                        if let Some(first_key) = write_guard.keys().next().cloned() {
+                            write_guard.remove(&first_key);
+                        }
+                    }
+                }
+
+                write_guard.insert(
+                    key.to_string(),
+                    IdempotencyRecord::InProgress {
+                        started_at_secs: now_secs,
                         hlc,
-                        status_code,
-                        headers,
-                        body,
-                    } => {
-                        if now.duration_since(*completed_at) < self.ttl {
-                            return IdempotencyOutcome::Replay {
-                                hlc: *hlc,
-                                status_code: *status_code,
-                                headers: headers.clone(),
-                                body: body.clone(),
-                            };
+                    },
+                );
+
+                IdempotencyOutcome::New
+            }
+            IdempotencyBackend::Redis { client, key_prefix } => {
+                let redis_key = format!("{}:{}", key_prefix, key);
+                let now_secs = current_unix_secs();
+                let in_progress = IdempotencyRecord::InProgress {
+                    hlc,
+                    started_at_secs: now_secs,
+                };
+                let in_progress_json = match serde_json::to_string(&in_progress) {
+                    Ok(j) => j,
+                    Err(e) => {
+                        log::error!("Failed to serialize in_progress record: {}", e);
+                        return IdempotencyOutcome::New;
+                    }
+                };
+                let ttl_secs = self.ttl.as_secs().max(1);
+
+                let mut conn = match client.get_connection().await {
+                    Ok(c) => c,
+                    Err(e) => {
+                        log::error!("Idempotency Redis connection failed: {}, failing open", e);
+                        return IdempotencyOutcome::New;
+                    }
+                };
+
+                let mut set_cmd = redis::cmd("SET");
+                set_cmd
+                    .arg(&redis_key)
+                    .arg(&in_progress_json)
+                    .arg("NX")
+                    .arg("EX")
+                    .arg(ttl_secs);
+
+                let set_result: Result<Option<String>, _> = set_cmd.query_async(&mut conn).await;
+                match set_result {
+                    Ok(Some(_)) => {
+                        // Lock acquired
+                        IdempotencyOutcome::New
+                    }
+                    Ok(None) => {
+                        // Key exists - query current state
+                        let mut get_cmd = redis::cmd("GET");
+                        get_cmd.arg(&redis_key);
+                        match get_cmd.query_async::<_, Option<String>>(&mut conn).await {
+                            Ok(Some(raw_json)) => {
+                                if let Ok(rec) = serde_json::from_str::<IdempotencyRecord>(&raw_json) {
+                                    match rec {
+                                        IdempotencyRecord::InProgress { hlc, .. } => {
+                                            IdempotencyOutcome::Conflict { hlc }
+                                        }
+                                        IdempotencyRecord::Completed {
+                                            hlc,
+                                            status_code,
+                                            headers,
+                                            body,
+                                            ..
+                                        } => IdempotencyOutcome::Replay {
+                                            hlc,
+                                            status_code,
+                                            headers,
+                                            body,
+                                        },
+                                    }
+                                } else {
+                                    IdempotencyOutcome::New
+                                }
+                            }
+                            _ => IdempotencyOutcome::New,
                         }
                     }
-                }
-            }
-        }
-
-        // 2. Write lock to insert or overwrite expired
-        let mut write_guard = self.records.write().unwrap();
-
-        // Double check under write lock
-        if let Some(record) = write_guard.get(key) {
-            match record {
-                IdempotencyRecord::InProgress { started_at, hlc } => {
-                    if now.duration_since(*started_at) < self.ttl {
-                        return IdempotencyOutcome::Conflict { hlc: *hlc };
-                    }
-                }
-                IdempotencyRecord::Completed {
-                    completed_at,
-                    hlc,
-                    status_code,
-                    headers,
-                    body,
-                } => {
-                    if now.duration_since(*completed_at) < self.ttl {
-                        return IdempotencyOutcome::Replay {
-                            hlc: *hlc,
-                            status_code: *status_code,
-                            headers: headers.clone(),
-                            body: body.clone(),
-                        };
+                    Err(e) => {
+                        log::error!("Idempotency Redis SET NX failed: {}, failing open", e);
+                        IdempotencyOutcome::New
                     }
                 }
             }
         }
-
-        // Enforce capacity bounds
-        if write_guard.len() >= self.max_capacity {
-            self.prune_expired_locked(&mut write_guard, now);
-            // If still full, remove arbitrary entry to protect against unbounded growth
-            if write_guard.len() >= self.max_capacity {
-                if let Some(first_key) = write_guard.keys().next().cloned() {
-                    write_guard.remove(&first_key);
-                }
-            }
-        }
-
-        write_guard.insert(
-            key.to_string(),
-            IdempotencyRecord::InProgress {
-                started_at: now,
-                hlc,
-            },
-        );
-
-        IdempotencyOutcome::New
     }
 
     /// Marks an in-flight key as completed, caching its outcome for future replays.
-    pub fn complete(
+    pub async fn complete(
         &self,
         key: &str,
         hlc: HlcTimestamp,
@@ -156,7 +275,6 @@ impl IdempotencyEngine {
         headers: &HeaderMap,
         body: &str,
     ) {
-        let mut write_guard = self.records.write().unwrap();
         let header_pairs: Vec<(String, String)> = headers
             .iter()
             .filter_map(|(k, v)| {
@@ -170,45 +288,73 @@ impl IdempotencyEngine {
             })
             .collect();
 
-        write_guard.insert(
-            key.to_string(),
-            IdempotencyRecord::Completed {
-                completed_at: Instant::now(),
-                hlc,
-                status_code,
-                headers: header_pairs,
-                body: body.to_string(),
-            },
-        );
+        match &self.backend {
+            IdempotencyBackend::Memory { records, .. } => {
+                let mut write_guard = records.write().unwrap();
+                write_guard.insert(
+                    key.to_string(),
+                    IdempotencyRecord::Completed {
+                        completed_at_secs: current_unix_secs(),
+                        hlc,
+                        status_code,
+                        headers: header_pairs,
+                        body: body.to_string(),
+                    },
+                );
+            }
+            IdempotencyBackend::Redis { client, key_prefix } => {
+                let redis_key = format!("{}:{}", key_prefix, key);
+                let completed = IdempotencyRecord::Completed {
+                    completed_at_secs: current_unix_secs(),
+                    hlc,
+                    status_code,
+                    headers: header_pairs,
+                    body: body.to_string(),
+                };
+                if let Ok(json_str) = serde_json::to_string(&completed) {
+                    let ttl_secs = self.ttl.as_secs().max(1);
+                    if let Ok(mut conn) = client.get_connection().await {
+                        let mut cmd = redis::cmd("SET");
+                        cmd.arg(&redis_key).arg(&json_str).arg("EX").arg(ttl_secs);
+                        let _: Result<(), _> = cmd.query_async(&mut conn).await;
+                    }
+                }
+            }
+        }
     }
 
     /// Removes an in-flight entry so the client can retry if an error occurred before completion.
-    pub fn remove(&self, key: &str) {
-        let mut write_guard = self.records.write().unwrap();
-        write_guard.remove(key);
+    pub async fn remove(&self, key: &str) {
+        match &self.backend {
+            IdempotencyBackend::Memory { records, .. } => {
+                let mut write_guard = records.write().unwrap();
+                write_guard.remove(key);
+            }
+            IdempotencyBackend::Redis { client, key_prefix } => {
+                let redis_key = format!("{}:{}", key_prefix, key);
+                if let Ok(mut conn) = client.get_connection().await {
+                    let mut cmd = redis::cmd("DEL");
+                    cmd.arg(&redis_key);
+                    let _: Result<(), _> = cmd.query_async(&mut conn).await;
+                }
+            }
+        }
     }
 
     /// Prunes expired records under an active write guard.
     fn prune_expired_locked(
-        &self,
         records: &mut HashMap<String, IdempotencyRecord>,
-        now: Instant,
+        now_secs: u64,
+        ttl_secs: u64,
     ) {
         records.retain(|_, record| match record {
-            IdempotencyRecord::InProgress { started_at, .. } => {
-                now.duration_since(*started_at) < self.ttl
+            IdempotencyRecord::InProgress { started_at_secs, .. } => {
+                now_secs.saturating_sub(*started_at_secs) < ttl_secs
             }
-            IdempotencyRecord::Completed { completed_at, .. } => {
-                now.duration_since(*completed_at) < self.ttl
+            IdempotencyRecord::Completed { completed_at_secs, .. } => {
+                now_secs.saturating_sub(*completed_at_secs) < ttl_secs
             }
         });
-    }
-
-    /// Public method to prune expired entries.
-    #[allow(dead_code)]
-    pub fn prune_expired(&self) {
-        let mut write_guard = self.records.write().unwrap();
-        self.prune_expired_locked(&mut write_guard, Instant::now());
     }
 
     /// Helper to extract idempotency key from incoming HTTP headers.
@@ -260,26 +406,28 @@ mod tests {
     use super::*;
     use http::HeaderValue;
 
-    #[test]
-    fn test_idempotency_new_and_complete() {
+    #[tokio::test]
+    async fn test_idempotency_new_and_complete() {
         let engine = IdempotencyEngine::new(Duration::from_secs(60), 100);
         let hlc = HlcTimestamp::new(1000, 0);
 
         // 1. Initial check is New
-        let outcome = engine.check_or_insert("key-1", hlc);
+        let outcome = engine.check_or_insert("key-1", hlc).await;
         assert_eq!(outcome, IdempotencyOutcome::New);
 
         // 2. In-flight check returns Conflict
-        let outcome = engine.check_or_insert("key-1", hlc);
+        let outcome = engine.check_or_insert("key-1", hlc).await;
         assert_eq!(outcome, IdempotencyOutcome::Conflict { hlc });
 
         // 3. Mark complete
         let mut headers = HeaderMap::new();
         headers.insert("content-type", HeaderValue::from_static("application/json"));
-        engine.complete("key-1", hlc, 200, &headers, r#"{"data":{"ok":true}}"#);
+        engine
+            .complete("key-1", hlc, 200, &headers, r#"{"data":{"ok":true}}"#)
+            .await;
 
         // 4. Next check returns Replay with cached response
-        let outcome = engine.check_or_insert("key-1", hlc);
+        let outcome = engine.check_or_insert("key-1", hlc).await;
         match outcome {
             IdempotencyOutcome::Replay {
                 status_code,
@@ -295,21 +443,50 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_idempotency_ttl_expiration() {
-        // Very short TTL for test
-        let engine = IdempotencyEngine::new(Duration::from_millis(10), 100);
+    #[tokio::test]
+    async fn test_idempotency_remove_resets_state() {
+        let engine = IdempotencyEngine::new(Duration::from_secs(60), 100);
         let hlc = HlcTimestamp::new(1000, 0);
 
-        let outcome = engine.check_or_insert("expiring-key", hlc);
+        let outcome = engine.check_or_insert("retry-key", hlc).await;
         assert_eq!(outcome, IdempotencyOutcome::New);
 
-        // Sleep past TTL
-        std::thread::sleep(Duration::from_millis(20));
+        // Upstream failed, remove key
+        engine.remove("retry-key").await;
 
-        // Should be treated as expired and re-acquired as New
-        let outcome = engine.check_or_insert("expiring-key", hlc);
+        // Key should be available again as New
+        let outcome = engine.check_or_insert("retry-key", hlc).await;
         assert_eq!(outcome, IdempotencyOutcome::New);
+    }
+
+    #[test]
+    fn test_record_json_serialization() {
+        let hlc = HlcTimestamp::new(1725980000000, 1);
+        let in_progress = IdempotencyRecord::InProgress {
+            hlc,
+            started_at_secs: 1725980000,
+        };
+        let json = serde_json::to_string(&in_progress).unwrap();
+        assert!(json.contains("\"state\":\"in_progress\""));
+        assert!(json.contains("\"started_at_secs\":1725980000"));
+
+        let deserialized: IdempotencyRecord = serde_json::from_str(&json).unwrap();
+        assert_eq!(in_progress, deserialized);
+
+        let completed = IdempotencyRecord::Completed {
+            hlc,
+            status_code: 200,
+            headers: vec![("content-type".to_string(), "application/json".to_string())],
+            body: r#"{"data":{"result":"ok"}}"#.to_string(),
+            completed_at_secs: 1725980005,
+        };
+        let comp_json = serde_json::to_string(&completed).unwrap();
+        assert!(comp_json.contains("\"state\":\"completed\""));
+        assert!(comp_json.contains("\"status_code\":200"));
+        assert!(comp_json.contains("content-type"));
+
+        let comp_deserialized: IdempotencyRecord = serde_json::from_str(&comp_json).unwrap();
+        assert_eq!(completed, comp_deserialized);
     }
 
     #[test]

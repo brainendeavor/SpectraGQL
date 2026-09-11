@@ -63,12 +63,40 @@ fn main() -> Result<()> {
     // Composite Service -> Pingora
     // ------------------------------------------------------------------------
 
+    let idempotency_engine = match spectra_configuration.idempotency.backend {
+        crate::spectra_config::IdempotencyBackendType::Redis => {
+            let redis_addr = spectra_configuration
+                .idempotency
+                .addr
+                .as_deref()
+                .unwrap_or("127.0.0.1:6379");
+            log::info!("Initializing distributed Redis IdempotencyEngine at {}", redis_addr);
+            std::sync::Arc::new(crate::ratify::IdempotencyEngine::new_redis(
+                redis_addr,
+                std::time::Duration::from_secs(spectra_configuration.idempotency.ttl_secs),
+            ))
+        }
+        crate::spectra_config::IdempotencyBackendType::Memory => {
+            log::info!(
+                "Initializing in-memory IdempotencyEngine (TTL: {}s, max capacity: {})",
+                spectra_configuration.idempotency.ttl_secs,
+                spectra_configuration.idempotency.max_capacity,
+            );
+            std::sync::Arc::new(crate::ratify::IdempotencyEngine::new(
+                std::time::Duration::from_secs(spectra_configuration.idempotency.ttl_secs),
+                spectra_configuration.idempotency.max_capacity,
+            ))
+        }
+    };
+
     let named_upstreams = spectra_configuration.resolve_all_upstreams()?;
-    let mut composite_service = CompositeService::new().with_routing(
-        named_upstreams,
-        spectra_configuration.gql.mode_a.clone(),
-        spectra_configuration.gql.routes.clone(),
-    );
+    let mut composite_service = CompositeService::new()
+        .with_routing(
+            named_upstreams,
+            spectra_configuration.gql.mode_a.clone(),
+            spectra_configuration.gql.routes.clone(),
+        )
+        .with_idempotency_engine(idempotency_engine);
     composite_service.add_service_config(gql_service);
     composite_service.add_service_config(rest_service);
     let mut proxy_service =
