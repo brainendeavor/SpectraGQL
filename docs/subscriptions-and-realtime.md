@@ -114,7 +114,7 @@ Subscriptions are the missing link that makes **Mode B (Pure CQRS / Asynchronous
 2. Client Mutates:
    mutation { submitOrder(id: "order-99", items: [...]) }
    └─> SpectraGQL returns immediate Mode B receipt in <2ms:
-       { data: { submitOrder: { status: "ACCEPTED", commandId: "cmd-abc" } } }
+       { data: { submitOrder: { status: "ACCEPTED", commandId: "cmd-abc", hlc: "1789151435592.000001" } } }
 
 3. UI displays: "Order Submitted (Processing...)"
 

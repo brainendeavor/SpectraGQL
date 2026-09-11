@@ -50,14 +50,15 @@ Rather than retreating from GraphQL or building ad-hoc orchestrators inside reso
                                        │
                                        │  POST /graphql (Mutation)
                                        ▼
-                       ┌───────────────────────────────┐
-                       │   SpectraGQL Proxy (Pingora)  │
-                       │   Wire-speed L7 Layer in Rust │
-                       └───────────────┬───────────────┘
-                                       │
-                    Ratification Layer │ [Idempotency Key Check]
-                                       │ [Causal Ordering via HLC]
-                                       ▼
+                        ┌───────────────────────────────┐
+                        │   SpectraGQL Proxy (Pingora)  │
+                        │   Wire-speed L7 Layer in Rust │
+                        └───────────────┬───────────────┘
+                                        │
+                    Edge Guards & Filters │ [Idempotency Key Check]
+                                          │ [Causal Ordering via HLC]
+                                          │ [Type-State PII Redaction]
+                                          ▼
                        ┌───────────────────────────────┐
                        │      Durable Event Log        │
                        │ (NATS JetStream / Kafka /     │

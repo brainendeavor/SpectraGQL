@@ -29,17 +29,27 @@ GraphQL inherently provides the architectural boundary needed for **Command Quer
                       Query   │                      Mutation │ (Command)
                     (Read)    ▼                               ▼
                ┌──────────────────────┐             ┌───────────────────┐
-               │ Legacy API / Backend │             │  Ratification     │
-               │ Query Service / Read │             │  - Idempotency    │
-               │ Cache / Replicas     │             │  - Schema Rules   │
-               └──────────────────────┘             │  - WASM / Policy  │
-                                                    └─────────┬─────────┘
-                                                              │ Dispatch
+               │ Legacy API / Backend │             │ Edge Guards:      │
+               │ Query Service / Read │             │ - Syntax & Depth  │
+               │ Cache / Replicas     │             │ - Idempotency Lock│
+               │                      │             │ - Type-State PII  │
+               └──────────────────────┘             └─────────┬─────────┘
+                                                              │
+                                     ┌────────────────────────┴────────────────────────┐
+                                     │                                                 │
+                                     ▼                                                 ▼
+                         [Mode A: Sync Forwarding]                         [Mode B: Edge Command]
+                         - Commit to Primary Backend                       - Immediate Command Receipt
+                         - Post-Response Event Dispatch                      {"status": "ACCEPTED"}
+                                     │                                                 │
+                                     └────────────────────────┬────────────────────────┘
+                                                              │ Atomic EventSink
                                                               ▼
                                                     ┌───────────────────┐
                                                     │ Event Backbone    │
-                                                    │ NATS / Iggy /     │
-                                                    │ Kafka / SierraDB  │
+                                                    │ NATS / Kafka /    │
+                                                    │ Redis / Iggy /    │
+                                                    │ SierraDB / Rabbit │
                                                     └─────────┬─────────┘
                                                               │
                                                               ▼
@@ -157,127 +167,132 @@ In the SpectraGQL paradigm:
 
 To bridge the gap between legacy systems and this event-driven future, SpectraGQL supports two core operational modes (for a deep-dive sequence analysis and configuration examples, see [Modes of Operation](modes-of-operation.md)):
 
-### Mode A: The Workhorse Gateway (Pragmatic Event Choreography — Flagship)
-- **Mechanism:** SpectraGQL intercepts the mutation, forwards the HTTP request to the primary backend service for synchronous local execution, and—upon receiving an HTTP 2xx response—dispatches the completed domain event (stashed request arguments + response data) to the event backbone.
+### Mode A: The Workhorse Gateway (`ExecutionStrategy::SyncUpstreamExecution` — Flagship)
+- **Mechanism:** SpectraGQL intercepts the mutation, forwards the HTTP request to the primary backend service for synchronous local execution, and—upon receiving an HTTP 2xx response—dispatches the completed domain event (`CompletionEvent` with stashed request arguments + response data) to the event backbone.
 - **Client Experience:** 100% transparent. The client sends a traditional GraphQL mutation, receives its expected synchronous response, and enjoys automatic Apollo/Relay cache normalization.
 - **Value Proposition:** **Zero code changes required.** Allows core resolvers to do one fast write and eliminates synchronous cross-service fan-out. Downstream subsystems (loyalty, notifications, search indexing) react choreographically off NATS/Iggy/SierraDB.
 - **Dispatch Policies:** Supports `response_only` (default: 1 event per success, zero phantom writes), `response_with_failure` (emits stashed request on timeout/error), and `raw_audit` (dual ingress/egress).
 
-### Mode B: The Event-Native Gateway (Pure Asynchronous CQRS)
-- **Mechanism:** SpectraGQL intercepts the mutation, ratifies it, and publishes it directly to the event backbone. It terminates the HTTP request immediately, returning a deterministic **Command Receipt**:
+### Mode B: The Event-Native Gateway (`ExecutionStrategy::AsyncEdgeCommand` — Pure Asynchronous CQRS)
+- **Mechanism:** SpectraGQL intercepts the mutation, executes guards, and publishes it directly to the event backbone. It terminates the HTTP request immediately at the edge, returning a deterministic **Command Receipt**:
   ```json
   {
     "data": {
       "submitOrder": {
-        "commandId": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
-        "status": "ACCEPTED",
-        "timestamp": "2026-09-08T20:50:00Z"
+        "commandId": "0191b2c4-8840-7ac3-8a02-0e9f1a0e882a",
+        "hlc": "1789151435592.000001",
+        "status": "ACCEPTED"
       }
     }
   }
   ```
+- **Error Handling:** If broker dispatch fails, SpectraGQL returns `"status": "DISPATCH_FAILED"`, attaches header `x-spectra-dispatch: failed`, and immediately evicts the in-flight idempotency key so the client can retry.
 - **Client Experience:** The client is designed for eventual consistency. State updates are observed via GraphQL Subscriptions (streaming from the event bus), WebSockets, or background polling.
 - **Value Proposition:** True CQRS for high-throughput ingestion (IoT, gaming, financial order streams) and long-running sagas (bulk imports, media encoding).
 
 ### Mode C: "The Mirage" (Evaluated & Retired — "Not Today")
 - **Status:** Officially archived. Mode C attempted to use NATS request-reply to hold synchronous HTTP connections while event workers processed in the background. It created an uncanny valley: retaining all the timeout vulnerabilities of synchronous HTTP while incurring the full operational weight of an event broker. Mode A is strictly superior for synchronous clients.
 
-> **Hybrid Routing Strategy:** SpectraGQL enables per-route configuration. 95% of mutations run in **Mode A**, while specialized high-volume or long-running operations run in **Mode B**.
+> **Hybrid Routing Strategy:** SpectraGQL enables per-route configuration via `ExecutionStrategy`. 95% of mutations run in **Mode A**, while specialized high-volume or long-running operations run in **Mode B**.
 
 ---
 
 ## 4. The Request Pipeline & Engine Components
 
-Built on Cloudflare's **Pingora** framework, SpectraGQL operates as a multi-stage, zero-allocation pipeline:
+Built on Cloudflare's **Pingora** framework, SpectraGQL decomposes the Layer 7 proxy into a composable, sequential filter pipeline:
 
 ```
 Session Ingest (Pingora)
        │
        ▼
-┌────────────────────────────────────────────────────────┐
-│ 1. Early Route & Filter                                │
-│    - Fast path matching (matchit Router)               │
-│    - Differentiate GQL vs. REST traffic                │
-└──────────────────────┬─────────────────────────────────┘
-                       ▼
-┌────────────────────────────────────────────────────────┐
-│ 2. Request Ratification Engine                         │
-│    - High-speed AST parsing (Operation & Arguments)    │
-│    - Idempotency verification (Deduplication)          │
-│    - Schema compliance & deprecation diagnostics       │
-│    - Policy evaluation (WASM / Lua plugins)            │
-└──────────────────────┬─────────────────────────────────┘
-                       ▼
-         ┌─────────────┴─────────────┐
-   [Query / Read]              [Mutation / Command]
-         │                           │
-         ▼                           ▼
-┌───────────────────┐       ┌────────────────────────────┐
-│ 3a. Upstream Peer │       │ 3b. Dispatch Layer         │
-│     Direct proxy  │       │     Pluggable Adapters:    │
-│     to read API,  │       │     - NATS JetStream       │
-│     cache, or     │       │     - Apache Iggy          │
-│     replicas      │       │     - SierraDB             │
-└────────┬──────────┘       │     - Apache Kafka         │
-         │                  └──────────────┬─────────────┘
-         │                                 │
-         │   ┌─────────────────────────────┘
-         │   │ (Mode A: Also send upstream; Mode B: Return Receipt)
-         ▼   ▼
-┌────────────────────────────────────────────────────────┐
-│ 4. Response Ratification & Capture                     │
-│    - Inject correlation headers (x-spectra-request-id)  │
-│    - Capture response payload & status                 │
-│    - Dispatch response telemetry / audit event         │
-└────────────────────────────────────────────────────────┘
+[ 1. HealthFilter ]      ──(hit /healthz, /livez)──► Return 200 OK
+       │ (continue)
+[ 2. AdminFilter ]       ──(hit /admin)────────────► Return SPA / JSON API (CIDR Allowlist)
+       │ (continue)
+[ 3. WebSocketFilter ]   ──(Upgrade: websocket)────► graphql-ws Duplex Pump
+       │ (continue)
+[ 4. RequestGuardFilter] ──(malformed / toxic)─────► Reject 400 Bad Request
+       │ (sanitized & verified)
+[ 5. IdempotencyFilter ] ──(in-flight conflict)────► Reject 409 Conflict
+       │                 ──(cached replay)─────────► Return Cached Replay (0 Upstream Hops)
+       │ (new key)
+[ 6. StrategyRouter ]
+       ├── ExecutionStrategy::AsyncEdgeCommand  ──► Commit to EventSink & Return Command Receipt
+       └── ExecutionStrategy::SyncUpstreamExecution:
+                │
+                ▼
+           [ Proxy to Upstream Microservice ]
+                │
+                ▼
+           [ 7. ResponseGuardFilter ]  ──(PII leak / token)──► Reject 500
+                │
+                ▼
+           [ 8. TelemetryDispatcher ]  ──(logging phase)────► Publish CompletionEvent to EventSink
+                │
+                ▼
+           [ Complete Idempotency Cache & Return to Client ]
 ```
 
-### The Ratification Engine (Governance & Discipline)
-The Ratification layer provides the discipline missing in ad-hoc GraphQL setups:
-1. **Idempotency Enforcement:**
-   - Evaluates incoming `Idempotency-Key` headers or hashes `(client_id, operation_name, variables)`.
-   - Checks state against a cache (Redis or in-memory ring buffer) to reject duplicate executions and prevent double-writes caused by network retries.
-2. **Schema Drift & Deprecation Guardrails:**
-   - Detects when clients invoke mutations marked `@deprecated`.
-   - Logs or blocks breaking payload changes across system boundaries.
-3. **WASM & Lua Extension Hooks:**
-   - Lightweight execution sandbox (via Wasmtime or Extism for WASM, mlua for Lua).
-   - Allows platform teams to enforce tenant-isolation rules, inject authenticated claims into commands, or sanitize sensitive arguments (PII redaction) before dispatching to the event log.
+### Domain Guards & Type-State Safety
 
-### Pluggable Dispatch Adapters
-To avoid vendor lock-in while leveraging cutting-edge Rust technology, dispatchers implement a common trait:
+1. **Inbound RequestGuards (`RequestGuard`):**
+   - AST validation, depth & complexity checks, and required header validation before hitting upstreams.
+2. **Outbound ResponseGuards (`ResponseGuard`):**
+   - Body inspection preventing accidental PII leakage or sensitive token exposure to consumers.
+3. **Pluggable Rule Evaluator (`RuleEvaluator`):**
+   - Extensible policy enforcement port (`NativeRuleEvaluator` built-in; ready for WASM/Lua sandbox modules).
+4. **Compile-Time Type-State Security:**
+   - Tracks data safety through `RawPayload<T>` and `SanitizedPayload<T>`.
+   - `CompletionEvent.request` and event sinks accept **only** `SanitizedPayload<RequestInfo>`, guaranteeing that un-redacted credentials and tokens can never leak into Kafka, NATS, or event logs.
+5. **Idempotency Enforcement (`IdempotencyFilter`):**
+   - Evaluates incoming `Idempotency-Key` headers or hashes `(client_id, operation_name, variables)`.
+   - Rejects concurrent duplicate mutations with standard `409 Conflict` GraphQL errors, and replays completed mutations from cache with zero upstream calls.
+
+### Decoupled EventSink & Encoder Architecture
+
+To adhere to the Interface Segregation Principle (ISP) and prevent transport/serialization coupling, message brokers implement the atomic `EventSink` port:
 
 ```rust
 #[async_trait]
-pub trait DispatchAdapter: Send + Sync {
-    fn name(&self) -> &'static str;
-    async fn dispatch_command(&self, topic: &str, payload: &CommandPayload) -> Result<()>;
-    async fn dispatch_event(&self, topic: &str, payload: &EventPayload) -> Result<()>;
+pub trait EventSink: Send + Sync {
+    /// Publishes raw bytes to the destination topic / subject / stream.
+    async fn publish(&self, topic: &str, payload: &[u8]) -> pingora::Result<()>;
+}
+
+pub trait EventEncoder: Send + Sync {
+    fn encode_request(&self, request: &RequestInfo) -> pingora::Result<Vec<u8>>;
+    fn encode_completion(&self, completion: &CompletionEvent) -> pingora::Result<Vec<u8>>;
+    fn encode_sanitized_request(&self, request: &SanitizedPayload<RequestInfo>) -> pingora::Result<Vec<u8>>;
 }
 ```
 
-#### Supported Backends:
-1. **Apache Iggy:** Pure-Rust, cache-friendly streaming broker delivering sub-millisecond tail latencies and massive throughput.
-2. **SierraDB:** Native event-sourcing database engineered specifically for storing immutable event streams.
-3. **NATS JetStream:** Lightweight, cloud-native pub/sub, streaming, and request-reply engine.
-4. **Apache Kafka / Redpanda:** Ubiquitous enterprise event streaming platform.
-5. **Webhook Dispatch (`WebhookDispatch`):** Outbound HTTP POST dispatch for server-to-server integrations, notifying external partners or triggering third-party webhooks upon mutation ratification or command completion.
+#### Supported Broker Adapters:
+1. **NATS JetStream:** Cloud-native streaming and pub/sub with built-in persistence.
+2. **Apache Kafka / Redpanda:** Enterprise standard event streaming platform.
+3. **Redis Streams / Dragonfly / Valkey:** Lightweight in-memory streaming with persistent consumer groups.
+4. **RabbitMQ:** AMQP message broker integration.
+5. **Apache Iggy:** Pure-Rust, cache-friendly streaming broker delivering sub-millisecond tail latencies.
+6. **SierraDB:** Native event-sourcing database engineered specifically for immutable event streams.
+7. **Webhook Dispatch (`WebhookDispatch`):** Outbound HTTP POST dispatch for server-to-server integrations.
 
 ---
 
-## 5. Technical Modernization & Component Refactor
+## 5. Completed Architectural Modernization
 
-The initial prototype proved the viability of Pingora and Lua ratification. The next generation of SpectraGQL requires modernizing key components:
+The codebase has undergone a complete architectural modernization:
 
-1. **AST Parser Upgrade:**
-   - *Current:* `graphql-query` (designed for client-side AST generation).
-   - *Target:* **`apollo-parser`** or **`async-graphql-parser`**. These provide resilient, zero-copy, high-speed parsing that extracts operation types, operation names, variable definitions, and directives without allocations.
-2. **Response Ratification Lifecycle:**
-   - Fully wire `ratify_response` into Pingora's `response_body_filter` and `logging` hooks to allow downstream responses to dynamically trigger compensation events or audit logs.
-3. **Pluggable Dispatch Trait:**
-   - Decouple NATS-specific logic from the core pipeline into dynamic, configurable adapter modules (`NatsAdapter`, `IggyAdapter`, `KafkaAdapter`, `SierraAdapter`).
-4. **Configuration Cleanliness:**
-   - Consolidate per-service configurations into a unified schema supporting per-route dispatch targets, operational modes (Mode A vs Mode B), and ratification rules.
+1. **Core Library Target (`src/lib.rs`):**
+   - Extracted reusable library target exporting engine components and composable filters. Converted `main.rs` to a thin binary bootstrap.
+2. **God Object Decomposition (`src/proxy/filters/`):**
+   - Deconstructed the 1,038-line `CompositeServiceProxy` into single-responsibility pipeline filters (`HealthFilter`, `AdminFilter`, `IdempotencyFilter`, `StrategyRouter`, `TelemetryDispatcher`).
+3. **Guard Contracts & Rule Port (`src/guards/`):**
+   - Implemented `RequestGuard`, `ResponseGuard`, and `RuleEvaluator` trait ports with zero-overhead native rule execution.
+4. **Compile-Time Type-State Security (`src/payload/typestate.rs`):**
+   - Enforced `RawPayload<T>` to `SanitizedPayload<T>` type transitions. Eliminated PII risk in Mode B edge dispatch.
+5. **Strongly Typed Serde Error Envelopes (`src/payload/graphql_error.rs`):**
+   - Replaced all string-interpolated JSON format strings with strongly-typed `GraphQLErrorResponse` and `CommandReceipt` models.
+6. **Automated Integration Test Matrix:**
+   - Expanded test suite to **111 tests** across 9 dedicated test files under `tests/` with 100% pass rate and 0 warnings.
 
 ---
 

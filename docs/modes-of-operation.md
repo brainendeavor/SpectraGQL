@@ -9,14 +9,14 @@ This document defines the operational architecture supported by **SpectraGQL Pro
 
 ## Quick Comparison Matrix
 
-| Dimension | Mode A: The Workhorse Gateway (Pragmatic Proxy) | Mode B: The Event-Native Gateway (Pure CQRS) | Mode C: The Mirage ("Not Today") |
+| Dimension | Mode A: The Workhorse Gateway (`ExecutionStrategy::SyncUpstreamExecution`) | Mode B: The Event-Native Gateway (`ExecutionStrategy::AsyncEdgeCommand`) | Mode C: The Mirage ("Not Today") |
 | :--- | :--- | :--- | :--- |
 | **Primary Philosophy** | **Pragmatic Event Choreography** | **Pure Asynchronous CQRS** | **Compromise / Hybrid** |
 | **Status** | **Flagship (Recommended)** | **Specialized / Greenfield** | **Retired / Architectural Case Study** |
-| **Client Requirement** | **Unchanged (100% Transparent)**<br>Full Apollo/Relay cache normalization | **Async-Aware**<br>Expects receipt (`ACCEPTED`), listens via Subscription/WS | **Unchanged (Standard)**<br>Standard sync response |
+| **Client Requirement** | **Unchanged (100% Transparent)**<br>Full Apollo/Relay cache normalization | **Async-Aware**<br>Expects deterministic Command Receipt (`ACCEPTED`) | **Unchanged (Standard)**<br>Standard sync response |
 | **Backend Requirement** | **Standard HTTP Service / Microservice**<br>(Executes core write, returns entity) | **Event Consumer**<br>(Subscribes to broker, no HTTP needed) | **Event Consumer with Reply Inbox**<br>(Must compute selection set for reply) |
 | **Upstream HTTP Hop** | **Yes** (Fast local write in primary context) | **No** (Terminates immediately at edge) | **No** (Waits on broker inbox) |
-| **Event Bus Role** | Domain event stream for downstream microservices | Primary command queue & domain log | Command bus + ephemeral reply topic |
+| **Event Bus Role** | Domain event stream (`CompletionEvent`) for downstream microservices | Primary command queue & domain log | Command bus + ephemeral reply topic |
 | **Timeout Risk** | Dependent on core service SLA (typically < 100ms) | **Zero timeout risk** (Instant ACK) | Subject to worker SLA + broker latency |
 | **Cache Normalization** | **Fully preserved** (Standard GraphQL return) | **Bypassed** (Requires subscription glue) | **Preserved** (If worker computes selection set) |
 | **Adoption Target** | **Microservices & Brownfield**<br>Zero frontend changes, instant decoupling | **Bulk ingestion, IoT, Video, Long Sagas** | **N/A (Retired)** |
@@ -66,8 +66,8 @@ Different organizations have different risk tolerances regarding failures and in
 #### Option 2: Response-Only + In-Flight Stash (Failure / Timeout Emission)
 * **Mechanic:** Leverages SpectraGQL's built-in **`IdempotencyEngine`** memory stash:
   1. When a mutation arrives, the key, arguments, and HLC are registered in an in-memory ring buffer.
-  2. On HTTP 2xx: SpectraGQL emits `TerminalEvent::Success` and clears the stash.
-  3. On Upstream Timeout or Connection Drop: SpectraGQL automatically emits an explicit `TerminalEvent::Failure` (with reason `UPSTREAM_TIMEOUT` or `BACKEND_ERROR`) to a dead-letter or failure topic before returning an error to the client.
+  2. On HTTP 2xx: SpectraGQL emits `CompletionEvent` with `OperationOutcome::Success` and clears the stash.
+  3. On Upstream Timeout or Connection Drop: SpectraGQL automatically emits an explicit `CompletionEvent` with `OperationOutcome::Failed` (with reason `UPSTREAM_TIMEOUT` or `BACKEND_ERROR`) to a dead-letter or failure topic before returning an error to the client.
 * **Pros:** 
   * Best-in-class operational visibility without polluting the happy-path event stream.
   * Downstream recovery workers can detect abandoned or aborted mutations and trigger alerts or compensations.
@@ -83,19 +83,38 @@ Different organizations have different risk tolerances regarding failures and in
 ## Mode B: The Event-Native Gateway (Pure CQRS)
 
 ### The Concept
-Mode B is **pure, asynchronous CQRS**. Mutations are treated strictly as **Commands**. There is no upstream HTTP backend in the write path. SpectraGQL receives the mutation, ratifies it (verifying idempotency keys, schema constraints, and WASM policies), commits it to the event stream, and immediately returns a deterministic `202 Accepted` command receipt.
+Mode B (`ExecutionStrategy::AsyncEdgeCommand`) is **pure, asynchronous CQRS**. Mutations are treated strictly as **Commands**. There is no upstream HTTP backend in the write path. SpectraGQL receives the mutation, executes guards (validating syntax, depth, idempotency locks, and redacting PII via compile-time type-states), commits it to the event stream, and immediately returns a deterministic GraphQL command receipt:
+
+```json
+{
+  "data": {
+    "importCatalog": {
+      "commandId": "0191b2c4-8840-7ac3-8a02-0e9f1a0e882a",
+      "hlc": "1789151435592.000001",
+      "status": "ACCEPTED"
+    }
+  }
+}
+```
+
+### Dispatch Failure & Retry Resilience
+If the downstream broker is unreachable or fails to persist the command:
+1. SpectraGQL responds with `"status": "DISPATCH_FAILED"`.
+2. Adds header `x-spectra-dispatch: failed`.
+3. Evicts the in-flight idempotency lock from memory so client retries are not blocked by false conflict errors.
 
 ### Sequence Flow
 ```
 Client                     SpectraGQL Proxy                                                 Event Broker             Async Consumer / Projection
   │                              │                                                                │                               │
   │── 1. POST Mutation ─────────>│                                                                │                               │
-  │                              │── 2. Ratify & Parse                                            │                               │
-  │                              │── 3. Commit Command to Broker ────────────────────────────────>│                               │
+  │                              │── 2. RequestGuard & Type-State Sanitizer                       │                               │
+  │                              │── 3. Commit Sanitized Command to Broker ──────────────────────>│                               │
   │                              │<── 4. Broker ACK ──────────────────────────────────────────────│                               │
   │<── 5. Return Command Receipt ─│                                                                │                               │
   │   { status: ACCEPTED,        │                                                                │                               │
-  │     commandId: "uuid" }      │                                                                │── 6. Consume & Execute ──────>│
+  │     commandId: "uuid",       │                                                                │                               │
+  │     hlc: "time.counter" }    │                                                                │── 6. Consume & Execute ──────>│
   │                              │                                                                │                               │ (Updates DB / Read Model)
   │                              │                                                                │<── 7. Publish Domain Event ───│
   │                              │                                                                │
@@ -149,20 +168,30 @@ name = "core_graphql_backend"
 paths = "/graphql"
 ops_to_dispatch = "mutation"
 
-# Mode A: The Default Workhorse
+# Mode A default settings
 [gql.mode_a]
 enabled = true
-# Options: "response_only" (Option 1), "response_with_failure" (Option 2), "raw_audit" (Option 3)
+# Options: "response_only", "response_with_failure", "raw_audit"
 dispatch_policy = "response_with_failure"
 timeout_ms = 3000
 
-# Mode B: Per-route pure async override
-[gql.routes.bulk_import]
-path = "importCatalog"
-mode = "B"
+# Named upstreams for microservice routing
+[named_upstreams]
+inventory = "127.0.0.1:5001"
+crm = "127.0.0.1:5002"
+
+# Operation-level route overrides (ExecutionStrategy)
+[[routes]]
+operation = "createReview"
+mode = "SyncUpstreamExecution" # Mode A: forward upstream + publish CompletionEvent
+upstream = "crm"
+
+[[routes]]
+operation = "importCatalog"
+mode = "AsyncEdgeCommand"      # Mode B: edge-terminated command receipt
 receipt_status = "ACCEPTED"
 
-# Event Broker Dispatch
+# Event Broker Dispatch (Atomic EventSink)
 [dispatch]
 method = "NATS"
 addr = "127.0.0.1:4222"
