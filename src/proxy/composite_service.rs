@@ -1,6 +1,10 @@
 use crate::clock::HlcClock;
 use crate::dispatch::DispatchHandler;
-use crate::payload::{RequestInfo, ResponseBody, ResponseInfo, TerminalEvent};
+use crate::payload::ResponseBody;
+use crate::proxy::filters::{
+    AdminFilter, HealthFilter, IdempotencyFilter, IdempotencyInterceptResult, StrategyRouter,
+    TelemetryDispatcher,
+};
 use crate::proxy::SpectraProxyService;
 use crate::proxy::{
     ExtraServiceParams, PathRouter, ProxyService, REQUEST_ID_HEADER, SpectraProxyCtx,
@@ -21,7 +25,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use super::ServiceHandle;
-use crate::spectra_config::{ModeADispatchPolicy, SpectraModeAConfig, SpectraRouteConfig};
+use crate::spectra_config::{SpectraModeAConfig, SpectraRouteConfig};
 
 #[derive(Clone)]
 pub struct ServiceConfig {
@@ -148,19 +152,6 @@ impl CompositeServiceProxy {
         }
     }
 
-    fn log_dispatch_result_error(&self, ctx: &SpectraProxyCtx, result: pingora::Result<()>) -> bool {
-        if let Err(e) = result {
-            log::error!(
-                "DISPATCH failed. {} request_topic: {}\n{:?}",
-                e,
-                ctx.request_topic,
-                ctx.buffer
-            );
-            return false;
-        }
-        return true;
-    }
-
     #[allow(dead_code)]
     pub fn subscription_hub(&self) -> Arc<crate::subscriptions::SubscriptionHub> {
         self.subscription_hub.clone()
@@ -282,9 +273,9 @@ impl CompositeServiceProxy {
 
 // TODO: absorb SpectraProxyCtx
 pub struct CompositeServiceProxyCtx {
-    proxy_context: SpectraProxyCtx,
-    service_handle: Option<ServiceHandle>,
-    service: Option<Arc<ProxyService>>,
+    pub proxy_context: SpectraProxyCtx,
+    pub service_handle: Option<ServiceHandle>,
+    pub service: Option<Arc<ProxyService>>,
 }
 
 #[async_trait]
@@ -327,19 +318,13 @@ impl ProxyHttp for CompositeServiceProxy {
         let path = req.uri.path();
 
         // 1. Health check probes do not need an upstream service
-        if path == "/healthz" || path == "/livez" {
+        if HealthFilter::is_health_probe(path) {
             return Ok(());
         }
 
         // 2. Admin Engine requests do not need an upstream service
-        if let Some(admin) = &self.admin_engine {
-            if admin.config.enabled {
-                if path == admin.config.path_prefix
-                    || path.starts_with(&format!("{}/", admin.config.path_prefix))
-                {
-                    return Ok(());
-                }
-            }
+        if AdminFilter::is_admin_request(self.admin_engine.as_ref(), path) {
+            return Ok(());
         }
 
         match self.get_service_config_and_handle_by_path(path) {
@@ -388,52 +373,21 @@ impl ProxyHttp for CompositeServiceProxy {
     where
         Self::CTX: Send + Sync,
     {
-        let path = session.req_header().uri.path();
-
         // 1. Health check probes
-        if path == "/healthz" {
-            let mut header = pingora::http::ResponseHeader::build(200, None).unwrap();
-            let _ = header.insert_header("content-type", "application/json");
-            session.set_keepalive(None);
-            session.write_response_header(Box::new(header), false).await?;
-            let body = serde_json::json!({
-                "status": "ok",
-                "service": "spectragql",
-                "version": env!("CARGO_PKG_VERSION")
-            });
-            session
-                .write_response_body(Some(bytes::Bytes::from(body.to_string())), true)
-                .await?;
-            return Ok(true);
-        }
-
-        if path == "/livez" {
-            let mut header = pingora::http::ResponseHeader::build(200, None).unwrap();
-            let _ = header.insert_header("content-type", "application/json");
-            session.set_keepalive(None);
-            session.write_response_header(Box::new(header), false).await?;
-            let body = serde_json::json!({
-                "status": "live",
-                "gateway": "ready",
-                "broker": "connected"
-            });
-            session
-                .write_response_body(Some(bytes::Bytes::from(body.to_string())), true)
-                .await?;
+        if HealthFilter::handle(session).await? {
             return Ok(true);
         }
 
         // 2. Admin Engine routing
-        if let Some(admin) = &self.admin_engine {
-            if admin.config.enabled {
-                if path == admin.config.path_prefix
-                    || path.starts_with(&format!("{}/", admin.config.path_prefix))
-                {
-                    return admin
-                        .handle_request(session, &self.idempotency_engine, &self.subscription_hub)
-                        .await;
-                }
-            }
+        if AdminFilter::handle(
+            session,
+            self.admin_engine.as_ref(),
+            &self.idempotency_engine,
+            &self.subscription_hub,
+        )
+        .await?
+        {
+            return Ok(true);
         }
 
         // 3. Check for WebSocket Subscription Upgrade
@@ -466,43 +420,24 @@ impl ProxyHttp for CompositeServiceProxy {
             log::warn!("Failed to append x-spectra-hlc: {}", e);
         }
 
-        // Check for explicit Idempotency-Key in request headers
-        if let Some(key) = crate::ratify::IdempotencyEngine::extract_idempotency_key(&session.req_header().headers) {
-            match self.idempotency_engine.check_or_insert(&key, ctx.proxy_context.hlc).await {
-                crate::ratify::IdempotencyOutcome::Conflict { hlc } => {
-                    log::warn!("Idempotency conflict for key: {}, in-flight hlc: {}", key, hlc);
-                    let mut header = pingora::http::ResponseHeader::build(409, None).unwrap();
-                    let _ = header.insert_header("content-type", "application/json");
-                    let _ = header.insert_header(REQUEST_ID_HEADER, ctx.proxy_context.request_id.to_string());
-                    let _ = header.insert_header("x-spectra-hlc", ctx.proxy_context.hlc.to_compact_string());
-                    let body = format!(
-                        r#"{{"errors":[{{"message":"A mutation with idempotency key '{}' is currently in flight","extensions":{{"code":"CONFLICT","hlc":"{}"}}}}]}}"#,
-                        key, hlc.to_compact_string()
-                    );
-                    session.set_keepalive(None);
-                    session.write_response_header(Box::new(header), false).await?;
-                    session.write_response_body(Some(bytes::Bytes::from(body)), true).await?;
-                    return Ok(true);
-                }
-                crate::ratify::IdempotencyOutcome::Replay { status_code, headers, body, .. } => {
-                    log::info!("Idempotency replay for key: {}", key);
-                    ctx.proxy_context.is_replay = true;
-                    let mut header = pingora::http::ResponseHeader::build(status_code, None).unwrap();
-                    for (k, v) in headers {
-                        let _ = header.insert_header(k, v);
-                    }
-                    let _ = header.insert_header(crate::ratify::idempotency::REPLAY_HEADER, "true");
-                    let _ = header.insert_header(REQUEST_ID_HEADER, ctx.proxy_context.request_id.to_string());
-                    let _ = header.insert_header("x-spectra-hlc", ctx.proxy_context.hlc.to_compact_string());
-                    session.set_keepalive(None);
-                    session.write_response_header(Box::new(header), false).await?;
-                    session.write_response_body(Some(bytes::Bytes::from(body)), true).await?;
-                    return Ok(true);
-                }
-                crate::ratify::IdempotencyOutcome::New => {
-                    ctx.proxy_context.idempotency_key = Some(key);
-                }
+        // 4. Check for explicit Idempotency-Key in request headers
+        match IdempotencyFilter::handle_explicit_key(
+            session,
+            &self.idempotency_engine,
+            &ctx.proxy_context.request_id,
+            ctx.proxy_context.hlc,
+        )
+        .await?
+        {
+            IdempotencyInterceptResult::Conflict => return Ok(true),
+            IdempotencyInterceptResult::Replay => {
+                ctx.proxy_context.is_replay = true;
+                return Ok(true);
             }
+            IdempotencyInterceptResult::NewKey(k) => {
+                ctx.proxy_context.idempotency_key = Some(k);
+            }
+            IdempotencyInterceptResult::None => {}
         }
 
         // Enable retry buffering and read request body if POST
@@ -515,18 +450,17 @@ impl ProxyHttp for CompositeServiceProxy {
 
         if !ctx.proxy_context.buffer.is_empty() {
             if let Ok(body_str) = std::str::from_utf8(&ctx.proxy_context.buffer) {
-                let service = match ctx.service.as_ref() {
-                    Some(s) => s,
+                let (request_protocol, dispatch_method) = match ctx.service.as_ref() {
+                    Some(s) => (s.get_request_protocol().clone(), s.get_dispatch_method().clone()),
                     None => return Ok(false),
                 };
 
-                if let Ok(request_info) = service.get_request_protocol().ratify_request(
+                if let Ok(request_info) = request_protocol.ratify_request(
                     ctx.proxy_context.request_id,
                     ctx.proxy_context.hlc,
                     session.req_header().as_owned_parts(),
                     body_str,
                 ) {
-                    let dispatch_method = service.get_dispatch_method();
                     ctx.proxy_context.request_topic =
                         dispatch_method.get_dispatch_topic(&request_info);
                     ctx.proxy_context.request_info = Some(request_info.clone());
@@ -544,151 +478,62 @@ impl ProxyHttp for CompositeServiceProxy {
                             .headers
                             .get("x-forwarded-for")
                             .and_then(|v| v.to_str().ok())
-                            .unwrap_or("client");
+                            .unwrap_or("client")
+                            .to_string();
                         let op_name = request_info
                             .gql
                             .as_ref()
                             .and_then(|g| g.operation_name.as_deref());
-                        let fingerprint = crate::ratify::IdempotencyEngine::compute_fingerprint(
-                            client_id,
+                        match IdempotencyFilter::handle_fingerprint(
+                            session,
+                            &self.idempotency_engine,
+                            &ctx.proxy_context.request_id,
+                            ctx.proxy_context.hlc,
+                            &client_id,
                             op_name,
                             body_str,
-                        );
-                        match self.idempotency_engine.check_or_insert(&fingerprint, ctx.proxy_context.hlc).await {
-                            crate::ratify::IdempotencyOutcome::Conflict { hlc } => {
-                                log::warn!("Idempotency conflict for fingerprint: {}, in-flight hlc: {}", fingerprint, hlc);
-                                let mut header = pingora::http::ResponseHeader::build(409, None).unwrap();
-                                let _ = header.insert_header("content-type", "application/json");
-                                let _ = header.insert_header(REQUEST_ID_HEADER, ctx.proxy_context.request_id.to_string());
-                                let _ = header.insert_header("x-spectra-hlc", ctx.proxy_context.hlc.to_compact_string());
-                                let body = format!(
-                                    r#"{{"errors":[{{"message":"A mutation with idempotency key is currently in flight","extensions":{{"code":"CONFLICT","hlc":"{}"}}}}]}}"#,
-                                    hlc.to_compact_string()
-                                );
-                                session.set_keepalive(None);
-                                session.write_response_header(Box::new(header), false).await?;
-                                session.write_response_body(Some(bytes::Bytes::from(body)), true).await?;
-                                return Ok(true);
-                            }
-                            crate::ratify::IdempotencyOutcome::Replay { status_code, headers, body, .. } => {
-                                log::info!("Idempotency replay for fingerprint");
+                        )
+                        .await?
+                        {
+                            IdempotencyInterceptResult::Conflict => return Ok(true),
+                            IdempotencyInterceptResult::Replay => {
                                 ctx.proxy_context.is_replay = true;
-                                let mut header = pingora::http::ResponseHeader::build(status_code, None).unwrap();
-                                for (k, v) in headers {
-                                    let _ = header.insert_header(k, v);
-                                }
-                                let _ = header.insert_header(crate::ratify::idempotency::REPLAY_HEADER, "true");
-                                let _ = header.insert_header(REQUEST_ID_HEADER, ctx.proxy_context.request_id.to_string());
-                                let _ = header.insert_header("x-spectra-hlc", ctx.proxy_context.hlc.to_compact_string());
-                                session.set_keepalive(None);
-                                session.write_response_header(Box::new(header), false).await?;
-                                session.write_response_body(Some(bytes::Bytes::from(body)), true).await?;
                                 return Ok(true);
                             }
-                            crate::ratify::IdempotencyOutcome::New => {
-                                ctx.proxy_context.idempotency_key = Some(fingerprint);
+                            IdempotencyInterceptResult::NewKey(k) => {
+                                ctx.proxy_context.idempotency_key = Some(k);
                             }
+                            IdempotencyInterceptResult::None => {}
                         }
                     }
 
-                    // Check route overrides
-                    let matched_route = request_info.gql.as_ref().and_then(|gql| {
-                        self.routes.values().find(|r| gql.matches_operation(&r.operation))
-                    });
-
-                    if let Some(route) = matched_route {
+                    // Check route overrides using StrategyRouter
+                    if let Some(route) = StrategyRouter::match_route(&self.routes, &request_info) {
                         if route.mode.is_async_edge_command() {
-                            log::info!("Executing Mode B edge termination for operation: {}", route.operation);
-                            ctx.proxy_context.is_mode_b_terminated = true;
-
-                            // Commit command to event broker
-                            let dispatch_result = dispatch_method.dispatch_request_info(&request_info).await;
-                            let dispatch_ok = self.log_dispatch_result_error(&ctx.proxy_context, dispatch_result);
-
-                            let receipt_status = if dispatch_ok {
-                                route.receipt_status.as_str()
-                            } else {
-                                "DISPATCH_FAILED"
-                            };
-
-                            // Synthesize deterministic Command Receipt
-                            let field_name = request_info
-                                .gql
-                                .as_ref()
-                                .and_then(|g| g.root_fields.first().cloned())
-                                .or_else(|| request_info.gql.as_ref().and_then(|g| g.operation_name.clone()))
-                                .unwrap_or_else(|| route.operation.clone());
-
-                            let receipt_json = generate_command_receipt(
-                                &field_name,
-                                &ctx.proxy_context.request_id,
-                                &ctx.proxy_context.hlc,
-                                receipt_status,
-                            );
-                            let receipt_body = receipt_json.to_string();
-
-                            if dispatch_ok {
-                                // Complete idempotency tracking
-                                if let Some(key) = ctx.proxy_context.idempotency_key.as_ref() {
-                                    let mut fake_headers = http::HeaderMap::new();
-                                    fake_headers.insert("content-type", "application/json".parse().unwrap());
-                                    fake_headers.insert(REQUEST_ID_HEADER, ctx.proxy_context.request_id.to_string().parse().unwrap());
-                                    fake_headers.insert("x-spectra-hlc", ctx.proxy_context.hlc.to_compact_string().parse().unwrap());
-                                    self.idempotency_engine.complete(key, ctx.proxy_context.hlc, 200, &fake_headers, &receipt_body).await;
-                                }
-                            } else {
-                                // Dispatch failed: remove in-progress idempotency key so client can retry
-                                if let Some(key) = ctx.proxy_context.idempotency_key.as_ref() {
-                                    self.idempotency_engine.remove(key).await;
-                                }
-                            }
-
-                            let mut header = pingora::http::ResponseHeader::build(200, None).unwrap();
-                            let _ = header.insert_header("content-type", "application/json");
-                            let _ = header.insert_header(REQUEST_ID_HEADER, ctx.proxy_context.request_id.to_string());
-                            let _ = header.insert_header("x-spectra-hlc", ctx.proxy_context.hlc.to_compact_string());
-                            if !dispatch_ok {
-                                let _ = header.insert_header("x-spectra-dispatch", "failed");
-                            }
-
-                            session.set_keepalive(None);
-                            session.write_response_header(Box::new(header), false).await?;
-                            session.write_response_body(Some(bytes::Bytes::from(receipt_body)), true).await?;
-
-                            return Ok(true);
+                            return StrategyRouter::handle_mode_b_edge(
+                                session,
+                                ctx,
+                                route,
+                                &request_info,
+                                &dispatch_method,
+                                &self.idempotency_engine,
+                            )
+                            .await;
                         }
 
-                        // Mode A with specific upstream override
-                        if let Some(upstream_name) = &route.upstream {
-                            if let Some(addr) = self.named_upstreams.get(upstream_name) {
-                                log::info!(
-                                    "Mode A route override: op '{}' routing to microservice '{}' ({})",
-                                    route.operation,
-                                    upstream_name,
-                                    addr
-                                );
-                                ctx.proxy_context.target_upstream_addr = Some(*addr);
-                            } else {
-                                log::warn!(
-                                    "Named upstream '{}' not found in config for op '{}', using default",
-                                    upstream_name,
-                                    route.operation
-                                );
-                            }
+                        if let Some(addr) =
+                            StrategyRouter::resolve_mode_a_upstream(route, &self.named_upstreams)
+                        {
+                            ctx.proxy_context.target_upstream_addr = Some(addr);
                         }
                     }
 
-                    // Mode A dispatch policy handling
-                    match ctx.proxy_context.dispatch_policy {
-                        ModeADispatchPolicy::RawAudit => {
-                            let dispatch_result = dispatch_method.dispatch_request_info(&request_info).await;
-                            self.log_dispatch_result_error(&ctx.proxy_context, dispatch_result);
-                        }
-                        ModeADispatchPolicy::ResponseOnly
-                        | ModeADispatchPolicy::ResponseWithFailure => {
-                            // Defer dispatch until response logging
-                        }
-                    }
+                    StrategyRouter::handle_mode_a_dispatch_policy(
+                        ctx.proxy_context.dispatch_policy,
+                        &request_info,
+                        &dispatch_method,
+                    )
+                    .await;
                 }
             }
         }
@@ -776,154 +621,24 @@ impl ProxyHttp for CompositeServiceProxy {
     where
         Self::CTX: Send + Sync,
     {
-        if ctx.proxy_context.is_replay {
-            log::info!("Idempotent replay served; skipping event dispatch.");
-            ctx.proxy_context.buffer.clear();
-            return;
-        }
-
-        if ctx.proxy_context.is_mode_b_terminated {
-            log::info!("Mode B command receipt completed; edge event already dispatched.");
-            ctx.proxy_context.buffer.clear();
-            return;
-        }
-
-        let service = match ctx.service.as_ref() {
-            Some(s) => s,
+        let dispatch_method = match ctx.service.as_ref() {
+            Some(s) => s.get_dispatch_method().clone(),
             None => return,
         };
-        let dispatch_method = service.get_dispatch_method();
 
-        let duration_ms = ctx.proxy_context.start_time.elapsed().as_millis() as u64;
-        let request_id = ctx.proxy_context.request_id;
-        let hlc = ctx.proxy_context.hlc;
-
-        let request_info = ctx.proxy_context.request_info.take().unwrap_or_else(|| {
-            RequestInfo::new(request_id, hlc, session.req_header().as_owned_parts())
-        });
-
-        let op_name = request_info.gql.as_ref().and_then(|g| g.operation_name.clone());
-
-        match e {
-            Some(error) => {
-                if let Some(key) = ctx.proxy_context.idempotency_key.as_ref() {
-                    self.idempotency_engine.remove(key).await;
-                }
-                if ctx.proxy_context.dispatch_policy == ModeADispatchPolicy::ResponseOnly {
-                    log::info!("Mode A response_only: suppressing event dispatch on connection error: {}", error);
-                } else {
-                    let terminal_event = TerminalEvent::failure(
-                        request_id,
-                        hlc,
-                        duration_ms,
-                        op_name,
-                        request_info,
-                        None,
-                        error.to_string(),
-                    );
-                    let failed_topic = format!("{}.failed", ctx.proxy_context.request_topic);
-                    let dispatch_result = dispatch_method
-                        .dispatch_terminal_event(&failed_topic, &terminal_event)
-                        .await;
-                    self.log_dispatch_result_error(&ctx.proxy_context, dispatch_result);
-                }
-            }
-            None => {
-                let http_response_headers = match ctx.proxy_context.response_parts.as_ref() {
-                    Some(parts) => parts.headers.clone(),
-                    None => http::HeaderMap::new(),
-                };
-                let status_code = ctx.proxy_context.response_parts.as_ref().map(|p| p.status);
-                let response_body = ctx
-                    .proxy_context
-                    .response_body
-                    .take()
-                    .unwrap_or_else(|| ResponseBody::new(&http_response_headers, ""));
-
-                let is_http_err = status_code
-                    .map(|s| s.is_client_error() || s.is_server_error())
-                    .unwrap_or(false);
-
-                if is_http_err {
-                    if let Some(key) = ctx.proxy_context.idempotency_key.as_ref() {
-                        self.idempotency_engine.remove(key).await;
-                    }
-                    if ctx.proxy_context.dispatch_policy == ModeADispatchPolicy::ResponseOnly {
-                        log::info!(
-                            "Mode A response_only: suppressing event dispatch on HTTP error: {}",
-                            status_code.unwrap()
-                        );
-                    } else {
-                        let response_info = ResponseInfo::new(
-                            request_id,
-                            hlc,
-                            response_body,
-                            http_response_headers,
-                        );
-                        let terminal_event = TerminalEvent::failure(
-                            request_id,
-                            hlc,
-                            duration_ms,
-                            op_name,
-                            request_info,
-                            Some(response_info),
-                            format!("HTTP {}", status_code.unwrap()),
-                        );
-                        let failed_topic = format!("{}.failed", ctx.proxy_context.request_topic);
-                        let dispatch_result = dispatch_method
-                            .dispatch_terminal_event(&failed_topic, &terminal_event)
-                            .await;
-                        self.log_dispatch_result_error(&ctx.proxy_context, dispatch_result);
-                    }
-                } else {
-                    // Complete idempotency tracking for successful response
-                    if let Some(key) = ctx.proxy_context.idempotency_key.as_ref() {
-                        let status_u16 = status_code.map(|s| s.as_u16()).unwrap_or(200);
-                        let body_str = response_body.text.as_deref().unwrap_or_else(|| response_body.json.get());
-                        self.idempotency_engine.complete(key, hlc, status_u16, &http_response_headers, body_str).await;
-                    }
-
-                    let response_info = ResponseInfo::new(
-                        request_id,
-                        hlc,
-                        response_body,
-                        http_response_headers,
-                    );
-                    let terminal_event = TerminalEvent::success(
-                        request_id,
-                        hlc,
-                        duration_ms,
-                        op_name,
-                        request_info,
-                        response_info,
-                    );
-                    let dispatch_result = dispatch_method
-                        .dispatch_terminal_event(&ctx.proxy_context.request_topic, &terminal_event)
-                        .await;
-                    self.log_dispatch_result_error(&ctx.proxy_context, dispatch_result);
-                }
-            }
-        }
-        ctx.proxy_context.buffer.clear();
+        TelemetryDispatcher::dispatch_logging(
+            session,
+            e,
+            ctx,
+            &dispatch_method,
+            &self.idempotency_engine,
+        )
+        .await;
     }
 }
 
-pub fn generate_command_receipt(
-    field_or_op: &str,
-    command_id: &uuid::Uuid,
-    hlc: &crate::clock::HlcTimestamp,
-    receipt_status: &str,
-) -> serde_json::Value {
-    serde_json::json!({
-        "data": {
-            field_or_op: {
-                "commandId": command_id.to_string(),
-                "status": receipt_status,
-                "hlc": hlc.to_compact_string(),
-            }
-        }
-    })
-}
+#[allow(unused_imports)]
+pub use crate::proxy::filters::strategy::generate_command_receipt;
 
 #[cfg(test)]
 mod tests {
