@@ -92,23 +92,23 @@ impl RabbitMqDispatch {
         payload: &str,
         properties: BasicProperties,
     ) -> pingora::Result<()> {
-        let conn = match self.get_connection().await {
-            Ok(c) => c,
-            Err(e) => {
-                log::error!("RabbitMqDispatch: connection error: {}", e);
-                return Ok(());
-            }
-        };
+        let conn = self.get_connection().await.map_err(|e| {
+            log::error!("RabbitMqDispatch: connection error: {}", e);
+            pingora::Error::explain(
+                pingora::ErrorType::ConnectError,
+                format!("RabbitMQ connection error: {}", e),
+            )
+        })?;
 
-        let channel = match conn.create_channel().await {
-            Ok(ch) => ch,
-            Err(e) => {
-                log::error!("RabbitMqDispatch: failed to open channel: {}", e);
-                return Ok(());
-            }
-        };
+        let channel = conn.create_channel().await.map_err(|e| {
+            log::error!("RabbitMqDispatch: failed to open channel: {}", e);
+            pingora::Error::explain(
+                pingora::ErrorType::ConnectError,
+                format!("RabbitMQ channel error: {}", e),
+            )
+        })?;
 
-        match channel
+        let confirm = channel
             .basic_publish(
                 ShortString::from(self.exchange.as_str()),
                 ShortString::from(routing_key),
@@ -117,25 +117,25 @@ impl RabbitMqDispatch {
                 properties,
             )
             .await
-        {
-            Ok(confirm) => {
-                let _ = confirm.await;
-                log::info!(
-                    "RabbitMqDispatch: published to ex:'{}' rk:'{}'",
-                    self.exchange,
-                    routing_key
-                );
-            }
-            Err(e) => {
+            .map_err(|e| {
                 log::error!(
                     "RabbitMqDispatch: publish to ex:'{}' rk:'{}' failed: {}",
                     self.exchange,
                     routing_key,
                     e
                 );
-            }
-        }
+                pingora::Error::explain(
+                    pingora::ErrorType::WriteError,
+                    format!("RabbitMQ publish error: {}", e),
+                )
+            })?;
 
+        let _ = confirm.await;
+        log::info!(
+            "RabbitMqDispatch: published to ex:'{}' rk:'{}'",
+            self.exchange,
+            routing_key
+        );
         Ok(())
     }
 }

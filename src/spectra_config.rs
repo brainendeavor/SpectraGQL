@@ -226,7 +226,7 @@ impl Default for SpectraAdminConfig {
 }
 
 #[derive(Debug, Deserialize, Clone)]
-pub(crate) struct SpectraConfig {
+pub struct SpectraConfig {
     pub bind_addr: String,
     pub gql: SpectraGqlConfig,
     pub rest: SpectraRestConfig,
@@ -243,12 +243,12 @@ pub(crate) struct SpectraConfig {
 }
 
 impl SpectraConfig {
-    pub(crate) fn new() -> Result<Self, ConfigError> {
+    pub fn new() -> Result<Self, ConfigError> {
         let spectra_env = env::var("SPECTRA_ENV")
             .or_else(|_| env::var("SPECTRAGQL_ENV"))
             .unwrap_or_else(|_| "development".into());
 
-        let config_builder = Config::builder()
+        let builder = Config::builder()
             .set_default("bind_addr", "0.0.0.0:8000")?
             .set_default("upstream.addr", "localhost:4000")?
             .set_default("upstream.name", "default")?
@@ -275,9 +275,15 @@ impl SpectraConfig {
             .add_source(File::with_name("spectra").required(false))
             .add_source(File::with_name(&format!("{spectra_env}-spectra")).required(false))
             .add_source(Environment::with_prefix("spectra").separator("_"))
-            .add_source(Environment::with_prefix("spectragql").separator("_"))
-            .build()?;
+            .add_source(Environment::with_prefix("spectragql").separator("_"));
 
+        let builder = if let Ok(bind) = env::var("SPECTRA_BIND_ADDR").or_else(|_| env::var("SPECTRAGQL_BIND_ADDR")) {
+            builder.set_override("bind_addr", bind)?
+        } else {
+            builder
+        };
+
+        let config_builder = builder.build()?;
         config_builder.try_deserialize()
     }
 

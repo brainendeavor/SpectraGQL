@@ -605,7 +605,13 @@ impl ProxyHttp for CompositeServiceProxy {
 
                             // Commit command to event broker
                             let dispatch_result = dispatch_method.dispatch_request_info(&request_info).await;
-                            self.log_dispatch_result_error(&ctx.proxy_context, dispatch_result);
+                            let dispatch_ok = self.log_dispatch_result_error(&ctx.proxy_context, dispatch_result);
+
+                            let receipt_status = if dispatch_ok {
+                                route.receipt_status.as_str()
+                            } else {
+                                "DISPATCH_FAILED"
+                            };
 
                             // Synthesize deterministic Command Receipt
                             let field_name = request_info
@@ -619,23 +625,33 @@ impl ProxyHttp for CompositeServiceProxy {
                                 &field_name,
                                 &ctx.proxy_context.request_id,
                                 &ctx.proxy_context.hlc,
-                                &route.receipt_status,
+                                receipt_status,
                             );
                             let receipt_body = receipt_json.to_string();
 
-                            // Complete idempotency tracking
-                            if let Some(key) = ctx.proxy_context.idempotency_key.as_ref() {
-                                let mut fake_headers = http::HeaderMap::new();
-                                fake_headers.insert("content-type", "application/json".parse().unwrap());
-                                fake_headers.insert(REQUEST_ID_HEADER, ctx.proxy_context.request_id.to_string().parse().unwrap());
-                                fake_headers.insert("x-spectra-hlc", ctx.proxy_context.hlc.to_compact_string().parse().unwrap());
-                                self.idempotency_engine.complete(key, ctx.proxy_context.hlc, 200, &fake_headers, &receipt_body).await;
+                            if dispatch_ok {
+                                // Complete idempotency tracking
+                                if let Some(key) = ctx.proxy_context.idempotency_key.as_ref() {
+                                    let mut fake_headers = http::HeaderMap::new();
+                                    fake_headers.insert("content-type", "application/json".parse().unwrap());
+                                    fake_headers.insert(REQUEST_ID_HEADER, ctx.proxy_context.request_id.to_string().parse().unwrap());
+                                    fake_headers.insert("x-spectra-hlc", ctx.proxy_context.hlc.to_compact_string().parse().unwrap());
+                                    self.idempotency_engine.complete(key, ctx.proxy_context.hlc, 200, &fake_headers, &receipt_body).await;
+                                }
+                            } else {
+                                // Dispatch failed: remove in-progress idempotency key so client can retry
+                                if let Some(key) = ctx.proxy_context.idempotency_key.as_ref() {
+                                    self.idempotency_engine.remove(key).await;
+                                }
                             }
 
                             let mut header = pingora::http::ResponseHeader::build(200, None).unwrap();
                             let _ = header.insert_header("content-type", "application/json");
                             let _ = header.insert_header(REQUEST_ID_HEADER, ctx.proxy_context.request_id.to_string());
                             let _ = header.insert_header("x-spectra-hlc", ctx.proxy_context.hlc.to_compact_string());
+                            if !dispatch_ok {
+                                let _ = header.insert_header("x-spectra-dispatch", "failed");
+                            }
 
                             session.set_keepalive(None);
                             session.write_response_header(Box::new(header), false).await?;

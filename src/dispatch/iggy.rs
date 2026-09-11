@@ -77,29 +77,29 @@ impl IggyDispatch {
     }
 
     async fn send_message(&self, topic: &str, message: IggyMessage) -> pingora::Result<()> {
-        let client = match self.get_client().await {
-            Ok(c) => c,
-            Err(e) => {
-                log::error!("IggyDispatch: connection error: {}", e);
-                return Ok(());
-            }
-        };
+        let client = self.get_client().await.map_err(|e| {
+            log::error!("IggyDispatch: connection error: {}", e);
+            pingora::Error::explain(
+                pingora::ErrorType::ConnectError,
+                format!("Iggy connection error: {}", e),
+            )
+        })?;
 
         let topic_id = self.topic_id(topic);
         let partitioning = Partitioning::balanced();
         let mut messages = [message];
-        match client
+        client
             .send_messages(&self.stream_id, &topic_id, &partitioning, &mut messages)
             .await
-        {
-            Ok(_) => {
-                log::info!("IggyDispatch: sent message to stream '{:?}', topic '{:?}'", self.stream_id, topic_id);
-            }
-            Err(e) => {
+            .map_err(|e| {
                 log::error!("IggyDispatch: send to stream '{:?}', topic '{:?}' failed: {}", self.stream_id, topic_id, e);
-            }
-        }
+                pingora::Error::explain(
+                    pingora::ErrorType::WriteError,
+                    format!("Iggy send error: {}", e),
+                )
+            })?;
 
+        log::info!("IggyDispatch: sent message to stream '{:?}', topic '{:?}'", self.stream_id, topic_id);
         Ok(())
     }
 }

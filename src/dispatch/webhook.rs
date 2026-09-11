@@ -29,29 +29,32 @@ impl WebhookDispatch {
 
     async fn send_webhook(&self, topic: &str, body: &str) -> pingora::Result<()> {
         log::info!("WebhookDispatch: POST to {} (topic: {})", self.url, topic);
-        let res = self
+        let resp = self
             .client
             .post(&self.url)
             .header("content-type", "application/json")
             .header("x-spectra-topic", topic)
             .body(body.to_string())
             .send()
-            .await;
-
-        match res {
-            Ok(resp) => {
-                if resp.status().is_success() {
-                    log::info!("WebhookDispatch: success ({})", resp.status());
-                } else {
-                    log::warn!("WebhookDispatch: HTTP status {}", resp.status());
-                }
-            }
-            Err(e) => {
+            .await
+            .map_err(|e| {
                 log::error!("WebhookDispatch: request failed: {}", e);
-            }
-        }
+                pingora::Error::explain(
+                    pingora::ErrorType::WriteError,
+                    format!("Webhook request failed: {}", e),
+                )
+            })?;
 
-        Ok(())
+        if resp.status().is_success() {
+            log::info!("WebhookDispatch: success ({})", resp.status());
+            Ok(())
+        } else {
+            log::warn!("WebhookDispatch: HTTP status {}", resp.status());
+            Err(pingora::Error::explain(
+                pingora::ErrorType::Custom("WebhookHTTPError"),
+                format!("Webhook returned status {}", resp.status()),
+            ))
+        }
     }
 }
 

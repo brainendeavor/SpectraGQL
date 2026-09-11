@@ -47,34 +47,34 @@ impl SierraDbDispatch {
     }
 
     async fn append_event(&self, stream: &str, event_type: &str, payload: &str) -> pingora::Result<()> {
-        let mut conn = match self.client.get_connection().await {
-            Ok(c) => c,
-            Err(e) => {
-                log::error!("SierraDB: failed to get connection: {}", e);
-                return Ok(());
-            }
-        };
+        let mut conn = self.client.get_connection().await.map_err(|e| {
+            log::error!("SierraDB: failed to get connection: {}", e);
+            pingora::Error::explain(
+                pingora::ErrorType::ConnectError,
+                format!("SierraDB connection error: {}", e),
+            )
+        })?;
 
         let cmd = Self::build_eappend_cmd(stream, event_type, payload);
-        match cmd.query_async::<_, redis::Value>(&mut conn).await {
-            Ok(val) => {
-                log::info!(
-                    "SierraDB: EAPPEND to stream '{}' [{}] successful: {:?}",
-                    stream,
-                    event_type,
-                    val
-                );
-            }
-            Err(e) => {
-                log::error!(
-                    "SierraDB: EAPPEND to stream '{}' [{}] failed: {}",
-                    stream,
-                    event_type,
-                    e
-                );
-            }
-        }
+        let val: redis::Value = cmd.query_async(&mut conn).await.map_err(|e| {
+            log::error!(
+                "SierraDB: EAPPEND to stream '{}' [{}] failed: {}",
+                stream,
+                event_type,
+                e
+            );
+            pingora::Error::explain(
+                pingora::ErrorType::WriteError,
+                format!("SierraDB EAPPEND error: {}", e),
+            )
+        })?;
 
+        log::info!(
+            "SierraDB: EAPPEND to stream '{}' [{}] successful: {:?}",
+            stream,
+            event_type,
+            val
+        );
         Ok(())
     }
 }

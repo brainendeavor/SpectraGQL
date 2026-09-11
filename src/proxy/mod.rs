@@ -2,6 +2,7 @@ mod composite_service;
 mod gql_service;
 mod http_service;
 
+pub use composite_service::generate_command_receipt;
 pub use composite_service::CompositeServiceProxy as CompositeService;
 pub use composite_service::ServiceConfig;
 pub use gql_service::GraphQLServiceProxy as GraphQLService;

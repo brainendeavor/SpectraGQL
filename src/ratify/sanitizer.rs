@@ -27,6 +27,36 @@ pub struct Sanitizer {
     sensitive_keys: HashSet<String>,
 }
 
+fn split_key_tokens(key: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut prev_is_lower = false;
+
+    for ch in key.chars() {
+        if ch == '_' || ch == '-' || ch == '.' || ch == ' ' {
+            if !current.is_empty() {
+                tokens.push(current.to_lowercase());
+                current.clear();
+            }
+            prev_is_lower = false;
+        } else if ch.is_uppercase() {
+            if prev_is_lower && !current.is_empty() {
+                tokens.push(current.to_lowercase());
+                current.clear();
+            }
+            current.push(ch);
+            prev_is_lower = false;
+        } else {
+            current.push(ch);
+            prev_is_lower = true;
+        }
+    }
+    if !current.is_empty() {
+        tokens.push(current.to_lowercase());
+    }
+    tokens
+}
+
 impl Sanitizer {
     pub fn new(custom_keys: Option<Vec<String>>) -> Self {
         let mut sensitive_keys = HashSet::new();
@@ -43,10 +73,39 @@ impl Sanitizer {
 
     pub fn is_sensitive_key(&self, key: &str) -> bool {
         let normalized = key.to_lowercase().replace(['-', '_'], "");
-        self.sensitive_keys.iter().any(|k| {
+        // 1. Exact normalized match (e.g. "creditcard" or "apikey")
+        for k in &self.sensitive_keys {
             let norm_k = k.replace(['-', '_'], "");
-            normalized == norm_k || normalized.contains(&norm_k)
-        })
+            if normalized == norm_k {
+                return true;
+            }
+        }
+
+        // 2. Tokenized word-boundary match (e.g. "user_password", "accessToken", "admin_pin")
+        let tokens = split_key_tokens(key);
+        for token in &tokens {
+            for k in &self.sensitive_keys {
+                let norm_k = k.replace(['-', '_'], "");
+                if token == &norm_k {
+                    return true;
+                }
+            }
+        }
+
+        // 3. Multi-token compound match (e.g. tokens ["credit", "card"] -> "creditcard" matches "credit_card")
+        for i in 0..tokens.len() {
+            for j in (i + 1)..=tokens.len() {
+                let slice_joined = tokens[i..j].concat();
+                for k in &self.sensitive_keys {
+                    let norm_k = k.replace(['-', '_'], "");
+                    if slice_joined == norm_k {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        false
     }
 
     /// Recursively masks sensitive fields within a `serde_json::Value`.

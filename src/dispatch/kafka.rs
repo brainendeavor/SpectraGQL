@@ -95,35 +95,38 @@ impl KafkaDispatch {
     }
 
     async fn produce_record(&self, topic: &str, record: Record) -> pingora::Result<()> {
-        let client = match self.get_client().await {
-            Ok(c) => c,
-            Err(e) => {
-                log::error!("KafkaDispatch: connection error: {}", e);
-                return Ok(());
-            }
-        };
+        let client = self.get_client().await.map_err(|e| {
+            log::error!("KafkaDispatch: connection error: {}", e);
+            pingora::Error::explain(
+                pingora::ErrorType::ConnectError,
+                format!("Kafka connection error: {}", e),
+            )
+        })?;
 
-        let partition_client = match client
+        let partition_client = client
             .partition_client(topic.to_string(), self.partition, UnknownTopicHandling::Retry)
             .await
-        {
-            Ok(pc) => pc,
-            Err(e) => {
+            .map_err(|e| {
                 log::error!("KafkaDispatch: failed to get partition client for topic '{}': {}", topic, e);
-                return Ok(());
-            }
-        };
+                pingora::Error::explain(
+                    pingora::ErrorType::ConnectError,
+                    format!("Kafka partition error: {}", e),
+                )
+            })?;
 
         match partition_client.produce(vec![record], Compression::default()).await {
             Ok(offsets) => {
                 log::info!("KafkaDispatch: produced to '{}' [p:{}], offsets: {:?}", topic, self.partition, offsets);
+                Ok(())
             }
             Err(e) => {
                 log::error!("KafkaDispatch: produce to '{}' failed: {}", topic, e);
+                Err(pingora::Error::explain(
+                    pingora::ErrorType::WriteError,
+                    format!("Kafka produce error: {}", e),
+                ))
             }
         }
-
-        Ok(())
     }
 }
 

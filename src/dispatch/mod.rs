@@ -52,6 +52,7 @@ pub fn find_dispatch_handler_by_method(
 }
 
 #[enum_dispatch]
+#[allow(async_fn_in_trait)]
 pub trait DispatchHandler {
     fn get_dispatch_topic(&self, request_info: &RequestInfo) -> String;
     async fn dispatch_request_info(&self, request_info: &RequestInfo) -> pingora::Result<()>;

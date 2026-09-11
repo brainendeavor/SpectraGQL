@@ -24,6 +24,13 @@ impl ParsedGraphQLOperation {
 }
 
 pub fn parse_graphql_operation(query_str: &str) -> Result<ParsedGraphQLOperation> {
+    parse_graphql_operation_with_name(query_str, None)
+}
+
+pub fn parse_graphql_operation_with_name(
+    query_str: &str,
+    target_op_name: Option<&str>,
+) -> Result<ParsedGraphQLOperation> {
     let parser = Parser::new(query_str);
     let ast = parser.parse();
 
@@ -34,6 +41,9 @@ pub fn parse_graphql_operation(query_str: &str) -> Result<ParsedGraphQLOperation
     }
 
     let doc = ast.document();
+    let mut matching_op = None;
+    let mut first_op = None;
+
     for def in doc.definitions() {
         if let Definition::OperationDefinition(op) = def {
             let operation_type = match op.operation_type() {
@@ -64,15 +74,39 @@ pub fn parse_graphql_operation(query_str: &str) -> Result<ParsedGraphQLOperation
                 }
             }
 
-            return Ok(ParsedGraphQLOperation {
+            let parsed = ParsedGraphQLOperation {
                 operation_type,
-                operation_name,
+                operation_name: operation_name.clone(),
                 root_fields,
-            });
+            };
+
+            if let Some(target) = target_op_name {
+                if let Some(name) = &operation_name {
+                    if name.eq_ignore_ascii_case(target) {
+                        matching_op = Some(parsed);
+                        break;
+                    }
+                }
+            } else if first_op.is_none() {
+                first_op = Some(parsed);
+                break;
+            }
+
+            if first_op.is_none() {
+                first_op = Some(parsed);
+            }
         }
     }
 
-    Err(anyhow!("No operation definition found in GraphQL query"))
+    if let Some(op) = matching_op {
+        return Ok(op);
+    }
+
+    if let Some(target) = target_op_name {
+        return Err(anyhow!("Operation '{}' not found in GraphQL document", target));
+    }
+
+    first_op.ok_or_else(|| anyhow!("No operation definition found in GraphQL query"))
 }
 
 #[cfg(test)]

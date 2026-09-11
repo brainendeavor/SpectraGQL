@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use std::str::FromStr;
 
 use crate::payload::{
-    GraphQLOperationType, GraphQLRequestInfo, RequestInfo, parse_graphql_operation,
+    GraphQLOperationType, GraphQLRequestInfo, RequestInfo,
 };
 use crate::ratify::{RatifyResponseAction, RequestRatification};
 
@@ -42,7 +42,10 @@ impl RequestRatification for GraphQLRatifier {
         let mut gql_request_info = GraphQLRequestInfo::new(http_request_body);
         let gql_request_body = gql_request_info.gql_request_body()?;
 
-        let parsed_op = parse_graphql_operation(&gql_request_body.query)?;
+        let parsed_op = crate::payload::gql_parser::parse_graphql_operation_with_name(
+            &gql_request_body.query,
+            gql_request_body.operation_name.as_deref(),
+        )?;
         gql_request_info.operation_name = parsed_op.operation_name;
         gql_request_info.operation_type = parsed_op.operation_type;
         gql_request_info.root_fields = parsed_op.root_fields;

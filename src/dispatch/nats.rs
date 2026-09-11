@@ -34,23 +34,34 @@ impl NatsDispatch {
     }
 
     async fn write_to_nats(&self, subject: &str, data: &str) -> pingora::Result<()> {
-        match self.get_jetstream().await {
-            Ok(jetstream) => {
-                match jetstream
-                    .publish(subject.to_string(), data.to_string().into())
-                    .await
-                {
-                    Ok(ack) => match ack.await {
-                        Ok(_) => log::info!("write_to_nats done.\n{}", data),
-                        Err(e) => {
-                            log::error!("write_to_nats ack: {}\nsubject: {}\n{}", e, subject, data)
-                        }
-                    },
-                    Err(e) => log::error!("write_to_nats publish: {}", e),
-                }
-            }
-            Err(e) => log::error!("write_to_nats connect/init error: {}", e),
-        }
+        let jetstream = self.get_jetstream().await.map_err(|e| {
+            log::error!("write_to_nats connect/init error: {}", e);
+            pingora::Error::explain(
+                pingora::ErrorType::ConnectError,
+                format!("NATS connect error: {}", e),
+            )
+        })?;
+
+        let ack = jetstream
+            .publish(subject.to_string(), data.to_string().into())
+            .await
+            .map_err(|e| {
+                log::error!("write_to_nats publish: {}", e);
+                pingora::Error::explain(
+                    pingora::ErrorType::WriteError,
+                    format!("NATS publish error: {}", e),
+                )
+            })?;
+
+        ack.await.map_err(|e| {
+            log::error!("write_to_nats ack: {}\nsubject: {}\n{}", e, subject, data);
+            pingora::Error::explain(
+                pingora::ErrorType::WriteError,
+                format!("NATS ack error: {}", e),
+            )
+        })?;
+
+        log::info!("write_to_nats done.\n{}", data);
         Ok(())
     }
 }
@@ -83,23 +94,16 @@ impl DispatchHandler for NatsDispatch {
 
     async fn dispatch_request_info(&self, request_info: &RequestInfo) -> pingora::Result<()> {
         log::info!("NatsDispatch.dispatch {}", request_info);
-        if let Ok(payload) = serde_json::to_string_pretty(&request_info) {
-            let subject = self.get_dispatch_topic(request_info);
-            log::info!("dispatch operation_info: {}", subject);
-            match self.write_to_nats(&subject, &payload).await {
-                Ok(_) => {}
-                Err(e) => {
-                    log::error!(
-                        "Failed to write_to_nats. subject: {}\nerror: {}",
-                        subject,
-                        e
-                    );
-                }
-            };
-        } else {
-            log::error!("Failed to queue request: {:?}", request_info);
-        }
-        Ok(())
+        let payload = serde_json::to_string_pretty(&request_info).map_err(|e| {
+            log::error!("Failed to serialize request: {:?}", e);
+            pingora::Error::explain(
+                pingora::ErrorType::Custom("SerializationError"),
+                format!("Serialization error: {}", e),
+            )
+        })?;
+        let subject = self.get_dispatch_topic(request_info);
+        log::info!("dispatch operation_info: {}", subject);
+        self.write_to_nats(&subject, &payload).await
     }
 
     async fn dispatch_response_info(

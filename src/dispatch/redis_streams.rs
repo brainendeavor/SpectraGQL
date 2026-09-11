@@ -43,24 +43,24 @@ impl RedisStreamsDispatch {
     }
 
     async fn write_to_stream(&self, stream: &str, fields: &[(&str, &str)]) -> pingora::Result<()> {
-        let mut conn = match self.client.get_connection().await {
-            Ok(c) => c,
-            Err(e) => {
-                log::error!("RedisStreams: failed to get connection: {}", e);
-                return Ok(());
-            }
-        };
+        let mut conn = self.client.get_connection().await.map_err(|e| {
+            log::error!("RedisStreams: failed to get connection: {}", e);
+            pingora::Error::explain(
+                pingora::ErrorType::ConnectError,
+                format!("Redis connection error: {}", e),
+            )
+        })?;
 
         let cmd = Self::build_xadd_cmd(stream, fields);
-        match cmd.query_async::<_, String>(&mut conn).await {
-            Ok(entry_id) => {
-                log::info!("RedisStreams: XADD to '{}' successful, entry id: {}", stream, entry_id);
-            }
-            Err(e) => {
-                log::error!("RedisStreams: XADD to '{}' failed: {}", stream, e);
-            }
-        }
+        let entry_id: String = cmd.query_async(&mut conn).await.map_err(|e| {
+            log::error!("RedisStreams: XADD to '{}' failed: {}", stream, e);
+            pingora::Error::explain(
+                pingora::ErrorType::WriteError,
+                format!("Redis XADD error: {}", e),
+            )
+        })?;
 
+        log::info!("RedisStreams: XADD to '{}' successful, entry id: {}", stream, entry_id);
         Ok(())
     }
 }
