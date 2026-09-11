@@ -50,4 +50,5 @@ lapin = { version = "4.10", default-features = false, features = ["tokio", "rust
 iggy = "0.10.0"
 tokio-tungstenite = { version = "0.29", default-features = false, features = ["connect"] }
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+cel = { version = "0.14.5", features = ["json", "regex", "chrono"] }
 

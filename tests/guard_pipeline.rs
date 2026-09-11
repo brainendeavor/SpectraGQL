@@ -314,3 +314,105 @@ fn test_response_interceptor_transform_anonymization() {
     }
 }
 
+#[test]
+fn test_cel_rule_evaluator_standalone() {
+    use spectragql::guards::CelRuleEvaluator;
+    use spectragql::guards::RuleEvaluator;
+
+    let mut cel = CelRuleEvaluator::new();
+
+    // 1. Mandatory tenant header check
+    cel.register("tenant_check", r#"request.headers["x-tenant-id"] != """#)
+        .expect("CEL compile");
+
+    // 2. Numeric threshold on mutation limit
+    cel.register("limit_check", r#"variables.limit <= 100"#)
+        .expect("CEL compile");
+
+    // 3. Array membership
+    cel.register("role_check", r#""admin" in claims.roles"#)
+        .expect("CEL compile");
+
+    // Test tenant_check
+    let valid_req = serde_json::json!({
+        "request": {
+            "headers": {
+                "x-tenant-id": "tenant_abc123"
+            }
+        }
+    });
+    assert!(cel.evaluate("tenant_check", &valid_req).unwrap());
+
+    let invalid_req = serde_json::json!({
+        "request": {
+            "headers": {
+                "x-tenant-id": ""
+            }
+        }
+    });
+    assert!(!cel.evaluate("tenant_check", &invalid_req).unwrap());
+
+    // Test limit_check
+    let ok_limit = serde_json::json!({
+        "variables": { "limit": 50 }
+    });
+    assert!(cel.evaluate("limit_check", &ok_limit).unwrap());
+
+    let excess_limit = serde_json::json!({
+        "variables": { "limit": 500 }
+    });
+    assert!(!cel.evaluate("limit_check", &excess_limit).unwrap());
+
+    // Test role_check
+    let admin_user = serde_json::json!({
+        "claims": { "roles": ["user", "admin"] }
+    });
+    assert!(cel.evaluate("role_check", &admin_user).unwrap());
+
+    let regular_user = serde_json::json!({
+        "claims": { "roles": ["user", "viewer"] }
+    });
+    assert!(!cel.evaluate("role_check", &regular_user).unwrap());
+}
+
+#[test]
+fn test_cel_rule_evaluator_response_interceptor_leak_prevention() {
+    use spectragql::guards::{
+        CelRuleEvaluator, InterceptorVerdict, SensitiveDataResponseInterceptor,
+    };
+
+    let mut cel = CelRuleEvaluator::new();
+    // Flag if customer SSN is unmasked: true means violation!
+    cel.register(
+        "sensitive_data_check",
+        r#"data.customer.ssn != "" && !data.customer.ssn.startsWith("***-**-")"#,
+    )
+    .expect("CEL compile");
+
+    let eval_arc = Arc::new(cel);
+    let interceptor = SensitiveDataResponseInterceptor::new().with_evaluator(eval_arc);
+
+    let ctx = GuardContext::new(Uuid::new_v4(), test_hlc());
+    let mut resp = http::Response::builder().body(()).unwrap().into_parts().0;
+
+    // Masked SSN passes
+    let masked_body = br#"{"data":{"customer":{"name":"Alice","ssn":"***-**-4321"}}}"#;
+    assert_eq!(
+        interceptor.intercept_response(&ctx, &mut resp, masked_body),
+        InterceptorVerdict::Pass
+    );
+
+    // Unmasked SSN is rejected!
+    let leaked_body = br#"{"data":{"customer":{"name":"Bob","ssn":"000-12-3456"}}}"#;
+    let verdict = interceptor.intercept_response(&ctx, &mut resp, leaked_body);
+    match verdict {
+        InterceptorVerdict::Reject(rejection) => {
+            assert_eq!(rejection.code, "DATA_LEAK_PREVENTED");
+            assert_eq!(
+                rejection.status_code,
+                http::StatusCode::INTERNAL_SERVER_ERROR
+            );
+        }
+        _ => panic!("Expected InterceptorVerdict::Reject"),
+    }
+}

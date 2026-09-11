@@ -11,9 +11,9 @@ pub mod subscriptions;
 
 pub use dispatch::{EventEncoder, EventSink, JsonEventEncoder};
 pub use interceptors::{
-    GuardContext, GuardRejection, GuardVerdict, InterceptorContext, InterceptorRejection,
-    InterceptorVerdict, RequestGuard, RequestInterceptor, ResponseGuard, ResponseInterceptor,
-    RuleEvaluator,
+    CelRuleEvaluator, GuardContext, GuardRejection, GuardVerdict, InterceptorContext,
+    InterceptorRejection, InterceptorVerdict, RequestGuard, RequestInterceptor, ResponseGuard,
+    ResponseInterceptor, RuleEvaluator,
 };
 pub use payload::{CompletionEvent, OperationOutcome, TerminalEvent};
 pub use spectra_config::{ExecutionStrategy, OperationMode, SpectraConfig};
