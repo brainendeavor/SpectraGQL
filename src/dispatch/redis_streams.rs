@@ -1,5 +1,6 @@
 use crate::dispatch::DispatchHandler;
 use crate::dispatch::resp::RespClient;
+use crate::dispatch::sink::EventSink;
 use crate::payload::{RequestInfo, ResponseInfo, TerminalEvent};
 
 #[derive(Clone)]
@@ -65,6 +66,19 @@ impl RedisStreamsDispatch {
     }
 }
 
+#[async_trait::async_trait]
+impl crate::dispatch::sink::EventSink for RedisStreamsDispatch {
+    async fn publish(&self, topic: &str, payload: &[u8]) -> pingora::Result<()> {
+        let stream = self.stream_key(topic);
+        let payload_str = std::str::from_utf8(payload).unwrap_or("");
+        let fields = [
+            ("event_type", "Event"),
+            ("payload", payload_str),
+        ];
+        self.write_to_stream(&stream, &fields).await
+    }
+}
+
 impl DispatchHandler for RedisStreamsDispatch {
     fn get_dispatch_topic(&self, request_info: &RequestInfo) -> String {
         match request_info.gql.as_ref() {
@@ -93,28 +107,27 @@ impl DispatchHandler for RedisStreamsDispatch {
 
     async fn dispatch_request_info(&self, request_info: &RequestInfo) -> pingora::Result<()> {
         log::info!("RedisStreamsDispatch.dispatch {}", request_info);
-        if let Ok(payload) = serde_json::to_string_pretty(&request_info) {
-            let topic = self.get_dispatch_topic(request_info);
-            let stream = self.stream_key(&topic);
-            let req_id_str = request_info.request_id.to_string();
-            let hlc_str = request_info.hlc.to_compact_string();
-            let op_name = request_info
-                .gql
-                .as_ref()
-                .and_then(|g| g.operation_name.as_deref())
-                .unwrap_or("unknown");
+        let payload_bytes = crate::dispatch::sink::JsonEventEncoder.encode_request(request_info)?;
+        let payload = String::from_utf8_lossy(&payload_bytes);
+        let topic = self.get_dispatch_topic(request_info);
+        let stream = self.stream_key(&topic);
+        let req_id_str = request_info.request_id.to_string();
+        let hlc_str = request_info.hlc.to_compact_string();
+        let op_name = request_info
+            .gql
+            .as_ref()
+            .and_then(|g| g.operation_name.as_deref())
+            .unwrap_or("unknown");
 
-            let fields = [
-                ("event_type", "Command"),
-                ("request_id", req_id_str.as_str()),
-                ("hlc", hlc_str.as_str()),
-                ("operation", op_name),
-                ("payload", payload.as_str()),
-            ];
+        let fields = [
+            ("event_type", "Command"),
+            ("request_id", req_id_str.as_str()),
+            ("hlc", hlc_str.as_str()),
+            ("operation", op_name),
+            ("payload", payload.as_ref()),
+        ];
 
-            self.write_to_stream(&stream, &fields).await?;
-        }
-        Ok(())
+        self.write_to_stream(&stream, &fields).await
     }
 
     async fn dispatch_response_info(
@@ -144,33 +157,30 @@ impl DispatchHandler for RedisStreamsDispatch {
         dispatch_topic: &str,
         terminal_event: &TerminalEvent,
     ) -> pingora::Result<()> {
-        if let Ok(payload) = serde_json::to_string_pretty(&terminal_event) {
-            let stream = self.stream_key(dispatch_topic);
-            let req_id_str = terminal_event.request.request_id.to_string();
-            let hlc_str = terminal_event.hlc.to_compact_string();
-            let duration_str = terminal_event.duration_ms.to_string();
-            let status_str = format!("{:?}", terminal_event.status);
-            let op_name = terminal_event.operation_name.as_deref().unwrap_or("unknown");
+        let payload_bytes = crate::dispatch::sink::JsonEventEncoder.encode_completion(terminal_event)?;
+        let payload = String::from_utf8_lossy(&payload_bytes);
+        let stream = self.stream_key(dispatch_topic);
+        let req_id_str = terminal_event.request.request_id.to_string();
+        let hlc_str = terminal_event.hlc.to_compact_string();
+        let duration_str = terminal_event.duration_ms.to_string();
+        let status_str = format!("{:?}", terminal_event.status);
+        let op_name = terminal_event.operation_name.as_deref().unwrap_or("unknown");
 
-            let fields = [
-                ("event_type", "TerminalEvent"),
-                ("status", status_str.as_str()),
-                ("request_id", req_id_str.as_str()),
-                ("hlc", hlc_str.as_str()),
-                ("operation", op_name),
-                ("duration_ms", duration_str.as_str()),
-                ("payload", payload.as_str()),
-            ];
+        let fields = [
+            ("event_type", "TerminalEvent"),
+            ("status", status_str.as_str()),
+            ("request_id", req_id_str.as_str()),
+            ("hlc", hlc_str.as_str()),
+            ("operation", op_name),
+            ("duration_ms", duration_str.as_str()),
+            ("payload", payload.as_ref()),
+        ];
 
-            self.write_to_stream(&stream, &fields).await?;
-        }
-        Ok(())
+        self.write_to_stream(&stream, &fields).await
     }
 
     async fn dispatch_payload(&self, topic: &str, payload: &str) -> pingora::Result<()> {
-        let stream = self.stream_key(topic);
-        let fields = [("payload", payload)];
-        self.write_to_stream(&stream, &fields).await
+        self.publish(topic, payload.as_bytes()).await
     }
 }
 

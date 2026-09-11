@@ -8,6 +8,7 @@ use rskafka::record::Record;
 use tokio::sync::OnceCell;
 
 use crate::dispatch::DispatchHandler;
+use crate::dispatch::sink::EventSink;
 use crate::payload::{RequestInfo, ResponseInfo, TerminalEvent};
 
 pub fn normalize_kafka_hosts(addr: &str) -> Vec<String> {
@@ -130,6 +131,16 @@ impl KafkaDispatch {
     }
 }
 
+#[async_trait::async_trait]
+impl crate::dispatch::sink::EventSink for KafkaDispatch {
+    async fn publish(&self, topic: &str, payload: &[u8]) -> pingora::Result<()> {
+        let kafka_topic = self.kafka_topic(topic);
+        let payload_str = std::str::from_utf8(payload).unwrap_or("");
+        let record = Self::build_record(None, payload_str, &[]);
+        self.produce_record(&kafka_topic, record).await
+    }
+}
+
 impl DispatchHandler for KafkaDispatch {
     fn get_dispatch_topic(&self, request_info: &RequestInfo) -> String {
         match request_info.gql.as_ref() {
@@ -157,29 +168,26 @@ impl DispatchHandler for KafkaDispatch {
     }
 
     async fn dispatch_request_info(&self, request_info: &RequestInfo) -> pingora::Result<()> {
-        log::info!("KafkaDispatch.dispatch_request_info {}", request_info);
-        if let Ok(payload) = serde_json::to_string_pretty(&request_info) {
-            let topic = self.get_dispatch_topic(request_info);
-            let kafka_topic = self.kafka_topic(&topic);
-            let req_id = request_info.request_id.to_string();
-            let hlc = request_info.hlc.to_compact_string();
-            let op_name = request_info
-                .gql
-                .as_ref()
-                .and_then(|g| g.operation_name.as_deref())
-                .unwrap_or("unknown");
+        let payload_bytes = crate::dispatch::sink::JsonEventEncoder.encode_request(request_info)?;
+        let payload = String::from_utf8_lossy(&payload_bytes);
+        let kafka_topic = self.kafka_topic(&self.get_dispatch_topic(request_info));
+        let req_id = request_info.request_id.to_string();
+        let hlc = request_info.hlc.to_compact_string();
+        let op_name = request_info
+            .gql
+            .as_ref()
+            .and_then(|g| g.operation_name.as_deref())
+            .unwrap_or("unknown");
 
-            let headers = [
-                ("event_type", "Command"),
-                ("request_id", req_id.as_str()),
-                ("hlc", hlc.as_str()),
-                ("operation", op_name),
-            ];
+        let headers = [
+            ("event_type", "Command"),
+            ("request_id", req_id.as_str()),
+            ("hlc", hlc.as_str()),
+            ("operation", op_name),
+        ];
 
-            let record = Self::build_record(Some(&req_id), &payload, &headers);
-            self.produce_record(&kafka_topic, record).await?;
-        }
-        Ok(())
+        let record = Self::build_record(Some(&req_id), &payload, &headers);
+        self.produce_record(&kafka_topic, record).await
     }
 
     async fn dispatch_response_info(
@@ -209,33 +217,30 @@ impl DispatchHandler for KafkaDispatch {
         dispatch_topic: &str,
         terminal_event: &TerminalEvent,
     ) -> pingora::Result<()> {
-        if let Ok(payload) = serde_json::to_string_pretty(&terminal_event) {
-            let kafka_topic = self.kafka_topic(dispatch_topic);
-            let req_id = terminal_event.request.request_id.to_string();
-            let hlc = terminal_event.hlc.to_compact_string();
-            let status = format!("{:?}", terminal_event.status);
-            let op_name = terminal_event.operation_name.as_deref().unwrap_or("unknown");
-            let duration_str = terminal_event.duration_ms.to_string();
+        let payload_bytes = crate::dispatch::sink::JsonEventEncoder.encode_completion(terminal_event)?;
+        let payload = String::from_utf8_lossy(&payload_bytes);
+        let kafka_topic = self.kafka_topic(dispatch_topic);
+        let req_id = terminal_event.request.request_id.to_string();
+        let hlc = terminal_event.hlc.to_compact_string();
+        let status = format!("{:?}", terminal_event.status);
+        let op_name = terminal_event.operation_name.as_deref().unwrap_or("unknown");
+        let duration_str = terminal_event.duration_ms.to_string();
 
-            let headers = [
-                ("event_type", "TerminalEvent"),
-                ("status", status.as_str()),
-                ("request_id", req_id.as_str()),
-                ("hlc", hlc.as_str()),
-                ("operation", op_name),
-                ("duration_ms", duration_str.as_str()),
-            ];
+        let headers = [
+            ("event_type", "TerminalEvent"),
+            ("status", status.as_str()),
+            ("request_id", req_id.as_str()),
+            ("hlc", hlc.as_str()),
+            ("operation", op_name),
+            ("duration_ms", duration_str.as_str()),
+        ];
 
-            let record = Self::build_record(Some(&req_id), &payload, &headers);
-            self.produce_record(&kafka_topic, record).await?;
-        }
-        Ok(())
+        let record = Self::build_record(Some(&req_id), &payload, &headers);
+        self.produce_record(&kafka_topic, record).await
     }
 
     async fn dispatch_payload(&self, topic: &str, payload: &str) -> pingora::Result<()> {
-        let kafka_topic = self.kafka_topic(topic);
-        let record = Self::build_record(None, payload, &[]);
-        self.produce_record(&kafka_topic, record).await
+        self.publish(topic, payload.as_bytes()).await
     }
 }
 

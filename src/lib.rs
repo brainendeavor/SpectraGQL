@@ -7,6 +7,7 @@ pub mod ratify;
 pub mod spectra_config;
 pub mod subscriptions;
 
+pub use dispatch::{EventEncoder, EventSink, JsonEventEncoder};
 pub use payload::{CompletionEvent, OperationOutcome, TerminalEvent};
 pub use spectra_config::{ExecutionStrategy, OperationMode, SpectraConfig};
 

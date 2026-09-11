@@ -86,7 +86,7 @@ impl RabbitMqDispatch {
             .await
     }
 
-    async fn publish(
+    async fn publish_raw(
         &self,
         routing_key: &str,
         payload: &str,
@@ -140,6 +140,16 @@ impl RabbitMqDispatch {
     }
 }
 
+#[async_trait::async_trait]
+impl crate::dispatch::sink::EventSink for RabbitMqDispatch {
+    async fn publish(&self, topic: &str, payload: &[u8]) -> pingora::Result<()> {
+        let rk = self.routing_key(topic);
+        let payload_str = std::str::from_utf8(payload).unwrap_or("");
+        let properties = Self::build_properties("application/json", &[]);
+        self.publish_raw(&rk, payload_str, properties).await
+    }
+}
+
 impl DispatchHandler for RabbitMqDispatch {
     fn get_dispatch_topic(&self, request_info: &RequestInfo) -> String {
         match request_info.gql.as_ref() {
@@ -167,29 +177,26 @@ impl DispatchHandler for RabbitMqDispatch {
     }
 
     async fn dispatch_request_info(&self, request_info: &RequestInfo) -> pingora::Result<()> {
-        log::info!("RabbitMqDispatch.dispatch_request_info {}", request_info);
-        if let Ok(payload) = serde_json::to_string_pretty(&request_info) {
-            let topic = self.get_dispatch_topic(request_info);
-            let rk = self.routing_key(&topic);
-            let req_id = request_info.request_id.to_string();
-            let hlc = request_info.hlc.to_compact_string();
-            let op_name = request_info
-                .gql
-                .as_ref()
-                .and_then(|g| g.operation_name.as_deref())
-                .unwrap_or("unknown");
+        let payload_bytes = crate::dispatch::sink::JsonEventEncoder.encode_request(request_info)?;
+        let payload = String::from_utf8_lossy(&payload_bytes);
+        let rk = self.routing_key(&self.get_dispatch_topic(request_info));
+        let req_id = request_info.request_id.to_string();
+        let hlc = request_info.hlc.to_compact_string();
+        let op_name = request_info
+            .gql
+            .as_ref()
+            .and_then(|g| g.operation_name.as_deref())
+            .unwrap_or("unknown");
 
-            let headers = [
-                ("event_type", "Command"),
-                ("request_id", req_id.as_str()),
-                ("hlc", hlc.as_str()),
-                ("operation", op_name),
-            ];
+        let headers = [
+            ("event_type", "Command"),
+            ("request_id", req_id.as_str()),
+            ("hlc", hlc.as_str()),
+            ("operation", op_name),
+        ];
 
-            let properties = Self::build_properties("application/json", &headers);
-            self.publish(&rk, &payload, properties).await?;
-        }
-        Ok(())
+        let properties = Self::build_properties("application/json", &headers);
+        self.publish_raw(&rk, &payload, properties).await
     }
 
     async fn dispatch_response_info(
@@ -209,7 +216,7 @@ impl DispatchHandler for RabbitMqDispatch {
             ];
 
             let properties = Self::build_properties("application/json", &headers);
-            self.publish(&rk, &payload, properties).await?;
+            self.publish_raw(&rk, &payload, properties).await?;
         }
         Ok(())
     }
@@ -219,33 +226,31 @@ impl DispatchHandler for RabbitMqDispatch {
         dispatch_topic: &str,
         terminal_event: &TerminalEvent,
     ) -> pingora::Result<()> {
-        if let Ok(payload) = serde_json::to_string_pretty(&terminal_event) {
-            let rk = self.routing_key(dispatch_topic);
-            let req_id = terminal_event.request.request_id.to_string();
-            let hlc = terminal_event.hlc.to_compact_string();
-            let status = format!("{:?}", terminal_event.status);
-            let op_name = terminal_event.operation_name.as_deref().unwrap_or("unknown");
-            let duration_str = terminal_event.duration_ms.to_string();
+        let payload_bytes = crate::dispatch::sink::JsonEventEncoder.encode_completion(terminal_event)?;
+        let payload = String::from_utf8_lossy(&payload_bytes);
+        let rk = self.routing_key(dispatch_topic);
+        let req_id = terminal_event.request.request_id.to_string();
+        let hlc = terminal_event.hlc.to_compact_string();
+        let status = format!("{:?}", terminal_event.status);
+        let op_name = terminal_event.operation_name.as_deref().unwrap_or("unknown");
+        let duration_str = terminal_event.duration_ms.to_string();
 
-            let headers = [
-                ("event_type", "TerminalEvent"),
-                ("status", status.as_str()),
-                ("request_id", req_id.as_str()),
-                ("hlc", hlc.as_str()),
-                ("operation", op_name),
-                ("duration_ms", duration_str.as_str()),
-            ];
+        let headers = [
+            ("event_type", "TerminalEvent"),
+            ("status", status.as_str()),
+            ("request_id", req_id.as_str()),
+            ("hlc", hlc.as_str()),
+            ("operation", op_name),
+            ("duration_ms", duration_str.as_str()),
+        ];
 
-            let properties = Self::build_properties("application/json", &headers);
-            self.publish(&rk, &payload, properties).await?;
-        }
-        Ok(())
+        let properties = Self::build_properties("application/json", &headers);
+        self.publish_raw(&rk, &payload, properties).await
     }
 
     async fn dispatch_payload(&self, topic: &str, payload: &str) -> pingora::Result<()> {
         let rk = self.routing_key(topic);
-        let properties = Self::build_properties("application/json", &[]);
-        self.publish(&rk, payload, properties).await
+        self.publish_raw(&rk, payload, Self::build_properties("application/json", &[])).await
     }
 }
 

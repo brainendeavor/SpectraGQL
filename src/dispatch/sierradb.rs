@@ -1,5 +1,6 @@
 use crate::dispatch::DispatchHandler;
 use crate::dispatch::resp::RespClient;
+use crate::dispatch::sink::EventSink;
 use crate::payload::{RequestInfo, ResponseInfo, TerminalEvent};
 
 #[derive(Clone)]
@@ -79,6 +80,15 @@ impl SierraDbDispatch {
     }
 }
 
+#[async_trait::async_trait]
+impl crate::dispatch::sink::EventSink for SierraDbDispatch {
+    async fn publish(&self, topic: &str, payload: &[u8]) -> pingora::Result<()> {
+        let stream = self.stream_id(topic);
+        let payload_str = std::str::from_utf8(payload).unwrap_or("");
+        self.append_event(&stream, "Event", payload_str).await
+    }
+}
+
 impl DispatchHandler for SierraDbDispatch {
     fn get_dispatch_topic(&self, request_info: &RequestInfo) -> String {
         match request_info.gql.as_ref() {
@@ -107,18 +117,17 @@ impl DispatchHandler for SierraDbDispatch {
 
     async fn dispatch_request_info(&self, request_info: &RequestInfo) -> pingora::Result<()> {
         log::info!("SierraDbDispatch.dispatch_request_info {}", request_info);
-        if let Ok(payload) = serde_json::to_string_pretty(&request_info) {
-            let topic = self.get_dispatch_topic(request_info);
-            let stream = self.stream_id(&topic);
-            let event_type = request_info
-                .gql
-                .as_ref()
-                .and_then(|g| g.operation_name.as_deref())
-                .unwrap_or("Command");
+        let payload = crate::dispatch::sink::JsonEventEncoder.encode_request(request_info)?;
+        let topic = self.get_dispatch_topic(request_info);
+        let stream = self.stream_id(&topic);
+        let event_type = request_info
+            .gql
+            .as_ref()
+            .and_then(|g| g.operation_name.as_deref())
+            .unwrap_or("Command");
 
-            self.append_event(&stream, event_type, &payload).await?;
-        }
-        Ok(())
+        let payload_str = String::from_utf8_lossy(&payload);
+        self.append_event(&stream, event_type, &payload_str).await
     }
 
     async fn dispatch_response_info(
@@ -138,17 +147,15 @@ impl DispatchHandler for SierraDbDispatch {
         dispatch_topic: &str,
         terminal_event: &TerminalEvent,
     ) -> pingora::Result<()> {
-        if let Ok(payload) = serde_json::to_string_pretty(&terminal_event) {
-            let stream = self.stream_id(dispatch_topic);
-            let event_type = format!("TerminalEvent:{:?}", terminal_event.status);
-            self.append_event(&stream, &event_type, &payload).await?;
-        }
-        Ok(())
+        let payload = crate::dispatch::sink::JsonEventEncoder.encode_completion(terminal_event)?;
+        let stream = self.stream_id(dispatch_topic);
+        let event_type = format!("TerminalEvent:{:?}", terminal_event.status);
+        let payload_str = String::from_utf8_lossy(&payload);
+        self.append_event(&stream, &event_type, &payload_str).await
     }
 
     async fn dispatch_payload(&self, topic: &str, payload: &str) -> pingora::Result<()> {
-        let stream = self.stream_id(topic);
-        self.append_event(&stream, "Payload", payload).await
+        self.publish(topic, payload.as_bytes()).await
     }
 }
 

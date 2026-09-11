@@ -58,6 +58,19 @@ impl WebhookDispatch {
     }
 }
 
+#[async_trait::async_trait]
+impl crate::dispatch::sink::EventSink for WebhookDispatch {
+    async fn publish(&self, topic: &str, payload: &[u8]) -> pingora::Result<()> {
+        let body = std::str::from_utf8(payload).map_err(|e| {
+            pingora::Error::explain(
+                pingora::ErrorType::Custom("Utf8Error"),
+                format!("Invalid UTF-8 payload: {}", e),
+            )
+        })?;
+        self.send_webhook(topic, body).await
+    }
+}
+
 impl DispatchHandler for WebhookDispatch {
     fn get_dispatch_topic(&self, request_info: &RequestInfo) -> String {
         match request_info.gql.as_ref() {
@@ -85,11 +98,10 @@ impl DispatchHandler for WebhookDispatch {
     }
 
     async fn dispatch_request_info(&self, request_info: &RequestInfo) -> pingora::Result<()> {
+        use crate::dispatch::sink::{EventSink, JsonEventEncoder};
         let topic = self.get_dispatch_topic(request_info);
-        if let Ok(payload) = serde_json::to_string_pretty(&request_info) {
-            self.send_webhook(&topic, &payload).await?;
-        }
-        Ok(())
+        let payload = JsonEventEncoder.encode_request(request_info)?;
+        self.publish(&topic, &payload).await
     }
 
     async fn dispatch_response_info(
@@ -97,8 +109,9 @@ impl DispatchHandler for WebhookDispatch {
         dispatch_topic: &str,
         response_info: &ResponseInfo,
     ) -> pingora::Result<()> {
+        use crate::dispatch::sink::EventSink;
         if let Ok(payload) = serde_json::to_string_pretty(&response_info) {
-            self.send_webhook(dispatch_topic, &payload).await?;
+            let _ = self.publish(dispatch_topic, payload.as_bytes()).await;
         }
         Ok(())
     }
@@ -108,12 +121,14 @@ impl DispatchHandler for WebhookDispatch {
         dispatch_topic: &str,
         terminal_event: &crate::payload::TerminalEvent,
     ) -> pingora::Result<()> {
-        if let Ok(payload) = serde_json::to_string_pretty(terminal_event) {
+        use crate::dispatch::sink::JsonEventEncoder;
+        if let Ok(payload) = JsonEventEncoder.encode_completion(terminal_event) {
             let status_str = match terminal_event.status {
                 crate::payload::EventStatus::Success => "SUCCESS",
                 crate::payload::EventStatus::Failed => "FAILED",
                 crate::payload::EventStatus::Rejected => "REJECTED",
             };
+            let body = String::from_utf8_lossy(&payload).to_string();
             let res = self
                 .client
                 .post(&self.url)
@@ -122,7 +137,7 @@ impl DispatchHandler for WebhookDispatch {
                 .header("x-spectra-id", terminal_event.id.to_string())
                 .header("x-spectra-hlc", terminal_event.hlc.to_compact_string())
                 .header("x-spectra-status", status_str)
-                .body(payload)
+                .body(body)
                 .send()
                 .await;
 
@@ -143,6 +158,7 @@ impl DispatchHandler for WebhookDispatch {
     }
 
     async fn dispatch_payload(&self, topic: &str, payload: &str) -> pingora::Result<()> {
-        self.send_webhook(topic, payload).await
+        use crate::dispatch::sink::EventSink;
+        self.publish(topic, payload.as_bytes()).await
     }
 }

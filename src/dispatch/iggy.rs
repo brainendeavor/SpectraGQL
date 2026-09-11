@@ -6,6 +6,7 @@ use tokio::sync::OnceCell;
 use iggy::prelude::*;
 
 use crate::dispatch::DispatchHandler;
+use crate::dispatch::sink::EventSink;
 use crate::payload::{RequestInfo, ResponseInfo, TerminalEvent};
 
 pub fn normalize_iggy_url(addr: &str) -> String {
@@ -104,6 +105,20 @@ impl IggyDispatch {
     }
 }
 
+#[async_trait::async_trait]
+impl crate::dispatch::sink::EventSink for IggyDispatch {
+    async fn publish(&self, topic: &str, payload: &[u8]) -> pingora::Result<()> {
+        let payload_str = std::str::from_utf8(payload).unwrap_or("");
+        let msg = Self::build_message(payload_str).map_err(|e| {
+            pingora::Error::explain(
+                pingora::ErrorType::Custom("MessageBuildError"),
+                format!("Failed to build Iggy message: {}", e),
+            )
+        })?;
+        self.send_message(topic, msg).await
+    }
+}
+
 impl DispatchHandler for IggyDispatch {
     fn get_dispatch_topic(&self, request_info: &RequestInfo) -> String {
         match request_info.gql.as_ref() {
@@ -132,13 +147,9 @@ impl DispatchHandler for IggyDispatch {
 
     async fn dispatch_request_info(&self, request_info: &RequestInfo) -> pingora::Result<()> {
         log::info!("IggyDispatch.dispatch_request_info {}", request_info);
-        if let Ok(payload) = serde_json::to_string_pretty(&request_info) {
-            let topic = self.get_dispatch_topic(request_info);
-            if let Ok(msg) = Self::build_message(&payload) {
-                self.send_message(&topic, msg).await?;
-            }
-        }
-        Ok(())
+        let payload = crate::dispatch::sink::JsonEventEncoder.encode_request(request_info)?;
+        let topic = self.get_dispatch_topic(request_info);
+        self.publish(&topic, &payload).await
     }
 
     async fn dispatch_response_info(
@@ -147,9 +158,7 @@ impl DispatchHandler for IggyDispatch {
         response_info: &ResponseInfo,
     ) -> pingora::Result<()> {
         if let Ok(payload) = serde_json::to_string_pretty(&response_info) {
-            if let Ok(msg) = Self::build_message(&payload) {
-                self.send_message(dispatch_topic, msg).await?;
-            }
+            let _ = self.publish(dispatch_topic, payload.as_bytes()).await;
         }
         Ok(())
     }
@@ -159,19 +168,12 @@ impl DispatchHandler for IggyDispatch {
         dispatch_topic: &str,
         terminal_event: &TerminalEvent,
     ) -> pingora::Result<()> {
-        if let Ok(payload) = serde_json::to_string_pretty(&terminal_event) {
-            if let Ok(msg) = Self::build_message(&payload) {
-                self.send_message(dispatch_topic, msg).await?;
-            }
-        }
-        Ok(())
+        let payload = crate::dispatch::sink::JsonEventEncoder.encode_completion(terminal_event)?;
+        self.publish(dispatch_topic, &payload).await
     }
 
     async fn dispatch_payload(&self, topic: &str, payload: &str) -> pingora::Result<()> {
-        if let Ok(msg) = Self::build_message(payload) {
-            self.send_message(topic, msg).await?;
-        }
-        Ok(())
+        self.publish(topic, payload.as_bytes()).await
     }
 }
 

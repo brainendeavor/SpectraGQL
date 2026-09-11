@@ -2,6 +2,7 @@ use std::sync::Arc;
 use tokio::sync::OnceCell;
 
 use crate::dispatch::DispatchHandler;
+use crate::dispatch::sink::EventSink;
 use crate::payload::{RequestInfo, ResponseInfo};
 
 #[derive(Clone)]
@@ -66,6 +67,19 @@ impl NatsDispatch {
     }
 }
 
+#[async_trait::async_trait]
+impl crate::dispatch::sink::EventSink for NatsDispatch {
+    async fn publish(&self, topic: &str, payload: &[u8]) -> pingora::Result<()> {
+        let data = std::str::from_utf8(payload).map_err(|e| {
+            pingora::Error::explain(
+                pingora::ErrorType::Custom("Utf8Error"),
+                format!("Invalid UTF-8 payload: {}", e),
+            )
+        })?;
+        self.write_to_nats(topic, data).await
+    }
+}
+
 impl DispatchHandler for NatsDispatch {
     fn get_dispatch_topic(&self, request_info: &RequestInfo) -> String {
         match request_info.gql.as_ref() {
@@ -94,16 +108,10 @@ impl DispatchHandler for NatsDispatch {
 
     async fn dispatch_request_info(&self, request_info: &RequestInfo) -> pingora::Result<()> {
         log::info!("NatsDispatch.dispatch {}", request_info);
-        let payload = serde_json::to_string_pretty(&request_info).map_err(|e| {
-            log::error!("Failed to serialize request: {:?}", e);
-            pingora::Error::explain(
-                pingora::ErrorType::Custom("SerializationError"),
-                format!("Serialization error: {}", e),
-            )
-        })?;
+        let payload = crate::dispatch::sink::JsonEventEncoder.encode_request(request_info)?;
         let subject = self.get_dispatch_topic(request_info);
         log::info!("dispatch operation_info: {}", subject);
-        self.write_to_nats(&subject, &payload).await
+        self.publish(&subject, &payload).await
     }
 
     async fn dispatch_response_info(
@@ -113,7 +121,7 @@ impl DispatchHandler for NatsDispatch {
     ) -> pingora::Result<()> {
         log::info!("NatsDispatch.dispatch ResponseInfo {:?}", response_info);
         if let Ok(payload) = serde_json::to_string_pretty(&response_info) {
-            match self.write_to_nats(dispatch_topic, &payload).await {
+            match self.publish(dispatch_topic, payload.as_bytes()).await {
                 Ok(_) => {}
                 Err(e) => {
                     log::error!(
@@ -135,37 +143,20 @@ impl DispatchHandler for NatsDispatch {
         terminal_event: &crate::payload::TerminalEvent,
     ) -> pingora::Result<()> {
         log::info!("NatsDispatch.dispatch TerminalEvent {:?}", terminal_event.id);
-        if let Ok(payload) = serde_json::to_string_pretty(terminal_event) {
-            // Approach 2: unified terminal event on primary topic
-            match self.write_to_nats(dispatch_topic, &payload).await {
-                Ok(_) => {}
-                Err(e) => {
-                    log::error!(
-                        "Failed to write_to_nats terminal event. subject: {}\nerror: {}",
-                        dispatch_topic,
-                        e
-                    );
-                }
-            };
+        let payload = crate::dispatch::sink::JsonEventEncoder.encode_completion(terminal_event)?;
+        
+        // Approach 2: unified terminal event on primary topic
+        self.publish(dispatch_topic, &payload).await?;
 
-            // Approach 3: split topic notification if failed
-            if terminal_event.status == crate::payload::EventStatus::Failed {
-                let failed_topic = format!("{}.failed", dispatch_topic);
-                let _ = self.write_to_nats(&failed_topic, &payload).await;
-            }
-        } else {
-            log::error!("Failed to serialize terminal event: {:?}", terminal_event);
+        // Approach 3: split topic notification if failed
+        if terminal_event.status == crate::payload::EventStatus::Failed {
+            let failed_topic = format!("{}.failed", dispatch_topic);
+            let _ = self.publish(&failed_topic, &payload).await;
         }
         Ok(())
     }
 
     async fn dispatch_payload(&self, topic: &str, payload: &str) -> pingora::Result<()> {
-        match self.write_to_nats(topic, payload).await {
-            Ok(_) => {}
-            Err(e) => {
-                log::error!("Failed to write_to_nats. subject: {}\nerror: {}", topic, e);
-            }
-        };
-        Ok(())
+        self.publish(topic, payload.as_bytes()).await
     }
 }

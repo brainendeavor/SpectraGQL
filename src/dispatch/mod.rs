@@ -5,7 +5,10 @@ pub mod rabbitmq;
 pub mod redis_streams;
 pub mod resp;
 pub mod sierradb;
+pub mod sink;
 pub mod webhook;
+
+pub use sink::{EventEncoder, EventSink, JsonEventEncoder};
 
 use crate::payload::{RequestInfo, ResponseInfo, TerminalEvent};
 use anyhow::{Result, bail};
@@ -21,6 +24,21 @@ pub enum DispatchMethod {
     RedisStreams(redis_streams::RedisStreamsDispatch),
     SierraDb(sierradb::SierraDbDispatch),
     Webhook(webhook::WebhookDispatch),
+}
+
+#[async_trait::async_trait]
+impl EventSink for DispatchMethod {
+    async fn publish(&self, topic: &str, payload: &[u8]) -> pingora::Result<()> {
+        match self {
+            DispatchMethod::Iggy(s) => s.publish(topic, payload).await,
+            DispatchMethod::Kafka(s) => s.publish(topic, payload).await,
+            DispatchMethod::NatsJetstream(s) => s.publish(topic, payload).await,
+            DispatchMethod::RabbitMq(s) => s.publish(topic, payload).await,
+            DispatchMethod::RedisStreams(s) => s.publish(topic, payload).await,
+            DispatchMethod::SierraDb(s) => s.publish(topic, payload).await,
+            DispatchMethod::Webhook(s) => s.publish(topic, payload).await,
+        }
+    }
 }
 
 pub fn find_dispatch_handler_by_method(
