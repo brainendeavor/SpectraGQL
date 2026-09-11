@@ -4,22 +4,25 @@ use uuid::Uuid;
 use crate::clock::HlcTimestamp;
 use crate::payload::{PayloadType, RequestInfo, ResponseInfo};
 
-#[derive(Serialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Debug, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum EventStatus {
+pub enum OperationOutcome {
     Success,
     Failed,
+    Rejected,
 }
 
-/// Unified terminal event envelope (Approach 2) combining request intent,
+pub type EventStatus = OperationOutcome;
+
+/// Unified completion event envelope combining request intent,
 /// response outcome, duration, and causal timestamps (UUIDv7 + HLC).
 #[derive(Serialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
-pub struct TerminalEvent {
+pub struct CompletionEvent {
     #[serde(with = "uuid::serde::simple")]
     pub id: Uuid,
     pub hlc: HlcTimestamp,
-    pub status: EventStatus,
+    pub status: OperationOutcome,
     pub duration_ms: u64,
     pub operation_name: Option<String>,
     pub request: RequestInfo,
@@ -29,7 +32,9 @@ pub struct TerminalEvent {
     pub payload_type: PayloadType,
 }
 
-impl TerminalEvent {
+pub type TerminalEvent = CompletionEvent;
+
+impl CompletionEvent {
     pub fn success(
         id: Uuid,
         hlc: HlcTimestamp,
@@ -39,10 +44,10 @@ impl TerminalEvent {
         response: ResponseInfo,
     ) -> Self {
         request.sanitize();
-        TerminalEvent {
+        CompletionEvent {
             id,
             hlc,
-            status: EventStatus::Success,
+            status: OperationOutcome::Success,
             duration_ms,
             operation_name,
             request,
@@ -62,15 +67,37 @@ impl TerminalEvent {
         error: String,
     ) -> Self {
         request.sanitize();
-        TerminalEvent {
+        CompletionEvent {
             id,
             hlc,
-            status: EventStatus::Failed,
+            status: OperationOutcome::Failed,
             duration_ms,
             operation_name,
             request,
             response,
             error: Some(error),
+            payload_type: PayloadType::Response,
+        }
+    }
+
+    pub fn rejected(
+        id: Uuid,
+        hlc: HlcTimestamp,
+        duration_ms: u64,
+        operation_name: Option<String>,
+        mut request: RequestInfo,
+        reason: String,
+    ) -> Self {
+        request.sanitize();
+        CompletionEvent {
+            id,
+            hlc,
+            status: OperationOutcome::Rejected,
+            duration_ms,
+            operation_name,
+            request,
+            response: None,
+            error: Some(reason),
             payload_type: PayloadType::Response,
         }
     }

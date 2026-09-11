@@ -112,6 +112,7 @@ impl DispatchHandler for WebhookDispatch {
             let status_str = match terminal_event.status {
                 crate::payload::EventStatus::Success => "SUCCESS",
                 crate::payload::EventStatus::Failed => "FAILED",
+                crate::payload::EventStatus::Rejected => "REJECTED",
             };
             let res = self
                 .client

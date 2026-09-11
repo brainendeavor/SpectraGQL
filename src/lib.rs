@@ -7,7 +7,8 @@ pub mod ratify;
 pub mod spectra_config;
 pub mod subscriptions;
 
-use crate::spectra_config::SpectraConfig;
+pub use payload::{CompletionEvent, OperationOutcome, TerminalEvent};
+pub use spectra_config::{ExecutionStrategy, OperationMode, SpectraConfig};
 
 use anyhow::Result;
 use std::sync::Arc;

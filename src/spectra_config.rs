@@ -6,11 +6,38 @@ use config::{Config, ConfigError, Environment, File};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Copy, Default)]
-#[serde(rename_all = "UPPERCASE")]
-pub enum OperationMode {
+pub enum ExecutionStrategy {
     #[default]
-    A,
-    B,
+    #[serde(
+        rename = "sync_upstream_execution",
+        alias = "SYNC_UPSTREAM_EXECUTION",
+        alias = "A",
+        alias = "a"
+    )]
+    SyncUpstreamExecution,
+
+    #[serde(
+        rename = "async_edge_command",
+        alias = "ASYNC_EDGE_COMMAND",
+        alias = "B",
+        alias = "b"
+    )]
+    AsyncEdgeCommand,
+}
+
+pub type OperationMode = ExecutionStrategy;
+
+impl ExecutionStrategy {
+    pub const A: ExecutionStrategy = ExecutionStrategy::SyncUpstreamExecution;
+    pub const B: ExecutionStrategy = ExecutionStrategy::AsyncEdgeCommand;
+
+    pub fn is_async_edge_command(&self) -> bool {
+        matches!(self, ExecutionStrategy::AsyncEdgeCommand)
+    }
+
+    pub fn is_sync_upstream_execution(&self) -> bool {
+        matches!(self, ExecutionStrategy::SyncUpstreamExecution)
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Copy, Default)]
@@ -61,11 +88,17 @@ impl Default for SpectraModeAConfig {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct SpectraRouteConfig {
     pub operation: String,
-    #[serde(default)]
-    pub mode: OperationMode,
+    #[serde(default, alias = "strategy")]
+    pub mode: ExecutionStrategy,
     pub upstream: Option<String>,
     #[serde(default = "default_receipt_status")]
     pub receipt_status: String,
+}
+
+impl SpectraRouteConfig {
+    pub fn strategy(&self) -> ExecutionStrategy {
+        self.mode
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

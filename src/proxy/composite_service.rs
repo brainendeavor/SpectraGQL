@@ -21,9 +21,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use super::ServiceHandle;
-use crate::spectra_config::{
-    ModeADispatchPolicy, OperationMode, SpectraModeAConfig, SpectraRouteConfig,
-};
+use crate::spectra_config::{ModeADispatchPolicy, SpectraModeAConfig, SpectraRouteConfig};
 
 #[derive(Clone)]
 pub struct ServiceConfig {
@@ -599,7 +597,7 @@ impl ProxyHttp for CompositeServiceProxy {
                     });
 
                     if let Some(route) = matched_route {
-                        if route.mode == OperationMode::B {
+                        if route.mode.is_async_edge_command() {
                             log::info!("Executing Mode B edge termination for operation: {}", route.operation);
                             ctx.proxy_context.is_mode_b_terminated = true;
 
@@ -931,6 +929,7 @@ pub fn generate_command_receipt(
 mod tests {
     use super::*;
     use crate::payload::parse_graphql_operation;
+    use crate::spectra_config::ExecutionStrategy;
     use std::net::SocketAddr;
 
     #[test]
@@ -968,7 +967,7 @@ mod tests {
             "inventory_update".to_string(),
             SpectraRouteConfig {
                 operation: "adjustInventory".to_string(),
-                mode: OperationMode::A,
+                mode: ExecutionStrategy::SyncUpstreamExecution,
                 upstream: Some("inventory".to_string()),
                 receipt_status: "ACCEPTED".to_string(),
             },
@@ -977,7 +976,7 @@ mod tests {
             "customer_address".to_string(),
             SpectraRouteConfig {
                 operation: "updateCustomerAddress".to_string(),
-                mode: OperationMode::A,
+                mode: ExecutionStrategy::SyncUpstreamExecution,
                 upstream: Some("crm".to_string()),
                 receipt_status: "ACCEPTED".to_string(),
             },
@@ -986,7 +985,7 @@ mod tests {
             "bulk_import".to_string(),
             SpectraRouteConfig {
                 operation: "importCatalog".to_string(),
-                mode: OperationMode::B,
+                mode: ExecutionStrategy::AsyncEdgeCommand,
                 upstream: None,
                 receipt_status: "ACCEPTED".to_string(),
             },
@@ -1003,7 +1002,7 @@ mod tests {
         let matched_inv = proxy.routes.values().find(|r| op_inv.matches_operation(&r.operation));
         assert!(matched_inv.is_some());
         let inv_route = matched_inv.unwrap();
-        assert_eq!(inv_route.mode, OperationMode::A);
+        assert_eq!(inv_route.mode, ExecutionStrategy::SyncUpstreamExecution);
         let target_addr = proxy.named_upstreams.get(inv_route.upstream.as_ref().unwrap()).unwrap();
         assert_eq!(*target_addr, inventory_addr);
 
@@ -1012,7 +1011,7 @@ mod tests {
         let matched_crm = proxy.routes.values().find(|r| op_crm.matches_operation(&r.operation));
         assert!(matched_crm.is_some());
         let crm_route = matched_crm.unwrap();
-        assert_eq!(crm_route.mode, OperationMode::A);
+        assert_eq!(crm_route.mode, ExecutionStrategy::SyncUpstreamExecution);
         let target_addr = proxy.named_upstreams.get(crm_route.upstream.as_ref().unwrap()).unwrap();
         assert_eq!(*target_addr, crm_addr);
 
@@ -1021,7 +1020,7 @@ mod tests {
         let matched_b = proxy.routes.values().find(|r| op_mode_b.matches_operation(&r.operation));
         assert!(matched_b.is_some());
         let b_route = matched_b.unwrap();
-        assert_eq!(b_route.mode, OperationMode::B);
+        assert_eq!(b_route.mode, ExecutionStrategy::AsyncEdgeCommand);
         assert_eq!(b_route.receipt_status, "ACCEPTED");
 
         // 4. Query or unmapped mutation -> falls back to default upstream

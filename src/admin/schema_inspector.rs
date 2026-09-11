@@ -3,7 +3,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use crate::admin::api::{AdminMutationCoverageEntry, AdminSchemaCoverageResponse};
-use crate::spectra_config::{OperationMode, SpectraRouteConfig};
+use crate::spectra_config::{ExecutionStrategy, SpectraRouteConfig};
 
 /// Analyzes an upstream GraphQL introspection response JSON against configured routes
 /// to compute strangler-fig migration progress, edge-terminated Mode B operations,
@@ -55,7 +55,7 @@ pub fn analyze_mutation_coverage(
         if let Some(route) = matched_route {
             matched_route_ops.insert(field_name.clone());
             match route.mode {
-                OperationMode::B => {
+                ExecutionStrategy::AsyncEdgeCommand => {
                     mode_b_count += 1;
                     mutations.push(AdminMutationCoverageEntry {
                         field_name,
@@ -65,7 +65,7 @@ pub fn analyze_mutation_coverage(
                         receipt_status: Some(route.receipt_status.clone()),
                     });
                 }
-                OperationMode::A => {
+                ExecutionStrategy::SyncUpstreamExecution => {
                     if let Some(upstream_name) = &route.upstream {
                         strangled_count += 1;
                         mutations.push(AdminMutationCoverageEntry {
@@ -245,7 +245,7 @@ mod tests {
             "inventory_update".to_string(),
             SpectraRouteConfig {
                 operation: "adjustInventory".to_string(),
-                mode: OperationMode::A,
+                mode: ExecutionStrategy::SyncUpstreamExecution,
                 upstream: Some("inventory".to_string()),
                 receipt_status: "ACCEPTED".to_string(),
             },
@@ -254,7 +254,7 @@ mod tests {
             "bulk_import".to_string(),
             SpectraRouteConfig {
                 operation: "importCatalog".to_string(),
-                mode: OperationMode::B,
+                mode: ExecutionStrategy::AsyncEdgeCommand,
                 upstream: None,
                 receipt_status: "ACCEPTED".to_string(),
             },
@@ -263,7 +263,7 @@ mod tests {
             "ghost_operation".to_string(),
             SpectraRouteConfig {
                 operation: "nonExistentMutation".to_string(),
-                mode: OperationMode::A,
+                mode: ExecutionStrategy::SyncUpstreamExecution,
                 upstream: Some("ghost_service".to_string()),
                 receipt_status: "ACCEPTED".to_string(),
             },

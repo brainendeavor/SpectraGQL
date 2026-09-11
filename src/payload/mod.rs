@@ -13,7 +13,7 @@ pub use http_request_info::HttpRequestInfo;
 pub use request_info::RequestInfo;
 pub use response_body::ResponseBody;
 pub use response_info::ResponseInfo;
-pub use terminal_event::{EventStatus, TerminalEvent};
+pub use terminal_event::{CompletionEvent, EventStatus, OperationOutcome, TerminalEvent};
 
 pub use gql_request_info::GraphQLOperationType;
 
