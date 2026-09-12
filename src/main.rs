@@ -3,7 +3,7 @@ use pingora::proxy::http_proxy_service_with_name;
 use pingora::server::Server;
 use pingora::server::configuration;
 use spectragql::build_composite_service;
-use spectragql::spectra_config::SpectraConfig;
+use spectragql::SpectraConfig;
 
 fn main() -> Result<()> {
     env_logger::init();

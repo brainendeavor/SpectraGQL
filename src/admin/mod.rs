@@ -14,8 +14,8 @@ use crate::admin::api::{
     AdminStatusResponse, AdminSubscriptionsResponse,
 };
 use crate::admin::schema_inspector::SchemaInspector;
-use crate::ratify::IdempotencyEngine;
-use crate::spectra_config::{SpectraAdminConfig, SpectraConfig, SpectraRouteConfig};
+use crate::core::config::{SpectraAdminConfig, SpectraConfig, SpectraRouteConfig};
+use crate::idempotency::IdempotencyEngine;
 use crate::subscriptions::SubscriptionHub;
 
 pub const ADMIN_HTML: &str = include_str!("assets/admin.html");
@@ -219,7 +219,7 @@ impl AdminEngine {
             let mode_b_count = self
                 .routes
                 .values()
-                .filter(|r| r.mode == crate::spectra_config::OperationMode::B)
+                .filter(|r| r.mode == crate::core::types::OperationMode::B)
                 .count();
 
             let status_resp = AdminStatusResponse {

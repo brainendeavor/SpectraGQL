@@ -1,11 +1,12 @@
 use http::{HeaderMap, Request};
-use spectragql::clock::HlcClock;
+use spectragql::HlcClock;
+use spectragql::gateway::filters::strategy::generate_command_receipt;
 use spectragql::interceptors::InterceptorRejection;
-use spectragql::payload::{
-    CompletionEvent, EventStatus, GraphQLRequestInfo, GraphQLErrorResponse,
-    RawPayload, RequestInfo, ResponseBody, ResponseInfo, SanitizedPayload,
+use spectragql::protocol::{
+    GraphQLErrorResponse, GraphQLRequestInfo, RawPayload, RequestInfo, ResponseBody, ResponseInfo,
+    SanitizedPayload,
 };
-use spectragql::proxy::filters::strategy::generate_command_receipt;
+use spectragql::telemetry::{CompletionEvent, EventStatus};
 
 #[test]
 fn test_typestate_raw_to_sanitized_transition() {

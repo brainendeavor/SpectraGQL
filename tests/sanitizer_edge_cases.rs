@@ -1,5 +1,5 @@
 use serde_json::json;
-use spectragql::ratify::Sanitizer;
+use spectragql::interceptors::Sanitizer;
 
 #[test]
 fn test_sanitizer_does_not_redact_benign_substrings() {

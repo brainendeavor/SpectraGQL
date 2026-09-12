@@ -67,7 +67,7 @@ impl RequestInterceptor for GraphQLSyntaxInterceptor {
             .get("operationName")
             .and_then(|o| o.as_str());
 
-        let op = match crate::payload::gql_parser::parse_graphql_operation_with_name(
+        let op = match crate::protocol::parse_graphql_operation_with_name(
             query,
             op_name_requested,
         ) {

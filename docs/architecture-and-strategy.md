@@ -283,16 +283,16 @@ The codebase has undergone a complete architectural modernization:
 
 1. **Core Library Target (`src/lib.rs`):**
    - Extracted reusable library target exporting engine components and composable filters. Converted `main.rs` to a thin binary bootstrap.
-2. **God Object Decomposition (`src/proxy/filters/`):**
+2. **God Object Decomposition (`src/gateway/filters/`):**
    - Deconstructed the 1,038-line `CompositeServiceProxy` into single-responsibility pipeline filters (`HealthFilter`, `AdminFilter`, `IdempotencyFilter`, `StrategyRouter`, `TelemetryDispatcher`).
 3. **Interceptor Contracts, Payload Transformation & CEL Evaluator (`src/interceptors/`):**
    - Implemented `RequestInterceptor`, `ResponseInterceptor`, and `RuleEvaluator` trait ports with `CelRuleEvaluator` for sub-microsecond declarative policy evaluation and in-flight payload transformation.
-4. **Compile-Time Type-State Security (`src/payload/typestate.rs`):**
+4. **Compile-Time Type-State Security (`src/protocol/typestate.rs`):**
    - Enforced `RawPayload<T>` to `SanitizedPayload<T>` type transitions. Eliminated PII risk in Mode B edge dispatch.
-5. **Strongly Typed Serde Error Envelopes (`src/payload/graphql_error.rs`):**
+5. **Strongly Typed Serde Error Envelopes (`src/protocol/error.rs`):**
    - Replaced all string-interpolated JSON format strings with strongly-typed `GraphQLErrorResponse` and `CommandReceipt` models.
 6. **Automated Integration Test Matrix:**
-   - Expanded test suite to **111 tests** across 9 dedicated test files under `tests/` with 100% pass rate and 0 warnings.
+   - Expanded test suite to **114 tests** across 9 dedicated test files under `tests/` with 100% pass rate and 0 warnings.
 
 ---
 

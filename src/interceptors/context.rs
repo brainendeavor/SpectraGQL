@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use uuid::Uuid;
-use crate::clock::HlcTimestamp;
-use crate::payload::GraphQLOperationType;
+use crate::core::clock::HlcTimestamp;
+use crate::protocol::GraphQLOperationType;
 
 /// Execution context passed through RequestInterceptor and ResponseInterceptor pipelines.
 #[derive(Debug, Clone)]
@@ -79,7 +79,7 @@ impl InterceptorRejection {
     /// Renders a GraphQL error response JSON string matching the standard GraphQL spec:
     /// `{"errors": [{"message": "...", "extensions": {"code": "..."}}]}`
     pub fn to_graphql_response(&self) -> String {
-        crate::payload::GraphQLErrorResponse::from(self).to_json_string()
+        crate::protocol::GraphQLErrorResponse::from(self).to_json_string()
     }
 }
 

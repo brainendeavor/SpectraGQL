@@ -3,7 +3,8 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use crate::admin::api::{AdminMutationCoverageEntry, AdminSchemaCoverageResponse};
-use crate::spectra_config::{ExecutionStrategy, SpectraRouteConfig};
+use crate::core::config::SpectraRouteConfig;
+use crate::core::types::ExecutionStrategy;
 
 /// Analyzes an upstream GraphQL introspection response JSON against configured routes
 /// to compute strangler-fig migration progress, edge-terminated Mode B operations,

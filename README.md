@@ -92,7 +92,7 @@ SpectraGQL bridges existing microservices and event-driven backends through two 
 ## Modern Architecture Highlights
 
 ### 1. Composable Filter Pipeline
-The monolithic proxy architecture has been decomposed into sequential, single-responsibility pipeline filters under `src/proxy/filters/`:
+The monolithic proxy architecture has been decomposed into sequential, single-responsibility pipeline filters under `src/gateway/filters/`:
 - **`HealthFilter`**: Instant zero-allocation response for `/healthz` and `/livez` liveness probes.
 - **`AdminFilter`**: CIDR-secured administration dashboard, dynamic metrics, and schema inspector.
 - **`IdempotencyFilter`**: Prevents duplicate mutation execution via explicit `Idempotency-Key` headers or automatic SHA-256 fingerprinting. In-flight duplicates receive standard `409 Conflict` GraphQL errors, while completed operations replay from cache with zero upstream calls.
@@ -112,9 +112,9 @@ SpectraGQL enforces sensitive data redaction at compile time using Rust's type-s
 - Telemetry `CompletionEvent` and broker sinks accept **only** `SanitizedPayload<RequestInfo>`, guaranteeing that passwords, tokens, API keys, and authorization headers can never leak onto Kafka, NATS, or other brokers.
 
 ### 4. Atomic EventSink Decoupling
-Network transports and message brokers implement the atomic [`EventSink`](file:///Users/bmo/code/SpectraGQL/src/dispatch/sink.rs) port:
-- Supported brokers: **NATS JetStream**, **Apache Kafka / Redpanda**, **Redis Streams**, **RabbitMQ**, **Apache Iggy**, **SierraDB**, and **Webhooks**.
-- Serialization is completely decoupled via [`JsonEventEncoder`](file:///Users/bmo/code/SpectraGQL/src/dispatch/sink.rs).
+Network transports and message brokers implement the atomic [`EventSink`](file:///Users/bmo/code/SpectraGQL/src/telemetry/sink.rs) port:
+- Adapters focus strictly on connection lifecycle and byte transport: NATS JetStream, Apache Kafka, Redis Streams, RabbitMQ, Apache Iggy, SierraDB, and HTTP Webhooks.
+- Serialization is completely decoupled via [`JsonEventEncoder`](file:///Users/bmo/code/SpectraGQL/src/telemetry/sink.rs).
 
 ### 5. Deterministic Causal Ordering
 Every operation is tagged with:

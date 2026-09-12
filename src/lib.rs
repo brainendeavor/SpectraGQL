@@ -1,26 +1,37 @@
 pub mod admin;
-pub mod clock;
-pub mod dispatch;
+pub mod core;
+pub mod gateway;
+pub mod idempotency;
 pub mod interceptors;
-pub mod payload;
-pub mod proxy;
-pub mod ratify;
-pub mod spectra_config;
+pub mod protocol;
 pub mod subscriptions;
+pub mod telemetry;
 
-pub use dispatch::{EventEncoder, EventSink, JsonEventEncoder};
+pub use core::{
+    ExecutionStrategy, HlcClock, HlcTimestamp, IdempotencyBackendType, ModeADispatchPolicy,
+    OperationMode, OperationOutcome, SpectraAdminConfig, SpectraConfig, SpectraDispatchConfig,
+    SpectraGqlConfig, SpectraIdempotencyConfig, SpectraModeAConfig, SpectraRestConfig,
+    SpectraRouteConfig, SpectraSubscriptionsConfig, SpectraUpstreamConfig,
+};
+pub use gateway::{CompositeService, ExtraServiceParams, ServiceConfig, generate_command_receipt};
+pub use idempotency::{IdempotencyEngine, IdempotencyOutcome, IdempotencyRecord};
 pub use interceptors::{
     CelRuleEvaluator, InterceptorContext, InterceptorRejection, InterceptorVerdict,
     RequestInterceptor, RequestInterceptorPipeline, ResponseInterceptor,
-    ResponseInterceptorPipeline, RuleEvaluator,
+    ResponseInterceptorPipeline, RuleEvaluator, Sanitizer,
 };
-pub use payload::{CompletionEvent, OperationOutcome, TerminalEvent};
-pub use spectra_config::{ExecutionStrategy, OperationMode, SpectraConfig};
+pub use protocol::{
+    GraphQLError, GraphQLErrorResponse, GraphQLOperationType, GraphQLRequestInfo, HttpRequestInfo,
+    ProtocolDecoder, RequestDecoder, RequestInfo, ResponseBody, ResponseInfo, SanitizedPayload,
+    parse_graphql_operation, parse_graphql_operation_with_name,
+};
+pub use telemetry::{
+    CompletionEvent, DispatchHandler, DispatchMethod, EventEncoder, EventSink, EventStatus,
+    JsonEventEncoder, TerminalEvent, find_dispatch_handler_by_method,
+};
 
 use anyhow::Result;
 use std::sync::Arc;
-
-use crate::proxy::{CompositeService, ExtraServiceParams, ServiceConfig};
 
 /// Builds a fully-configured CompositeService from a SpectraConfig.
 /// This allows tests to construct the gateway pipeline directly without starting Pingora's full process.
@@ -51,19 +62,19 @@ pub fn build_composite_service(spectra_configuration: &SpectraConfig) -> Result<
     );
 
     let idempotency_engine = match spectra_configuration.idempotency.backend {
-        crate::spectra_config::IdempotencyBackendType::Redis => {
+        IdempotencyBackendType::Redis => {
             let redis_addr = spectra_configuration
                 .idempotency
                 .addr
                 .as_deref()
                 .unwrap_or("127.0.0.1:6379");
-            Arc::new(crate::ratify::IdempotencyEngine::new_redis(
+            Arc::new(IdempotencyEngine::new_redis(
                 redis_addr,
                 std::time::Duration::from_secs(spectra_configuration.idempotency.ttl_secs),
             ))
         }
-        crate::spectra_config::IdempotencyBackendType::Memory => {
-            Arc::new(crate::ratify::IdempotencyEngine::new(
+        IdempotencyBackendType::Memory => {
+            Arc::new(IdempotencyEngine::new(
                 std::time::Duration::from_secs(spectra_configuration.idempotency.ttl_secs),
                 spectra_configuration.idempotency.max_capacity,
             ))

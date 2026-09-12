@@ -1,4 +1,4 @@
-use spectragql::payload::{
+use spectragql::protocol::{
     GraphQLOperationType, parse_graphql_operation, parse_graphql_operation_with_name,
 };
 

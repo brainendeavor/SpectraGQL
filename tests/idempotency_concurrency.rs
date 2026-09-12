@@ -1,8 +1,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 use http::{HeaderMap, HeaderValue};
-use spectragql::clock::HlcTimestamp;
-use spectragql::ratify::{IdempotencyEngine, IdempotencyOutcome};
+use spectragql::HlcTimestamp;
+use spectragql::idempotency::{IdempotencyEngine, IdempotencyOutcome};
 
 #[tokio::test]
 async fn test_concurrent_thundering_herd_on_idempotency_key() {

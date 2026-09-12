@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use serde_json::json;
 use spectragql::admin::is_ip_allowed;
 use spectragql::admin::schema_inspector::analyze_mutation_coverage;
-use spectragql::spectra_config::{OperationMode, SpectraRouteConfig};
+use spectragql::core::config::{OperationMode, SpectraRouteConfig};
 
 #[test]
 fn test_ip_allowlist_boundary_and_wildcards() {

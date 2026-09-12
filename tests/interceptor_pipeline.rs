@@ -1,4 +1,4 @@
-use spectragql::clock::HlcTimestamp;
+use spectragql::HlcTimestamp;
 use spectragql::interceptors::evaluators::CelRuleEvaluator;
 use spectragql::interceptors::request::{
     GraphQLSyntaxInterceptor, HeaderValidationInterceptor, RequestInterceptorPipeline,
@@ -71,7 +71,7 @@ fn test_graphql_syntax_interceptor_valid_and_invalid() {
     assert_eq!(ctx.operation_name.as_deref(), Some("GetViewer"));
     assert_eq!(
         ctx.operation_type,
-        Some(spectragql::payload::GraphQLOperationType::Query)
+        Some(spectragql::protocol::GraphQLOperationType::Query)
     );
 
     // 2. Non-GraphQL path passes transparently

@@ -1,10 +1,10 @@
 use http::Request;
-use spectragql::clock::HlcClock;
-use spectragql::dispatch::nats::NatsDispatch;
-use spectragql::dispatch::webhook::WebhookDispatch;
-use spectragql::dispatch::DispatchHandler;
-use spectragql::payload::RequestInfo;
-use spectragql::proxy::generate_command_receipt;
+use spectragql::HlcClock;
+use spectragql::gateway::generate_command_receipt;
+use spectragql::protocol::RequestInfo;
+use spectragql::telemetry::DispatchHandler;
+use spectragql::telemetry::nats::NatsDispatch;
+use spectragql::telemetry::webhook::WebhookDispatch;
 
 #[test]
 fn test_mode_b_dispatch_failed_receipt_structure() {
