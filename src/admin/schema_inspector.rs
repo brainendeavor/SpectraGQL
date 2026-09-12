@@ -249,6 +249,7 @@ mod tests {
                 mode: ExecutionStrategy::SyncUpstreamExecution,
                 upstream: Some("inventory".to_string()),
                 receipt_status: "ACCEPTED".to_string(),
+                interceptors: vec![],
             },
         );
         routes.insert(
@@ -258,6 +259,7 @@ mod tests {
                 mode: ExecutionStrategy::AsyncEdgeCommand,
                 upstream: None,
                 receipt_status: "ACCEPTED".to_string(),
+                interceptors: vec![],
             },
         );
         routes.insert(
@@ -267,6 +269,7 @@ mod tests {
                 mode: ExecutionStrategy::SyncUpstreamExecution,
                 upstream: Some("ghost_service".to_string()),
                 receipt_status: "ACCEPTED".to_string(),
+                interceptors: vec![],
             },
         );
 

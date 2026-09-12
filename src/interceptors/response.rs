@@ -96,9 +96,9 @@ impl ResponseInterceptor for SensitiveDataResponseInterceptor {
 
 /// Pipeline composing multiple ResponseInterceptors sequentially.
 /// Short-circuits immediately on the first InterceptorRejection.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct ResponseInterceptorPipeline {
-    interceptors: Vec<Box<dyn ResponseInterceptor>>,
+    interceptors: Vec<Arc<dyn ResponseInterceptor>>,
 }
 
 impl ResponseInterceptorPipeline {
@@ -109,8 +109,25 @@ impl ResponseInterceptorPipeline {
     }
 
     pub fn with_interceptor<I: ResponseInterceptor + 'static>(mut self, interceptor: I) -> Self {
-        self.interceptors.push(Box::new(interceptor));
+        self.interceptors.push(Arc::new(interceptor));
         self
+    }
+
+    pub fn with_arc_interceptor(mut self, interceptor: Arc<dyn ResponseInterceptor>) -> Self {
+        self.interceptors.push(interceptor);
+        self
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.interceptors.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.interceptors.len()
+    }
+
+    pub fn extend(&mut self, other: &ResponseInterceptorPipeline) {
+        self.interceptors.extend(other.interceptors.iter().cloned());
     }
 
     pub fn intercept_response(

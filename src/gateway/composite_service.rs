@@ -45,6 +45,7 @@ pub struct CompositeServiceProxy {
     pub subscription_hub: Arc<crate::subscriptions::SubscriptionHub>,
     pub subscriptions_config: SpectraSubscriptionsConfig,
     pub admin_engine: Option<crate::admin::AdminEngine>,
+    pub interceptor_manager: Arc<crate::interceptors::InterceptorManager>,
 }
 
 impl ServiceConfig {
@@ -81,6 +82,7 @@ impl CompositeServiceProxy {
             subscription_hub: Arc::new(crate::subscriptions::SubscriptionHub::new()),
             subscriptions_config: SpectraSubscriptionsConfig::default(),
             admin_engine: None,
+            interceptor_manager: Arc::new(crate::interceptors::InterceptorManager::empty()),
         }
     }
 
@@ -116,6 +118,14 @@ impl CompositeServiceProxy {
 
     pub fn with_admin(mut self, admin_engine: crate::admin::AdminEngine) -> Self {
         self.admin_engine = Some(admin_engine);
+        self
+    }
+
+    pub fn with_interceptor_manager(
+        mut self,
+        interceptor_manager: Arc<crate::interceptors::InterceptorManager>,
+    ) -> Self {
+        self.interceptor_manager = interceptor_manager;
         self
     }
 
@@ -297,6 +307,8 @@ impl ProxyHttp for CompositeServiceProxy {
             target_upstream_addr: None,
             is_mode_b_terminated: false,
             dispatch_policy: self.mode_a.dispatch_policy,
+            active_operation: None,
+            has_response_interception: false,
         };
         CompositeServiceProxyCtx {
             proxy_context,
@@ -448,21 +460,103 @@ impl ProxyHttp for CompositeServiceProxy {
         }
 
         if !ctx.proxy_context.buffer.is_empty() {
-            if let Ok(body_str) = std::str::from_utf8(&ctx.proxy_context.buffer) {
-                let (request_protocol, dispatch_method) = match ctx.service.as_ref() {
-                    Some(s) => (s.get_request_protocol().clone(), s.get_dispatch_method().clone()),
-                    None => return Ok(false),
-                };
+            let mut body_str = match std::str::from_utf8(&ctx.proxy_context.buffer) {
+                Ok(s) => s.to_string(),
+                Err(_) => return Ok(false),
+            };
 
-                if let Ok(request_info) = request_protocol.decode_request(
-                    ctx.proxy_context.request_id,
-                    ctx.proxy_context.hlc,
-                    session.req_header().as_owned_parts(),
-                    body_str,
-                ) {
-                    ctx.proxy_context.request_topic =
-                        dispatch_method.get_dispatch_topic(&request_info);
-                    ctx.proxy_context.request_info = Some(request_info.clone());
+            let (request_protocol, dispatch_method) = match ctx.service.as_ref() {
+                Some(s) => (s.get_request_protocol().clone(), s.get_dispatch_method().clone()),
+                None => return Ok(false),
+            };
+
+            if let Ok(request_info) = request_protocol.decode_request(
+                ctx.proxy_context.request_id,
+                ctx.proxy_context.hlc,
+                session.req_header().as_owned_parts(),
+                &body_str,
+            ) {
+                ctx.proxy_context.request_topic =
+                    dispatch_method.get_dispatch_topic(&request_info);
+                ctx.proxy_context.request_info = Some(request_info.clone());
+
+                let operation_name = request_info
+                    .gql
+                    .as_ref()
+                    .and_then(|g| g.operation_name.clone());
+                ctx.proxy_context.active_operation = operation_name.clone();
+
+                // Evaluate Request Interceptors (global + route-specific)
+                let req_pipeline = self
+                    .interceptor_manager
+                    .get_request_pipeline(operation_name.as_deref());
+                if !req_pipeline.is_empty() {
+                    let mut interceptor_ctx = crate::interceptors::InterceptorContext::new(
+                        ctx.proxy_context.request_id,
+                        ctx.proxy_context.hlc,
+                    );
+                    if let Some(g) = &request_info.gql {
+                        interceptor_ctx.operation_name = g.operation_name.clone();
+                        interceptor_ctx.operation_type = Some(g.operation_type.clone());
+                    }
+
+                    let mut req_parts = session.req_header().as_owned_parts();
+                    let verdict = req_pipeline.intercept_request(
+                        &mut interceptor_ctx,
+                        &mut req_parts,
+                        &body_str,
+                    );
+
+                    match verdict {
+                        crate::interceptors::InterceptorVerdict::Pass => {}
+                        crate::interceptors::InterceptorVerdict::Reject(rejection) => {
+                            log::info!(
+                                "Request rejected at edge by interceptor: code={}, status={}",
+                                rejection.code,
+                                rejection.status_code
+                            );
+                            let err_body = rejection.to_graphql_response();
+                            let mut header = pingora::http::ResponseHeader::build(
+                                rejection.status_code.as_u16(),
+                                None,
+                            )
+                            .unwrap();
+                            let _ = header.insert_header("content-type", "application/json");
+                            let _ = header.insert_header(
+                                REQUEST_ID_HEADER,
+                                ctx.proxy_context.request_id.to_string(),
+                            );
+                            let _ = header.insert_header(
+                                "x-spectra-hlc",
+                                ctx.proxy_context.hlc.to_compact_string(),
+                            );
+
+                            session.set_keepalive(None);
+                            session.write_response_header(Box::new(header), false).await?;
+                            session
+                                    .write_response_body(Some(bytes::Bytes::from(err_body)), true)
+                                    .await?;
+                            return Ok(true);
+                        }
+                        crate::interceptors::InterceptorVerdict::Transform { headers, body } => {
+                            if let Some(h) = headers {
+                                for (k, v) in h {
+                                    if let Some(k) = k {
+                                        let _ = session
+                                            .req_header_mut()
+                                            .insert_header(k, v.to_str().unwrap_or(""));
+                                    }
+                                }
+                            }
+                            if let Some(b) = body {
+                                if let Ok(s) = std::str::from_utf8(&b) {
+                                    body_str = s.to_string();
+                                }
+                                ctx.proxy_context.buffer = b;
+                            }
+                        }
+                    }
+                }
 
                     // If no explicit idempotency key, register fingerprint for mutations
                     let is_mutation = request_info
@@ -490,7 +584,7 @@ impl ProxyHttp for CompositeServiceProxy {
                             ctx.proxy_context.hlc,
                             &client_id,
                             op_name,
-                            body_str,
+                            &body_str,
                         )
                         .await?
                         {
@@ -533,7 +627,6 @@ impl ProxyHttp for CompositeServiceProxy {
                         &dispatch_method,
                     )
                     .await;
-                }
             }
         }
 
@@ -584,7 +677,13 @@ impl ProxyHttp for CompositeServiceProxy {
         }
         ctx.proxy_context.response_parts = Some(resp.as_owned_parts());
 
-        // TODO: invoke ratify_response here?
+        // Check if response interceptors are registered for this operation
+        if self.interceptor_manager.has_response_interceptors(ctx.proxy_context.active_operation.as_deref()) {
+            ctx.proxy_context.has_response_interception = true;
+            // Remove content-length so downstream HTTP framing uses chunked encoding,
+            // avoiding framing corruption if the payload is resized or transformed.
+            let _ = resp.remove_header("content-length");
+        }
 
         return Ok(());
     }
@@ -599,18 +698,82 @@ impl ProxyHttp for CompositeServiceProxy {
     where
         Self::CTX: Send + Sync,
     {
-        if let Some(b) = body {
+        // 1. Fast path: If no response interceptors are registered, stream chunks through with zero buffering!
+        if !ctx.proxy_context.has_response_interception {
+            if let Some(b) = body {
+                ctx.proxy_context.buffer.extend(&b[..]);
+            }
+
+            if end_of_stream {
+                let body_str = std::str::from_utf8(&ctx.proxy_context.buffer).unwrap_or_default();
+                let response_body = match ctx.proxy_context.response_parts.as_ref() {
+                    Some(parts) => ResponseBody::new(&parts.headers, body_str),
+                    None => ResponseBody::new(&http::HeaderMap::new(), body_str),
+                };
+                ctx.proxy_context.response_body = Some(response_body);
+                ctx.proxy_context.buffer.clear();
+            }
+
+            return Ok(None);
+        }
+
+        // 2. Intercepted path: Buffer chunks until end_of_stream to allow full-body inspection/transformation
+        if let Some(b) = body.take() {
             ctx.proxy_context.buffer.extend(&b[..]);
         }
 
         if end_of_stream {
-            let body_str = std::str::from_utf8(&ctx.proxy_context.buffer).unwrap_or_default();
+            let resp_pipeline = self
+                .interceptor_manager
+                .get_response_pipeline(ctx.proxy_context.active_operation.as_deref());
+            let mut interceptor_ctx = crate::interceptors::InterceptorContext::new(
+                ctx.proxy_context.request_id,
+                ctx.proxy_context.hlc,
+            );
+            interceptor_ctx.operation_name = ctx.proxy_context.active_operation.clone();
+
+            let mut fake_parts = http::response::Response::builder()
+                .body(())
+                .unwrap()
+                .into_parts()
+                .0;
+            if let Some(parts) = &ctx.proxy_context.response_parts {
+                fake_parts.status = parts.status;
+                fake_parts.headers = parts.headers.clone();
+            }
+
+            let verdict = resp_pipeline.intercept_response(
+                &interceptor_ctx,
+                &mut fake_parts,
+                &ctx.proxy_context.buffer,
+            );
+
+            let final_bytes = match verdict {
+                crate::interceptors::InterceptorVerdict::Pass => {
+                    std::mem::take(&mut ctx.proxy_context.buffer)
+                }
+                crate::interceptors::InterceptorVerdict::Transform { headers: _, body } => {
+                    body.unwrap_or_else(|| std::mem::take(&mut ctx.proxy_context.buffer))
+                }
+                crate::interceptors::InterceptorVerdict::Reject(rejection) => {
+                    log::info!(
+                        "Response rejected by interceptor: code={}, status={}",
+                        rejection.code,
+                        rejection.status_code
+                    );
+                    rejection.to_graphql_response().into_bytes()
+                }
+            };
+
+            let body_str = std::str::from_utf8(&final_bytes).unwrap_or_default().to_string();
             let response_body = match ctx.proxy_context.response_parts.as_ref() {
-                Some(parts) => ResponseBody::new(&parts.headers, body_str),
-                None => ResponseBody::new(&http::HeaderMap::new(), body_str),
+                Some(parts) => ResponseBody::new(&parts.headers, &body_str),
+                None => ResponseBody::new(&http::HeaderMap::new(), &body_str),
             };
             ctx.proxy_context.response_body = Some(response_body);
             ctx.proxy_context.buffer.clear();
+
+            *body = Some(Bytes::from(final_bytes));
         }
 
         Ok(None)
@@ -685,6 +848,7 @@ mod tests {
                 mode: ExecutionStrategy::SyncUpstreamExecution,
                 upstream: Some("inventory".to_string()),
                 receipt_status: "ACCEPTED".to_string(),
+                interceptors: vec![],
             },
         );
         routes.insert(
@@ -694,6 +858,7 @@ mod tests {
                 mode: ExecutionStrategy::SyncUpstreamExecution,
                 upstream: Some("crm".to_string()),
                 receipt_status: "ACCEPTED".to_string(),
+                interceptors: vec![],
             },
         );
         routes.insert(
@@ -703,6 +868,7 @@ mod tests {
                 mode: ExecutionStrategy::AsyncEdgeCommand,
                 upstream: None,
                 receipt_status: "ACCEPTED".to_string(),
+                interceptors: vec![],
             },
         );
 

@@ -85,6 +85,7 @@ fn test_schema_inspector_strangler_fig_classification() {
             mode: OperationMode::B,
             upstream: None,
             receipt_status: "ACCEPTED".to_string(),
+            interceptors: vec![],
         },
     );
     routes.insert(
@@ -94,6 +95,7 @@ fn test_schema_inspector_strangler_fig_classification() {
             mode: OperationMode::A,
             upstream: Some("crm-service".to_string()),
             receipt_status: "ACCEPTED".to_string(),
+            interceptors: vec![],
         },
     );
 

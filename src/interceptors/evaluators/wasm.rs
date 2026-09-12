@@ -13,7 +13,8 @@ use std::time::{Duration, Instant};
 use wasmtime::{Engine, Instance, Module, Store, StoreLimits, StoreLimitsBuilder};
 
 /// Policy defining behavior when an interceptor circuit is open or unrecoverable.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum FailMode {
     /// Reject requests with HTTP 503 Service Unavailable when the circuit is open.
     #[default]

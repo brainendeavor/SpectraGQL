@@ -127,11 +127,13 @@ impl RequestInterceptor for HeaderValidationInterceptor {
     }
 }
 
+use std::sync::Arc;
+
 /// Pipeline composing multiple RequestInterceptors sequentially.
 /// Short-circuits immediately on the first InterceptorRejection.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct RequestInterceptorPipeline {
-    interceptors: Vec<Box<dyn RequestInterceptor>>,
+    interceptors: Vec<Arc<dyn RequestInterceptor>>,
 }
 
 impl RequestInterceptorPipeline {
@@ -142,8 +144,25 @@ impl RequestInterceptorPipeline {
     }
 
     pub fn with_interceptor<I: RequestInterceptor + 'static>(mut self, interceptor: I) -> Self {
-        self.interceptors.push(Box::new(interceptor));
+        self.interceptors.push(Arc::new(interceptor));
         self
+    }
+
+    pub fn with_arc_interceptor(mut self, interceptor: Arc<dyn RequestInterceptor>) -> Self {
+        self.interceptors.push(interceptor);
+        self
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.interceptors.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.interceptors.len()
+    }
+
+    pub fn extend(&mut self, other: &RequestInterceptorPipeline) {
+        self.interceptors.extend(other.interceptors.iter().cloned());
     }
 
     pub fn intercept_request(

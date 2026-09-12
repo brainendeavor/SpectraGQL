@@ -1,17 +1,20 @@
 pub mod context;
 pub mod evaluators;
+pub mod manager;
 pub mod request;
 pub mod response;
 pub mod rules;
 pub mod sanitizer;
 
+pub use manager::InterceptorManager;
+
 pub use context::{
     InterceptorContext, InterceptorRejection, InterceptorVerdict, RuleEvaluationError,
 };
 pub use evaluators::{
-    CelRuleEvaluator, CircuitBreakerConfig, CircuitPermission, FailMode, WasmCircuitBreaker,
-    WasmEngineConfig, WasmInterceptorEvaluator, WasmPluginConfig, WasmRequestInterceptor,
-    WasmResponseInterceptor,
+    CelRequestInterceptor, CelResponseInterceptor, CelRuleEvaluator, CircuitBreakerConfig,
+    CircuitPermission, FailMode, WasmCircuitBreaker, WasmEngineConfig, WasmInterceptorEvaluator,
+    WasmPluginConfig, WasmRequestInterceptor, WasmResponseInterceptor,
 };
 pub use request::{
     GraphQLSyntaxInterceptor, HeaderValidationInterceptor, RequestInterceptor,

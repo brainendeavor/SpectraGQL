@@ -17,6 +17,8 @@ name = "crm"
 [gql]
 paths = "/gql,/graphql"
 ops_to_dispatch = "query, mutation, subscription"
+# Global interceptors (run on every request before route-specific interceptors)
+# interceptors = ["auth_guard"]
 
 # Mode A: The Default Workhorse Gateway
 [gql.mode_a]
@@ -35,6 +37,8 @@ upstream = "inventory"
 operation = "updateCustomerAddress"
 mode = "A"
 upstream = "crm"
+# Route-specific interceptors (appended after global interceptors)
+# interceptors = ["leak_guard"]
 
 # Mode B Route Overrides: Pure async command receipts (edge-terminated)
 [gql.routes.bulk_import]
@@ -94,5 +98,39 @@ allowed_ips = [
 
 [rest]
 paths = "/api,/api/{*path}"
+
+# WASM Interceptor Runtime Engine
+[wasm]
+strict_aot = false
+allow_jit = true
+epoch_tick_interval_ms = 1
+
+# Interceptor Definitions (CEL, WASM, or Native)
+[interceptors.auth_guard]
+stage = "request"
+type = "cel"
+expr = "'authorization' in request.headers && request.headers['authorization'].startsWith('Bearer ')"
+
+[interceptors.rate_limit_header]
+stage = "request"
+type = "cel"
+expr = "true"
+
+[interceptors.leak_guard]
+stage = "response"
+type = "cel"
+expr = "!body.contains('internal_secret_key')"
+
+# Example WASM Interceptor (compiled .wasm or AOT .cwasm)
+# [interceptors.pii_scrubber]
+# stage = "response"
+# type = "wasm"
+# module = "modules/scrubber.cwasm"
+# function = "scrub_response"
+# timeout_ms = 5
+# max_memory_bytes = 10485760
+# fail_mode = "fail_closed"
+# circuit_breaker_failures = 5
+# circuit_breaker_reset_ms = 30000
 
 

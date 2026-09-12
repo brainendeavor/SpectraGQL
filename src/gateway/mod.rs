@@ -53,6 +53,8 @@ pub struct SpectraProxyCtx {
     pub target_upstream_addr: Option<std::net::SocketAddr>,
     pub is_mode_b_terminated: bool,
     pub dispatch_policy: ModeADispatchPolicy,
+    pub active_operation: Option<String>,
+    pub has_response_interception: bool,
 }
 
 #[derive(Clone)]

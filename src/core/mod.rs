@@ -4,8 +4,9 @@ pub mod types;
 
 pub use clock::{HlcClock, HlcTimestamp};
 pub use config::{
-    IdempotencyBackendType, SpectraAdminConfig, SpectraConfig, SpectraDispatchConfig,
-    SpectraGqlConfig, SpectraIdempotencyConfig, SpectraModeAConfig, SpectraRestConfig,
-    SpectraRouteConfig, SpectraSubscriptionsConfig, SpectraUpstreamConfig,
+    IdempotencyBackendType, InterceptorConfig, InterceptorStage, InterceptorType,
+    SpectraAdminConfig, SpectraConfig, SpectraDispatchConfig, SpectraGqlConfig,
+    SpectraIdempotencyConfig, SpectraModeAConfig, SpectraRestConfig, SpectraRouteConfig,
+    SpectraSubscriptionsConfig, SpectraUpstreamConfig, SpectraWasmConfig,
 };
 pub use types::{EventStatus, ExecutionStrategy, ModeADispatchPolicy, OperationMode, OperationOutcome};

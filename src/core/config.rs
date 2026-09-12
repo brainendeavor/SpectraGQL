@@ -51,11 +51,83 @@ pub struct SpectraRouteConfig {
     pub upstream: Option<String>,
     #[serde(default = "default_receipt_status")]
     pub receipt_status: String,
+    #[serde(default)]
+    pub interceptors: Vec<String>,
 }
 
 impl SpectraRouteConfig {
     pub fn strategy(&self) -> ExecutionStrategy {
         self.mode
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum InterceptorStage {
+    Request,
+    Response,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum InterceptorType {
+    Cel,
+    Wasm,
+    Native,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct InterceptorConfig {
+    #[serde(rename = "type")]
+    pub interceptor_type: InterceptorType,
+    pub stage: InterceptorStage,
+    // CEL configuration
+    #[serde(alias = "expr")]
+    pub expression: Option<String>,
+    pub status_code: Option<u16>,
+    pub code: Option<String>,
+    pub message: Option<String>,
+    // WASM configuration
+    #[serde(alias = "module")]
+    pub path: Option<String>,
+    pub timeout_ms: Option<u64>,
+    pub fail_mode: Option<crate::interceptors::FailMode>,
+    #[serde(alias = "circuit_breaker_failures")]
+    pub failure_threshold: Option<u32>,
+    #[serde(alias = "circuit_breaker_reset_ms")]
+    pub cooloff_duration_secs: Option<u64>,
+    // Native configuration
+    pub kind: Option<String>,
+}
+
+fn default_epoch_tick_interval_ms() -> u64 {
+    1
+}
+
+fn default_wasm_timeout_ms() -> u64 {
+    25
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct SpectraWasmConfig {
+    #[serde(default = "default_true")]
+    pub strict_aot: bool,
+    #[serde(default)]
+    pub allow_jit: bool,
+    #[serde(default = "default_epoch_tick_interval_ms")]
+    pub epoch_tick_interval_ms: u64,
+    #[serde(default = "default_wasm_timeout_ms")]
+    pub default_timeout_ms: u64,
+}
+
+impl Default for SpectraWasmConfig {
+    fn default() -> Self {
+        SpectraWasmConfig {
+            strict_aot: true,
+            allow_jit: false,
+            epoch_tick_interval_ms: default_epoch_tick_interval_ms(),
+            default_timeout_ms: default_wasm_timeout_ms(),
+        }
     }
 }
 
@@ -158,6 +230,8 @@ pub struct SpectraGqlConfig {
     pub mode_a: SpectraModeAConfig,
     #[serde(default)]
     pub routes: HashMap<String, SpectraRouteConfig>,
+    #[serde(default)]
+    pub interceptors: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -231,6 +305,10 @@ pub struct SpectraConfig {
     pub subscriptions: SpectraSubscriptionsConfig,
     #[serde(default)]
     pub admin: SpectraAdminConfig,
+    #[serde(default)]
+    pub interceptors: HashMap<String, InterceptorConfig>,
+    #[serde(default)]
+    pub wasm: SpectraWasmConfig,
 }
 
 impl SpectraConfig {
@@ -262,6 +340,10 @@ impl SpectraConfig {
             .set_default("admin.bind_addr", "0.0.0.0:8000")?
             .set_default("admin.path_prefix", "/admin")?
             .set_default("admin.enable_ui", true)?
+            .set_default("wasm.strict_aot", true)?
+            .set_default("wasm.allow_jit", false)?
+            .set_default("wasm.epoch_tick_interval_ms", 1)?
+            .set_default("wasm.default_timeout_ms", 25)?
             .set_default("rest.paths", "/api,/api/{*path}")?
             .add_source(File::with_name("spectra").required(false))
             .add_source(File::with_name(&format!("{spectra_env}-spectra")).required(false))
@@ -475,5 +557,90 @@ mod tests {
             Some("unknown_svc"),
         );
         assert_eq!(fallback_resolved.port(), 4000);
+    }
+
+    #[test]
+    fn test_parse_interceptors_and_wasm_config() {
+        let toml_str = r#"
+            bind_addr = "0.0.0.0:8000"
+
+            [upstream]
+            addr = "127.0.0.1:4000"
+
+            [dispatch]
+            name = "default"
+            method = "NATS"
+            addr = "127.0.0.1:4222"
+
+            [wasm]
+            strict_aot = false
+            allow_jit = true
+            epoch_tick_interval_ms = 2
+            default_timeout_ms = 50
+
+            [interceptors.tenant_check]
+            type = "cel"
+            stage = "request"
+            expression = 'request.headers["x-tenant-id"] != ""'
+            status_code = 403
+            code = "UNAUTHORIZED_TENANT"
+            message = "Missing x-tenant-id header"
+
+            [interceptors.wasm_anonymizer]
+            type = "wasm"
+            stage = "response"
+            path = "plugins/anonymizer.cwasm"
+            timeout_ms = 15
+            fail_mode = "fail_open"
+            failure_threshold = 4
+            cooloff_duration_secs = 20
+
+            [interceptors.syntax_validator]
+            type = "native"
+            stage = "request"
+            kind = "graphql_syntax"
+
+            [gql]
+            paths = "/graphql"
+            ops_to_dispatch = "query, mutation"
+            interceptors = ["syntax_validator", "tenant_check"]
+
+            [gql.routes.customer_profile]
+            operation = "getCustomerProfile"
+            mode = "A"
+            interceptors = ["wasm_anonymizer"]
+
+            [rest]
+            paths = "/api"
+        "#;
+
+        let cfg: SpectraConfig = Config::builder()
+            .add_source(config::File::from_str(toml_str, config::FileFormat::Toml))
+            .build()
+            .unwrap()
+            .try_deserialize()
+            .unwrap();
+
+        assert!(!cfg.wasm.strict_aot);
+        assert!(cfg.wasm.allow_jit);
+        assert_eq!(cfg.wasm.epoch_tick_interval_ms, 2);
+        assert_eq!(cfg.wasm.default_timeout_ms, 50);
+
+        assert_eq!(cfg.interceptors.len(), 3);
+        let tenant_interceptor = cfg.interceptors.get("tenant_check").unwrap();
+        assert_eq!(tenant_interceptor.interceptor_type, InterceptorType::Cel);
+        assert_eq!(tenant_interceptor.stage, InterceptorStage::Request);
+        assert_eq!(tenant_interceptor.status_code, Some(403));
+        assert_eq!(tenant_interceptor.code.as_deref(), Some("UNAUTHORIZED_TENANT"));
+
+        let wasm_interceptor = cfg.interceptors.get("wasm_anonymizer").unwrap();
+        assert_eq!(wasm_interceptor.interceptor_type, InterceptorType::Wasm);
+        assert_eq!(wasm_interceptor.stage, InterceptorStage::Response);
+        assert_eq!(wasm_interceptor.timeout_ms, Some(15));
+        assert_eq!(wasm_interceptor.fail_mode, Some(crate::interceptors::FailMode::FailOpen));
+
+        assert_eq!(cfg.gql.interceptors, vec!["syntax_validator", "tenant_check"]);
+        let route = cfg.gql.routes.get("customer_profile").unwrap();
+        assert_eq!(route.interceptors, vec!["wasm_anonymizer"]);
     }
 }

@@ -8,16 +8,18 @@ pub mod subscriptions;
 pub mod telemetry;
 
 pub use core::{
-    ExecutionStrategy, HlcClock, HlcTimestamp, IdempotencyBackendType, ModeADispatchPolicy,
-    OperationMode, OperationOutcome, SpectraAdminConfig, SpectraConfig, SpectraDispatchConfig,
-    SpectraGqlConfig, SpectraIdempotencyConfig, SpectraModeAConfig, SpectraRestConfig,
-    SpectraRouteConfig, SpectraSubscriptionsConfig, SpectraUpstreamConfig,
+    ExecutionStrategy, HlcClock, HlcTimestamp, IdempotencyBackendType, InterceptorConfig,
+    InterceptorStage, InterceptorType, ModeADispatchPolicy, OperationMode, OperationOutcome,
+    SpectraAdminConfig, SpectraConfig, SpectraDispatchConfig, SpectraGqlConfig,
+    SpectraIdempotencyConfig, SpectraModeAConfig, SpectraRestConfig, SpectraRouteConfig,
+    SpectraSubscriptionsConfig, SpectraUpstreamConfig, SpectraWasmConfig,
 };
 pub use gateway::{CompositeService, ExtraServiceParams, ServiceConfig, generate_command_receipt};
 pub use idempotency::{IdempotencyEngine, IdempotencyOutcome, IdempotencyRecord};
 pub use interceptors::{
-    CelRuleEvaluator, CircuitBreakerConfig, FailMode, InterceptorContext, InterceptorRejection,
-    InterceptorVerdict, RequestInterceptor, RequestInterceptorPipeline, ResponseInterceptor,
+    CelRequestInterceptor, CelResponseInterceptor, CelRuleEvaluator, CircuitBreakerConfig,
+    FailMode, InterceptorContext, InterceptorManager, InterceptorRejection, InterceptorVerdict,
+    RequestInterceptor, RequestInterceptorPipeline, ResponseInterceptor,
     ResponseInterceptorPipeline, RuleEvaluator, Sanitizer, WasmCircuitBreaker, WasmEngineConfig,
     WasmInterceptorEvaluator, WasmPluginConfig, WasmRequestInterceptor, WasmResponseInterceptor,
 };
@@ -92,6 +94,8 @@ pub fn build_composite_service(spectra_configuration: &SpectraConfig) -> Result<
         Arc::new(spectra_configuration.gql.routes.clone()),
     );
 
+    let interceptor_manager = InterceptorManager::from_config(spectra_configuration)?;
+
     let mut composite_service = CompositeService::new()
         .with_routing(
             named_upstreams,
@@ -100,7 +104,8 @@ pub fn build_composite_service(spectra_configuration: &SpectraConfig) -> Result<
         )
         .with_idempotency_engine(idempotency_engine)
         .with_subscriptions(subscription_hub, spectra_configuration.subscriptions.clone())
-        .with_admin(admin_engine);
+        .with_admin(admin_engine)
+        .with_interceptor_manager(Arc::new(interceptor_manager));
     composite_service.add_service_config(gql_service);
     composite_service.add_service_config(rest_service);
 
