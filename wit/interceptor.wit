@@ -1,0 +1,48 @@
+package spectragql:interceptor@0.1.0;
+
+interface types {
+    enum operation-type {
+        query,
+        mutation,
+        subscription,
+    }
+
+    record request-context {
+        request-id: string,
+        operation-name: option<string>,
+        operation-type: option<operation-type>,
+        headers: list<tuple<string, string>>,
+        body: string,
+    }
+
+    record response-context {
+        request-id: string,
+        status-code: u16,
+        headers: list<tuple<string, string>>,
+        body: list<u8>,
+    }
+
+    record rejection-info {
+        status-code: u16,
+        code: string,
+        message: string,
+        details-json: option<string>,
+    }
+
+    record transformed-payload {
+        modified-headers: option<list<tuple<string, string>>>,
+        modified-body: option<list<u8>>,
+    }
+
+    variant verdict {
+        pass,
+        reject(rejection-info),
+        transform(transformed-payload),
+    }
+}
+
+world interceptor-guest {
+    import types;
+    export intercept-request: func(ctx: types.request-context) -> types.verdict;
+    export intercept-response: func(ctx: types.response-context) -> types.verdict;
+}

@@ -16,9 +16,10 @@ pub use core::{
 pub use gateway::{CompositeService, ExtraServiceParams, ServiceConfig, generate_command_receipt};
 pub use idempotency::{IdempotencyEngine, IdempotencyOutcome, IdempotencyRecord};
 pub use interceptors::{
-    CelRuleEvaluator, InterceptorContext, InterceptorRejection, InterceptorVerdict,
-    RequestInterceptor, RequestInterceptorPipeline, ResponseInterceptor,
-    ResponseInterceptorPipeline, RuleEvaluator, Sanitizer,
+    CelRuleEvaluator, CircuitBreakerConfig, FailMode, InterceptorContext, InterceptorRejection,
+    InterceptorVerdict, RequestInterceptor, RequestInterceptorPipeline, ResponseInterceptor,
+    ResponseInterceptorPipeline, RuleEvaluator, Sanitizer, WasmCircuitBreaker, WasmEngineConfig,
+    WasmInterceptorEvaluator, WasmPluginConfig, WasmRequestInterceptor, WasmResponseInterceptor,
 };
 pub use protocol::{
     GraphQLError, GraphQLErrorResponse, GraphQLOperationType, GraphQLRequestInfo, HttpRequestInfo,

@@ -8,7 +8,11 @@ pub mod sanitizer;
 pub use context::{
     InterceptorContext, InterceptorRejection, InterceptorVerdict, RuleEvaluationError,
 };
-pub use evaluators::CelRuleEvaluator;
+pub use evaluators::{
+    CelRuleEvaluator, CircuitBreakerConfig, CircuitPermission, FailMode, WasmCircuitBreaker,
+    WasmEngineConfig, WasmInterceptorEvaluator, WasmPluginConfig, WasmRequestInterceptor,
+    WasmResponseInterceptor,
+};
 pub use request::{
     GraphQLSyntaxInterceptor, HeaderValidationInterceptor, RequestInterceptor,
     RequestInterceptorPipeline,
