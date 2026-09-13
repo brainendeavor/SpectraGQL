@@ -55,6 +55,8 @@ pub struct SpectraProxyCtx {
     pub dispatch_policy: ModeADispatchPolicy,
     pub active_operation: Option<String>,
     pub has_response_interception: bool,
+    pub query_preview: Option<String>,
+    pub variables_preview: Option<String>,
 }
 
 #[derive(Clone)]

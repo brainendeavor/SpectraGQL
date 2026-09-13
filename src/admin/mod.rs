@@ -1,5 +1,10 @@
 pub mod api;
+pub mod eventsink;
 pub mod schema_inspector;
+pub mod traffic;
+
+pub use eventsink::{ConsumerMetrics, EventSinkInspector, EventSinkResponse, StreamMetrics};
+pub use traffic::{TrafficRecord, TrafficRecorder, TrafficResponse, TrafficStats, format_timestamp, now_epoch_ms};
 
 use std::collections::HashMap;
 use std::net::IpAddr;
@@ -122,6 +127,8 @@ pub struct AdminEngine {
     pub mode_a_enabled: bool,
     pub mode_a_dispatch_policy: String,
     pub mode_a_timeout_ms: u64,
+    pub traffic_recorder: Arc<TrafficRecorder>,
+    pub eventsink_inspector: EventSinkInspector,
 }
 
 impl AdminEngine {
@@ -130,12 +137,14 @@ impl AdminEngine {
         spectra_cfg: &SpectraConfig,
         named_upstreams: Arc<HashMap<String, std::net::SocketAddr>>,
         routes: Arc<HashMap<String, SpectraRouteConfig>>,
+        traffic_recorder: Arc<TrafficRecorder>,
     ) -> Self {
         let schema_inspector = SchemaInspector::new();
         let default_upstream_addr = spectra_cfg.gql_upstream().addr.clone();
         let default_upstream_name = spectra_cfg.gql_upstream().name.clone();
         let broker_method = spectra_cfg.gql_dispatch().method.clone();
         let broker_addr = spectra_cfg.gql_dispatch().addr.clone();
+        let eventsink_inspector = EventSinkInspector::new(&broker_method, &broker_addr);
 
         AdminEngine {
             config,
@@ -150,6 +159,8 @@ impl AdminEngine {
             mode_a_enabled: spectra_cfg.gql.mode_a.enabled,
             mode_a_dispatch_policy: format!("{:?}", spectra_cfg.gql.mode_a.dispatch_policy),
             mode_a_timeout_ms: spectra_cfg.gql.mode_a.timeout_ms,
+            traffic_recorder,
+            eventsink_inspector,
         }
     }
 
@@ -349,6 +360,49 @@ impl AdminEngine {
             return self.respond_json(session, 200, &idemp_resp).await;
         }
 
+        // REST API: GET /admin/api/v1/eventsink
+        if path == "/admin/api/v1/eventsink" || path == "/admin/api/eventsink" {
+            let eventsink_resp = self.eventsink_inspector.inspect().await;
+            return self.respond_json(session, 200, &eventsink_resp).await;
+        }
+
+        // REST API: GET /admin/api/v1/traffic
+        if path == "/admin/api/v1/traffic" || path == "/admin/api/traffic" {
+            let traffic_resp = self.traffic_recorder.get_response(50);
+            return self.respond_json(session, 200, &traffic_resp).await;
+        }
+
+        // REST API: POST /admin/api/v1/traffic/clear
+        if (path == "/admin/api/v1/traffic/clear" || path == "/admin/api/traffic/clear")
+            && method == http::Method::POST
+        {
+            self.traffic_recorder.clear();
+            let clear_resp = serde_json::json!({ "status": "cleared" });
+            return self.respond_json(session, 200, &clear_resp).await;
+        }
+
+        // REST API: GET /admin/api/v1/workers/:id/logs
+        if path.starts_with("/admin/api/v1/workers/") && path.ends_with("/logs") {
+            let worker_id = path
+                .strip_prefix("/admin/api/v1/workers/")
+                .unwrap_or("")
+                .strip_suffix("/logs")
+                .unwrap_or("");
+            if !worker_id.is_empty() {
+                match self.eventsink_inspector.query_worker_logs(worker_id, 100).await {
+                    Ok(logs_data) => return self.respond_json(session, 200, &logs_data).await,
+                    Err(err) => {
+                        let err_body = serde_json::json!({
+                            "workerId": worker_id,
+                            "status": "unavailable",
+                            "error": err
+                        });
+                        return self.respond_json(session, 502, &err_body).await;
+                    }
+                }
+            }
+        }
+
         // Unknown admin route
         let mut header = ResponseHeader::build(404, None).unwrap();
         let _ = header.insert_header("content-type", "application/json");
@@ -360,6 +414,10 @@ impl AdminEngine {
             "available_endpoints": [
                 "/admin",
                 "/admin/api/v1/status",
+                "/admin/api/v1/eventsink",
+                "/admin/api/v1/traffic",
+                "/admin/api/v1/traffic/clear",
+                "/admin/api/v1/workers/:id/logs",
                 "/admin/api/v1/routes",
                 "/admin/api/v1/schema",
                 "/admin/api/v1/schema/refresh",

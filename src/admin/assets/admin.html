@@ -16,11 +16,12 @@
       --success: #3fb950;
       --warning: #d29922;
       --accent-purple: #bc8cff;
+      --accent-cyan: #39c5cf;
       --danger: #f85149;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
     body { background: var(--bg); color: var(--text); padding: 24px; min-height: 100vh; }
-    .container { max-width: 1200px; margin: 0 auto; }
+    .container { max-width: 1300px; margin: 0 auto; }
     
     /* Header */
     header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 16px; margin-bottom: 24px; }
@@ -32,16 +33,18 @@
     .status-dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
 
     /* Grid */
-    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; margin-bottom: 24px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 24px; }
     .card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; padding: 18px; }
     .card-title { font-size: 12px; text-transform: uppercase; letter-spacing: 0.6px; color: var(--text-muted); margin-bottom: 6px; font-weight: 600; }
-    .card-value { font-size: 24px; font-weight: bold; color: var(--text-bright); }
+    .card-value { font-size: 22px; font-weight: bold; color: var(--text-bright); }
     .card-meta { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
 
-    /* Migration Progress Bar */
+    /* Section Cards */
     .section-card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; padding: 20px; margin-bottom: 24px; }
-    .section-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
+    .section-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; flex-wrap: wrap; gap: 10px; }
     .section-title { font-size: 16px; font-weight: 600; color: var(--text-bright); }
+
+    /* Progress Bar */
     .progress-track { height: 16px; background: #21262d; border-radius: 8px; overflow: hidden; display: flex; margin-bottom: 12px; }
     .progress-seg { height: 100%; transition: width 0.3s ease; }
     .seg-strangled { background: var(--success); }
@@ -51,26 +54,42 @@
     .legend-item { display: flex; align-items: center; gap: 6px; }
     .legend-box { width: 12px; height: 12px; border-radius: 3px; }
 
-    /* Drift Alert */
+    /* Alerts */
     .drift-alert { background: rgba(210, 153, 34, 0.15); border: 1px solid var(--warning); border-radius: 6px; padding: 12px 16px; margin-bottom: 20px; color: #e3b341; font-size: 14px; }
     .drift-alert ul { margin-left: 20px; margin-top: 6px; }
 
     /* Tables */
-    table { width: 100%; border-collapse: collapse; font-size: 14px; text-align: left; }
-    th { padding: 10px 14px; background: #21262d; color: var(--text-muted); font-weight: 600; border-bottom: 1px solid var(--border); }
-    td { padding: 12px 14px; border-bottom: 1px solid var(--border); }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; text-align: left; }
+    th { padding: 10px 12px; background: #21262d; color: var(--text-muted); font-weight: 600; border-bottom: 1px solid var(--border); }
+    td { padding: 10px 12px; border-bottom: 1px solid var(--border); }
     tr:last-child td { border-bottom: none; }
-    .pill { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: 600; }
-    .pill-strangled { background: rgba(63, 185, 80, 0.2); color: var(--success); }
-    .pill-mode-b { background: rgba(88, 166, 255, 0.2); color: var(--primary); }
+    
+    /* Interactive Rows */
+    .traffic-row { cursor: pointer; transition: background 0.15s ease; }
+    .traffic-row:hover { background: rgba(88, 166, 255, 0.06); }
+    .drawer-row td { background: #0e141e; padding: 14px; border-top: 1px dashed var(--border); }
+    
+    /* Pills & Badges */
+    .pill { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+    .pill-strangled, .pill-success { background: rgba(63, 185, 80, 0.2); color: var(--success); border: 1px solid rgba(63, 185, 80, 0.3); }
+    .pill-mode-b { background: rgba(88, 166, 255, 0.2); color: var(--primary); border: 1px solid rgba(88, 166, 255, 0.3); }
+    .pill-query { background: rgba(188, 140, 255, 0.2); color: var(--accent-purple); border: 1px solid rgba(188, 140, 255, 0.3); }
     .pill-monolith { background: rgba(139, 148, 158, 0.2); color: var(--text-muted); }
     .pill-upstream { background: rgba(188, 140, 255, 0.2); color: var(--accent-purple); }
+    .pill-warning { background: rgba(210, 153, 34, 0.2); color: var(--warning); border: 1px solid rgba(210, 153, 34, 0.3); }
+    .pill-danger { background: rgba(248, 81, 73, 0.2); color: var(--danger); border: 1px solid rgba(248, 81, 73, 0.3); }
+    .pill-replay { background: rgba(57, 197, 207, 0.2); color: var(--accent-cyan); border: 1px solid rgba(57, 197, 207, 0.3); }
 
-    /* Buttons */
-    .btn { background: #21262d; border: 1px solid var(--border); color: var(--text-bright); padding: 6px 14px; border-radius: 6px; font-size: 13px; cursor: pointer; transition: 0.2s; }
+    /* Buttons & Controls */
+    .btn { background: #21262d; border: 1px solid var(--border); color: var(--text-bright); padding: 6px 12px; border-radius: 6px; font-size: 12px; cursor: pointer; transition: 0.2s; }
     .btn:hover { background: #30363d; border-color: #8b949e; }
     .btn-primary { background: #1f6feb; border-color: #1f6feb; color: white; }
     .btn-primary:hover { background: #388bfd; }
+    .btn-active { background: rgba(88, 166, 255, 0.2); border-color: var(--primary); color: var(--primary); font-weight: 600; }
+    
+    .code-box { background: #050911; border: 1px solid var(--border); border-radius: 6px; padding: 10px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px; color: #7ee787; max-height: 140px; overflow-y: auto; white-space: pre-wrap; word-break: break-all; }
+    .meta-key { color: var(--text-muted); font-size: 12px; }
+    .meta-val { color: var(--text-bright); font-family: ui-monospace, monospace; font-size: 12px; }
   </style>
 </head>
 <body>
@@ -89,7 +108,7 @@
       </div>
     </header>
 
-    <!-- KPI Grid -->
+    <!-- Top KPI Grid -->
     <div class="grid">
       <div class="card">
         <div class="card-title">Broker Protocol</div>
@@ -97,14 +116,19 @@
         <div class="card-meta" id="kpi-broker-addr">Target: --</div>
       </div>
       <div class="card">
+        <div class="card-title">JetStream Stream</div>
+        <div class="card-value" id="kpi-stream-msgs">-- msgs</div>
+        <div class="card-meta" id="kpi-stream-lag">Consumer Lag: --</div>
+      </div>
+      <div class="card">
+        <div class="card-title">Live Traffic</div>
+        <div class="card-value" id="kpi-traffic-total">0 reqs</div>
+        <div class="card-meta" id="kpi-traffic-latency">Avg Latency: 0.0ms</div>
+      </div>
+      <div class="card">
         <div class="card-title">Strangler Migration</div>
         <div class="card-value" id="kpi-migration-pct">0%</div>
         <div class="card-meta" id="kpi-migration-meta">0 / 0 Mutations Offloaded</div>
-      </div>
-      <div class="card">
-        <div class="card-title">Subscriptions Hub</div>
-        <div class="card-value" id="kpi-subs-conns">0</div>
-        <div class="card-meta" id="kpi-subs-topics">Active topics: 0</div>
       </div>
       <div class="card">
         <div class="card-title">Idempotency Backend</div>
@@ -113,7 +137,121 @@
       </div>
     </div>
 
-    <!-- Strangler-Fig Migration Progress -->
+    <!-- 1. Event Sink & Broker Telemetry Panel -->
+    <div class="section-card">
+      <div class="section-header">
+        <div>
+          <div class="section-title" id="eventsink-section-title">Event Sink & Broker Telemetry</div>
+          <div style="font-size: 13px; color: var(--text-muted); margin-top: 4px;" id="eventsink-section-desc">
+            Real-time stream and consumer lag telemetry directly from the configured event broker.
+          </div>
+          <div id="eventsink-capabilities" style="display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap;"></div>
+        </div>
+        <div style="display: flex; gap: 8px; align-items: center;">
+          <span id="eventsink-status-badge" class="pill pill-success">Online</span>
+          <button class="btn" onclick="loadEventSink()">Refresh Sink</button>
+        </div>
+      </div>
+
+      <!-- Stream Summary Cards -->
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 16px;">
+        <div style="background: #21262d; padding: 12px; border-radius: 6px;">
+          <div class="card-title">Stream Name</div>
+          <div style="font-weight: 700; color: var(--text-bright);" id="stream-name">SPECTRA</div>
+          <div class="card-meta" id="stream-storage">Storage: File</div>
+        </div>
+        <div style="background: #21262d; padding: 12px; border-radius: 6px;">
+          <div class="card-title">Messages in Stream</div>
+          <div style="font-weight: 700; color: var(--text-bright); font-size: 20px;" id="stream-messages">0</div>
+          <div class="card-meta" id="stream-bytes">Size: 0 B</div>
+        </div>
+        <div style="background: #21262d; padding: 12px; border-radius: 6px;">
+          <div class="card-title">Sequence Range</div>
+          <div style="font-weight: 700; color: var(--text-bright); font-size: 16px;" id="stream-seq">Seq: 0 → 0</div>
+          <div class="card-meta" id="stream-subjects">Subjects: mutation.*, query.*</div>
+        </div>
+        <div style="background: #21262d; padding: 12px; border-radius: 6px;">
+          <div class="card-title">Active Consumers</div>
+          <div style="font-weight: 700; color: var(--text-bright); font-size: 20px;" id="stream-consumer-count">0</div>
+          <div class="card-meta" id="stream-lag-summary">Total Unacked: 0</div>
+        </div>
+      </div>
+
+      <!-- Consumer Lag Table -->
+      <div style="margin-top: 14px;">
+        <div style="font-size: 14px; font-weight: 600; margin-bottom: 8px; color: var(--text-bright);">
+          Stream Consumers & Lag Monitoring
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th>Consumer Name</th>
+              <th>Filter Subject</th>
+              <th>Lag (Pending)</th>
+              <th>Unacknowledged</th>
+              <th>Redelivered</th>
+              <th>Stream Seq (Delivered / Ack Floor)</th>
+              <th>Worker Connection</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="table-consumers">
+            <tr><td colspan="8" style="text-align: center; color: var(--text-muted);">Querying NATS JetStream consumers...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- 2. Live Traffic & Activity Inspector Panel -->
+    <div class="section-card">
+      <div class="section-header">
+        <div>
+          <div class="section-title">Live Traffic & Activity Inspector</div>
+          <div style="font-size: 13px; color: var(--text-muted); margin-top: 4px;">
+            In-flight & recent GraphQL traffic processed by SpectraGQL. Click any row to inspect query, receipt, and HLC metadata.
+          </div>
+        </div>
+        <div style="display: flex; gap: 8px; align-items: center;">
+          <button id="btn-filter-all" class="btn btn-active" onclick="setTrafficFilter('all')">All</button>
+          <button id="btn-filter-mutations" class="btn" onclick="setTrafficFilter('mutations')">Mutations</button>
+          <button id="btn-filter-queries" class="btn" onclick="setTrafficFilter('queries')">Queries</button>
+          <button id="btn-filter-mode-b" class="btn" onclick="setTrafficFilter('mode-b')">Mode B Edge</button>
+          <button id="btn-filter-errors" class="btn" onclick="setTrafficFilter('errors')">Errors</button>
+          <button id="btn-toggle-auto" class="btn btn-primary" onclick="toggleAutoRefresh()">● Live (2s)</button>
+          <button class="btn" onclick="clearTraffic()">Clear Log</button>
+        </div>
+      </div>
+
+      <!-- Stats Pill Bar -->
+      <div style="display: flex; gap: 14px; background: #21262d; padding: 8px 14px; border-radius: 6px; font-size: 13px; margin-bottom: 12px; flex-wrap: wrap;">
+        <div>Total Logged: <strong id="traffic-stat-total" style="color: var(--text-bright);">0</strong></div>
+        <div>Mode B (Edge): <strong id="traffic-stat-mode-b" style="color: var(--primary);">0</strong></div>
+        <div>Mode A (Proxy): <strong id="traffic-stat-mode-a" style="color: var(--accent-purple);">0</strong></div>
+        <div>Errors: <strong id="traffic-stat-errors" style="color: var(--danger);">0</strong></div>
+        <div>Avg Edge Latency: <strong id="traffic-stat-latency" style="color: var(--success);">0.0ms</strong></div>
+      </div>
+
+      <!-- Traffic Stream Table -->
+      <table>
+        <thead>
+          <tr>
+            <th>Time (UTC)</th>
+            <th>Method</th>
+            <th>Operation Name</th>
+            <th>Type</th>
+            <th>Execution Mode</th>
+            <th>Target / Sink</th>
+            <th>Status</th>
+            <th>Latency</th>
+          </tr>
+        </thead>
+        <tbody id="table-traffic">
+          <tr><td colspan="8" style="text-align: center; color: var(--text-muted);">Listening for GraphQL traffic on port 8000...</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- 3. Strangler-Fig Migration Progress -->
     <div class="section-card">
       <div class="section-header">
         <div>
@@ -143,7 +281,7 @@
       </div>
     </div>
 
-    <!-- GraphQL Mutations Inspection Table -->
+    <!-- 4. GraphQL Mutations Inspection Table -->
     <div class="section-card">
       <div class="section-title" style="margin-bottom: 14px;">Introspected GraphQL Mutations</div>
       <table>
@@ -161,7 +299,7 @@
       </table>
     </div>
 
-    <!-- Configured Routes Table -->
+    <!-- 5. Configured Routes Table -->
     <div class="section-card">
       <div class="section-title" style="margin-bottom: 14px;">Active Gateway Route Table</div>
       <table>
@@ -183,6 +321,12 @@
   </div>
 
   <script>
+    let rawTrafficRecords = [];
+    let currentFilter = 'all';
+    let expandedRowId = null;
+    let autoRefreshActive = true;
+    let refreshTimer = null;
+
     async function fetchJSON(url, options = {}) {
       try {
         const res = await fetch(url, options);
@@ -213,6 +357,245 @@
       }
     }
 
+    // 1. Load Event Sink & NATS JetStream Telemetry
+    async function loadEventSink() {
+      const data = await fetchJSON('/admin/api/v1/eventsink');
+      if (!data) return;
+
+      if (data.brokerType) {
+        document.getElementById('eventsink-section-title').innerText = `${data.brokerType} Event Sink & Consumer Observability`;
+      }
+      if (data.capabilities && data.capabilities.length > 0) {
+        document.getElementById('eventsink-capabilities').innerHTML = data.capabilities.map(c => `<span class="pill pill-mode-b" style="font-size: 11px;">${c}</span>`).join('');
+      } else {
+        document.getElementById('eventsink-capabilities').innerHTML = '';
+      }
+
+      const statusBadge = document.getElementById('eventsink-status-badge');
+      if (data.status === 'online') {
+        statusBadge.className = 'pill pill-success';
+        statusBadge.innerText = 'Online';
+      } else {
+        statusBadge.className = 'pill pill-warning';
+        statusBadge.innerText = data.status.toUpperCase();
+      }
+
+      if (data.stream) {
+        const s = data.stream;
+        document.getElementById('stream-name').innerText = s.name;
+        document.getElementById('stream-storage').innerText = `Storage: ${s.storage}`;
+        document.getElementById('stream-messages').innerText = s.messages;
+        document.getElementById('stream-bytes').innerText = `Size: ${s.bytesFormatted}`;
+        document.getElementById('stream-seq').innerText = `Seq: ${s.firstSeq} → ${s.lastSeq}`;
+        document.getElementById('stream-subjects').innerText = `Subjects: ${s.subjects.join(', ')}`;
+        document.getElementById('stream-consumer-count').innerText = s.consumerCount;
+
+        // KPI Update
+        document.getElementById('kpi-stream-msgs').innerText = `${s.messages} msgs`;
+      }
+
+      // Consumers Table
+      const tbody = document.getElementById('table-consumers');
+      if (!data.consumers || data.consumers.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="8" style="text-align: center; color: var(--text-muted);">No durable consumers bound to this stream.</td></tr>';
+        document.getElementById('kpi-stream-lag').innerText = '0 active consumers';
+        return;
+      }
+
+      let totalLag = 0;
+      let totalUnacked = 0;
+      tbody.innerHTML = data.consumers.map(c => {
+        totalLag += c.numPending;
+        totalUnacked += c.numAckPending;
+
+        const lagPill = c.numPending === 0
+          ? '<span class="pill pill-success">0 lag (Up to date)</span>'
+          : `<span class="pill pill-warning">${c.numPending} pending</span>`;
+
+        const unackedPill = c.numAckPending === 0
+          ? '<span class="pill pill-success">0 unacked</span>'
+          : `<span class="pill pill-danger">${c.numAckPending} unacked</span>`;
+
+        const connPill = c.pushBound
+          ? '<span class="pill pill-success">● Connected (Push)</span>'
+          : '<span class="pill pill-monolith">Pull / Idle</span>';
+
+        return `
+          <tr>
+            <td><strong><code>${c.name}</code></strong></td>
+            <td><code>${c.filterSubject || '*'}</code></td>
+            <td>${lagPill}</td>
+            <td>${unackedPill}</td>
+            <td><code>${c.numRedelivered}</code></td>
+            <td><code>${c.lastDeliveredSeq} / ${c.ackFloorSeq}</code></td>
+            <td>${connPill}</td>
+            <td>
+              <button class="btn btn-sm" onclick="openWorkerLogsModal('${escapeHtml(c.name)}')" style="padding: 3px 9px; font-size: 11px; background: #0284c7; color: white; border: none; border-radius: 4px; cursor: pointer; display: inline-flex; align-items: center; gap: 4px;">
+                📄 Logs
+              </button>
+            </td>
+          </tr>
+        `;
+      }).join('');
+
+      document.getElementById('stream-lag-summary').innerText = `Total Unacked: ${totalUnacked}`;
+      document.getElementById('kpi-stream-lag').innerText = totalLag === 0 ? '0 lag (Up to date)' : `${totalLag} msgs lag`;
+    }
+
+    // 2. Load Live Traffic & Activity Inspector
+    async function loadTraffic() {
+      const data = await fetchJSON('/admin/api/v1/traffic');
+      if (!data) return;
+
+      rawTrafficRecords = data.records || [];
+      const stats = data.stats;
+      if (stats) {
+        document.getElementById('kpi-traffic-total').innerText = `${stats.totalRequests} reqs`;
+        document.getElementById('kpi-traffic-latency').innerText = `Avg Latency: ${stats.avgLatencyMs.toFixed(2)}ms`;
+
+        document.getElementById('traffic-stat-total').innerText = stats.totalRequests;
+        document.getElementById('traffic-stat-mode-b').innerText = stats.modeBRequests;
+        document.getElementById('traffic-stat-mode-a').innerText = stats.modeARequests;
+        document.getElementById('traffic-stat-errors').innerText = stats.errorRequests;
+        document.getElementById('traffic-stat-latency').innerText = `${stats.avgLatencyMs.toFixed(2)}ms`;
+      }
+
+      renderTrafficTable();
+    }
+
+    function renderTrafficTable() {
+      const tbody = document.getElementById('table-traffic');
+      let filtered = rawTrafficRecords;
+
+      if (currentFilter === 'mutations') {
+        filtered = filtered.filter(r => r.operationType === 'Mutation');
+      } else if (currentFilter === 'queries') {
+        filtered = filtered.filter(r => r.operationType === 'Query');
+      } else if (currentFilter === 'mode-b') {
+        filtered = filtered.filter(r => r.mode.includes('Mode B'));
+      } else if (currentFilter === 'errors') {
+        filtered = filtered.filter(r => r.statusCode >= 400 || (r.receiptStatus && r.receiptStatus.includes('FAIL')));
+      }
+
+      if (filtered.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="8" style="text-align: center; color: var(--text-muted);">No matching transactions recorded.</td></tr>';
+        return;
+      }
+
+      let html = '';
+      for (const r of filtered) {
+        let modePillClass = 'pill-mode-b';
+        if (r.mode.includes('Mode A')) modePillClass = 'pill-query';
+        else if (r.mode.includes('Replay')) modePillClass = 'pill-replay';
+        else if (r.mode.includes('Reject')) modePillClass = 'pill-danger';
+
+        const statusPill = r.statusCode < 300
+          ? `<span class="pill pill-success">${r.statusCode} OK</span>`
+          : `<span class="pill pill-danger">${r.statusCode}</span>`;
+
+        const isExpanded = expandedRowId === r.id;
+
+        html += `
+          <tr class="traffic-row" onclick="toggleRowDetails('${r.id}')">
+            <td><code style="color: var(--text-muted);">${r.timestampFormatted}</code></td>
+            <td><strong>${r.method}</strong></td>
+            <td><strong>${r.operationName || '<em>anonymous</em>'}</strong></td>
+            <td><span class="pill pill-monolith">${r.operationType}</span></td>
+            <td><span class="pill ${modePillClass}">${r.mode}</span></td>
+            <td><code style="font-size: 11px;">${r.target}</code></td>
+            <td>${statusPill}</td>
+            <td><code>${r.latencyMs.toFixed(2)}ms</code></td>
+          </tr>
+        `;
+
+        let formattedVars = r.variablesPreview;
+        if (r.variablesPreview) {
+          try {
+            formattedVars = JSON.stringify(JSON.parse(r.variablesPreview), null, 2);
+          } catch (_) {}
+        }
+
+        if (isExpanded) {
+          html += `
+            <tr class="drawer-row">
+              <td colspan="8">
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin-bottom: 12px;">
+                  <div><span class="meta-key">Command ID (UUIDv7):</span><br><span class="meta-val">${r.id}</span></div>
+                  <div><span class="meta-key">HLC Timestamp:</span><br><span class="meta-val">${r.hlc}</span></div>
+                  <div><span class="meta-key">Client IP:</span><br><span class="meta-val">${r.clientIp}</span></div>
+                  <div><span class="meta-key">Receipt Status:</span><br><span class="meta-val">${r.receiptStatus || 'N/A'}</span></div>
+                </div>
+                ${r.queryPreview ? `
+                  <div style="margin-top: 8px;">
+                    <div class="meta-key" style="margin-bottom: 4px;">GraphQL Query:</div>
+                    <div class="code-box" style="white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; line-height: 1.5; color: #cbd5e1; background: #0b1329; border: 1px solid #1e293b; padding: 10px; border-radius: 6px;">${escapeHtml(r.queryPreview)}</div>
+                  </div>
+                ` : ''}
+                ${r.variablesPreview ? `
+                  <div style="margin-top: 8px;">
+                    <div class="meta-key" style="margin-bottom: 4px;">GraphQL Variables:</div>
+                    <div class="code-box" style="white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; line-height: 1.5; color: #67e8f9; background: #082f49; border: 1px solid #0e7490; padding: 10px; border-radius: 6px;">${escapeHtml(formattedVars)}</div>
+                  </div>
+                ` : ''}
+              </td>
+            </tr>
+          `;
+        }
+      }
+
+      tbody.innerHTML = html;
+    }
+
+    function toggleRowDetails(id) {
+      if (expandedRowId === id) {
+        expandedRowId = null;
+      } else {
+        expandedRowId = id;
+      }
+      renderTrafficTable();
+    }
+
+    function setTrafficFilter(filter) {
+      currentFilter = filter;
+      const btns = {
+        'all': 'btn-filter-all',
+        'mutations': 'btn-filter-mutations',
+        'queries': 'btn-filter-queries',
+        'mode-b': 'btn-filter-mode-b',
+        'errors': 'btn-filter-errors',
+      };
+      for (const [k, id] of Object.entries(btns)) {
+        const el = document.getElementById(id);
+        if (k === filter) el.classList.add('btn-active');
+        else el.classList.remove('btn-active');
+      }
+      renderTrafficTable();
+    }
+
+    async function clearTraffic() {
+      await fetch('/admin/api/v1/traffic/clear', { method: 'POST' });
+      rawTrafficRecords = [];
+      expandedRowId = null;
+      loadTraffic();
+    }
+
+    function toggleAutoRefresh() {
+      autoRefreshActive = !autoRefreshActive;
+      const btn = document.getElementById('btn-toggle-auto');
+      if (autoRefreshActive) {
+        btn.innerText = '● Live (2s)';
+        btn.className = 'btn btn-primary';
+      } else {
+        btn.innerText = '○ Paused';
+        btn.className = 'btn';
+      }
+    }
+
+    function escapeHtml(str) {
+      return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    // 3. Load Routes & Schema
     async function loadRoutes() {
       const data = await fetchJSON('/admin/api/v1/routes');
       if (!data) return;
@@ -239,12 +622,10 @@
       const data = await fetchJSON('/admin/api/v1/schema');
       if (!data) return;
 
-      // Update KPI
       const pct = (data.coverage_percent || 0).toFixed(1);
       document.getElementById('kpi-migration-pct').innerText = pct + '%';
       document.getElementById('kpi-migration-meta').innerText = `${data.strangled_count + data.mode_b_count} / ${data.total_mutations} Mutations Offloaded`;
 
-      // Update Progress Bar
       const total = data.total_mutations || 1;
       const strangledPct = ((data.strangled_count / total) * 100).toFixed(1);
       const modeBPct = ((data.mode_b_count / total) * 100).toFixed(1);
@@ -258,7 +639,6 @@
       document.getElementById('count-mode-b').innerText = data.mode_b_count;
       document.getElementById('count-monolith').innerText = data.monolith_fallback_count;
 
-      // Drift alert
       const driftBox = document.getElementById('drift-container');
       const driftList = document.getElementById('drift-list');
       if (data.drifted_routes && data.drifted_routes.length > 0) {
@@ -268,7 +648,6 @@
         driftBox.style.display = 'none';
       }
 
-      // Mutation list table
       const tbody = document.getElementById('table-schema-mutations');
       if (!data.mutations || data.mutations.length === 0) {
         tbody.innerHTML = '<tr><td colspan="4" style="text-align: center; color: var(--text-muted);">No mutations discovered from upstream introspection.</td></tr>';
@@ -300,13 +679,7 @@
       }).join('');
     }
 
-    async function loadSubsAndIdemp() {
-      const subs = await fetchJSON('/admin/api/v1/subscriptions');
-      if (subs) {
-        document.getElementById('kpi-subs-conns').innerText = subs.active_connections;
-        document.getElementById('kpi-subs-topics').innerText = `Active topics: ${subs.active_topics_count} (${subs.topic_prefix})`;
-      }
-
+    async function loadIdemp() {
       const idemp = await fetchJSON('/admin/api/v1/idempotency');
       if (idemp) {
         document.getElementById('kpi-idemp-backend').innerText = idemp.backend.toUpperCase();
@@ -328,12 +701,130 @@
     }
 
     async function refreshAll() {
-      await Promise.all([loadStatus(), loadRoutes(), loadSchema(), loadSubsAndIdemp()]);
+      if (!autoRefreshActive) return;
+      await Promise.all([loadStatus(), loadEventSink(), loadTraffic(), loadRoutes(), loadSchema(), loadIdemp()]);
+    }
+
+    let currentWorkerId = null;
+
+    async function openWorkerLogsModal(workerId) {
+      currentWorkerId = workerId;
+      document.getElementById('modal-worker-title').innerText = `Worker: ${workerId}`;
+      document.getElementById('modal-worker-subtitle').innerText = `Spectra Worker Telemetry Protocol (SWTP) via subject 'spectra.workers.${workerId}.logs'`;
+      document.getElementById('worker-logs-modal').style.display = 'flex';
+      await refreshWorkerLogs();
+    }
+
+    function closeWorkerLogsModal() {
+      document.getElementById('worker-logs-modal').style.display = 'none';
+      currentWorkerId = null;
+    }
+
+    async function refreshWorkerLogs() {
+      if (!currentWorkerId) return;
+      const btn = document.getElementById('btn-refresh-worker-logs');
+      btn.innerText = 'Fetching...';
+      btn.disabled = true;
+
+      const bodyEl = document.getElementById('modal-worker-body');
+      const statusEl = document.getElementById('modal-worker-status');
+
+      try {
+        const resp = await fetch(`/admin/api/v1/workers/${encodeURIComponent(currentWorkerId)}/logs`);
+        const data = await resp.json();
+
+        if (!resp.ok || data.status === 'unavailable' || data.error) {
+          statusEl.className = 'pill pill-danger';
+          statusEl.innerText = 'OFFLINE / UNRESPONSIVE';
+          document.getElementById('worker-meta-uptime').innerText = '--';
+          document.getElementById('worker-meta-processed').innerText = '--';
+          document.getElementById('worker-meta-errors').innerText = '--';
+          document.getElementById('worker-meta-hlc').innerText = '--';
+
+          bodyEl.innerHTML = `
+            <div style="padding: 24px; text-align: center; color: #f87171; background: #2a1215; border: 1px solid #7f1d1d; border-radius: 8px; margin: 20px 0;">
+              <div style="font-weight: 600; font-size: 14px; margin-bottom: 8px;">Worker '${escapeHtml(currentWorkerId)}' is not responding</div>
+              <div style="font-size: 12px; color: #fca5a5; font-family: sans-serif; max-width: 600px; margin: 0 auto; line-height: 1.5;">
+                ${escapeHtml(data.error || 'Request-Reply timed out.')}
+                <div style="margin-top: 12px; color: #cbd5e1; font-size: 11px;">
+                  Ensure the worker process is running and subscribes to <code>spectra.workers.${escapeHtml(currentWorkerId)}.logs</code> under the Spectra Worker Telemetry Protocol (SWTP).
+                </div>
+              </div>
+            </div>
+          `;
+          return;
+        }
+
+        statusEl.className = 'pill pill-success';
+        statusEl.innerText = (data.status || 'ONLINE').toUpperCase();
+
+        const uptime = data.uptimeSeconds !== undefined ? `${Math.floor(data.uptimeSeconds / 60)}m ${data.uptimeSeconds % 60}s` : 'N/A';
+        document.getElementById('worker-meta-uptime').innerText = uptime;
+        document.getElementById('worker-meta-processed').innerText = data.processedEvents !== undefined ? data.processedEvents : '0';
+        document.getElementById('worker-meta-errors').innerText = data.totalErrors !== undefined ? data.totalErrors : '0';
+        document.getElementById('worker-meta-hlc').innerText = data.lastEventHlc || 'None';
+
+        if (!data.logs || data.logs.length === 0) {
+          bodyEl.innerHTML = '<div style="text-align: center; color: var(--text-muted); padding: 40px 0;">No log entries reported by worker yet.</div>';
+          return;
+        }
+
+        bodyEl.innerHTML = data.logs.map(entry => {
+          let lvlColor = '#38bdf8'; // INFO
+          if (entry.level === 'WARN') lvlColor = '#fbbf24';
+          if (entry.level === 'ERROR') lvlColor = '#f87171';
+
+          return `
+            <div style="display: flex; gap: 12px; padding: 4px 0; border-bottom: 1px solid #1e293b;">
+              <span style="color: #64748b; flex-shrink: 0;">${entry.timestamp ? entry.timestamp.slice(11, 23) : ''}</span>
+              <span style="color: ${lvlColor}; font-weight: 600; width: 55px; flex-shrink: 0;">[${entry.level || 'LOG'}]</span>
+              <span style="color: #e2e8f0; word-break: break-word;">${escapeHtml(entry.message || '')}</span>
+            </div>
+          `;
+        }).join('');
+
+      } catch (err) {
+        bodyEl.innerHTML = `<div style="color: #f87171; padding: 20px;">Failed to fetch worker logs: ${escapeHtml(err.message)}</div>`;
+      } finally {
+        btn.innerText = '🔄 Refresh';
+        btn.disabled = false;
+      }
     }
 
     // Initial load and periodic polling
     refreshAll();
-    setInterval(refreshAll, 3000);
+    setInterval(refreshAll, 2000);
   </script>
+
+  <!-- Consumer Worker Logs Modal -->
+  <div id="worker-logs-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.75); z-index:9999; justify-content:center; align-items:center; backdrop-filter:blur(3px);">
+    <div style="width: 900px; max-width: 94vw; max-height: 88vh; display: flex; flex-direction: column; background: #0f172a; border: 1px solid #334155; border-radius: 10px; box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.7); overflow: hidden;">
+      <!-- Header -->
+      <div style="padding: 16px 20px; border-bottom: 1px solid #334155; display: flex; justify-content: space-between; align-items: center; background: #1e293b;">
+        <div>
+          <div style="display: flex; align-items: center; gap: 10px;">
+            <h3 id="modal-worker-title" style="margin: 0; font-size: 16px; color: #f8fafc; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;">Worker Logs</h3>
+            <span id="modal-worker-status" class="pill pill-success">ONLINE</span>
+          </div>
+          <div id="modal-worker-subtitle" style="font-size: 12px; color: #94a3b8; margin-top: 4px;">NATS JetStream Telemetry via Request-Reply (SWTP v1)</div>
+        </div>
+        <div style="display: flex; gap: 8px; align-items: center;">
+          <button class="btn btn-sm btn-primary" onclick="refreshWorkerLogs()" id="btn-refresh-worker-logs">🔄 Refresh</button>
+          <button class="btn btn-sm" onclick="closeWorkerLogsModal()" style="background:#334155; color:#cbd5e1; border: 1px solid #475569;">✕ Close</button>
+        </div>
+      </div>
+      <!-- Stats / KPI Bar -->
+      <div id="modal-worker-meta" style="padding: 10px 20px; background: #182234; border-bottom: 1px solid #334155; display: flex; gap: 24px; font-size: 12px; flex-wrap: wrap;">
+        <div>Uptime: <strong id="worker-meta-uptime" style="color: #38bdf8;">--</strong></div>
+        <div>Processed Events: <strong id="worker-meta-processed" style="color: #4ade80;">--</strong></div>
+        <div>Errors: <strong id="worker-meta-errors" style="color: #f87171;">--</strong></div>
+        <div>Last Event HLC: <strong id="worker-meta-hlc" style="color: #c084fc; font-family: monospace;">--</strong></div>
+      </div>
+      <!-- Logs Container -->
+      <div id="modal-worker-body" style="padding: 16px 20px; overflow-y: auto; flex: 1; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; line-height: 1.6; background: #0b1120; color: #cbd5e1; min-height: 280px; max-height: 60vh;">
+        <div style="text-align: center; color: var(--text-muted); padding: 40px 0;">Loading logs...</div>
+      </div>
+    </div>
+  </div>
 </body>
 </html>

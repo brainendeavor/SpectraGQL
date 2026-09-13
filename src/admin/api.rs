@@ -75,3 +75,6 @@ pub struct AdminIdempotencyResponse {
     pub max_capacity: usize,
     pub active_records: usize,
 }
+
+pub use crate::admin::eventsink::{ConsumerMetrics, EventSinkResponse, StreamMetrics};
+pub use crate::admin::traffic::{TrafficRecord, TrafficResponse, TrafficStats};

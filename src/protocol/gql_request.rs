@@ -102,6 +102,11 @@ impl GraphQLRequestInfo {
         }
     }
 
+    #[inline]
+    pub fn json_body(&self) -> &serde_json::Value {
+        &self.json_body
+    }
+
     pub fn sanitize(&mut self, sanitizer: &crate::interceptors::Sanitizer) {
         if let Some(raw) = self.raw_body.as_mut() {
             *raw = sanitizer.sanitize_json_str(raw);
