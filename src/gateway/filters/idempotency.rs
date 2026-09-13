@@ -137,6 +137,11 @@ impl IdempotencyFilter {
         for (k, v) in headers {
             let _ = header.insert_header(k, v);
         }
+        let _ = header.insert_header("access-control-allow-origin", "*");
+        let _ = header.insert_header(
+            "access-control-expose-headers",
+            "x-spectra-request-id, x-spectra-hlc, x-spectra-dispatch, x-spectra-idempotent-replay",
+        );
         let _ = header.insert_header(REPLAY_HEADER, "true");
         let _ = header.insert_header(REQUEST_ID_HEADER, request_id.to_string());
         let _ = header.insert_header("x-spectra-hlc", hlc.to_compact_string());

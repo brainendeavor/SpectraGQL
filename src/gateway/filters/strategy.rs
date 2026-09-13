@@ -124,6 +124,11 @@ impl StrategyRouter {
 
         let mut header = pingora::http::ResponseHeader::build(200, None).unwrap();
         let _ = header.insert_header("content-type", "application/json");
+        let _ = header.insert_header("access-control-allow-origin", "*");
+        let _ = header.insert_header(
+            "access-control-expose-headers",
+            "x-spectra-request-id, x-spectra-hlc, x-spectra-dispatch, x-spectra-idempotent-replay",
+        );
         let _ = header.insert_header(REQUEST_ID_HEADER, ctx.proxy_context.request_id.to_string());
         let _ = header.insert_header("x-spectra-hlc", ctx.proxy_context.hlc.to_compact_string());
         if !dispatch_ok {

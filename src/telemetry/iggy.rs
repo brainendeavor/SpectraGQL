@@ -214,4 +214,12 @@ mod tests {
         let message = msg.unwrap();
         assert_eq!(message.payload, Bytes::from(r#"{"hello":"iggy"}"#));
     }
+
+    #[test]
+    fn test_iggy_client_connection_string() {
+        let res_no_auth = IggyClient::from_connection_string("iggy://127.0.0.1:8090");
+        println!("res_no_auth: {:?}", res_no_auth.is_ok());
+        let res_with_auth = IggyClient::from_connection_string("iggy://iggy:iggy@127.0.0.1:8090");
+        println!("res_with_auth: {:?}", res_with_auth.is_ok());
+    }
 }
