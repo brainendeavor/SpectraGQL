@@ -56,13 +56,13 @@ pub fn analyze_mutation_coverage(
         if let Some(route) = matched_route {
             matched_route_ops.insert(field_name.clone());
             match route.mode {
-                ExecutionStrategy::AsyncEdgeCommand => {
+                ExecutionStrategy::AsyncCommandReceipt => {
                     mode_b_count += 1;
                     mutations.push(AdminMutationCoverageEntry {
                         field_name,
-                        classification: "EdgeTerminatedModeB".to_string(),
+                        classification: "AsyncReceipt".to_string(),
                         target_upstream: None,
-                        mode: Some("B".to_string()),
+                        mode: Some("Async".to_string()),
                         receipt_status: Some(route.receipt_status.clone()),
                     });
                 }
@@ -71,41 +71,41 @@ pub fn analyze_mutation_coverage(
                         strangled_count += 1;
                         mutations.push(AdminMutationCoverageEntry {
                             field_name,
-                            classification: "Strangled".to_string(),
+                            classification: "TargetedService".to_string(),
                             target_upstream: Some(upstream_name.clone()),
-                            mode: Some("A".to_string()),
+                            mode: Some("Sync".to_string()),
                             receipt_status: None,
                         });
                     } else {
                         monolith_fallback_count += 1;
                         mutations.push(AdminMutationCoverageEntry {
                             field_name,
-                            classification: "MonolithFallback".to_string(),
+                            classification: "DefaultUpstream".to_string(),
                             target_upstream: Some("default".to_string()),
-                            mode: Some("A".to_string()),
+                            mode: Some("Sync".to_string()),
                             receipt_status: None,
                         });
                     }
                 }
             }
         } else {
-            // No custom route -> falls through to default upstream monolith
+            // No custom route -> falls through to default upstream
             monolith_fallback_count += 1;
             mutations.push(AdminMutationCoverageEntry {
                 field_name,
-                classification: "MonolithFallback".to_string(),
+                classification: "DefaultUpstream".to_string(),
                 target_upstream: Some("default".to_string()),
-                mode: Some("A".to_string()),
+                mode: Some("Sync".to_string()),
                 receipt_status: None,
             });
         }
     }
 
-    // Detect schema drift: routes defined in config whose operations were not in the schema
+    // Detect schema mismatch: routes defined in config whose operations were not in the schema
     let mut drifted_routes = Vec::new();
     for (route_name, route) in routes {
         if !matched_route_ops.contains(&route.operation) {
-            // Only drift if the schema actually had mutation fields defined
+            // Only flag mismatch if the schema actually had mutation fields defined
             if !mutation_fields.is_empty() {
                 drifted_routes.push(format!(
                     "Route '{}' (operation: '{}') not found in upstream GraphQL schema",
@@ -128,6 +128,9 @@ pub fn analyze_mutation_coverage(
 
     Ok(AdminSchemaCoverageResponse {
         total_mutations,
+        async_count: mode_b_count,
+        targeted_count: strangled_count,
+        default_fallback_count: monolith_fallback_count,
         strangled_count,
         mode_b_count,
         monolith_fallback_count,
@@ -256,7 +259,7 @@ mod tests {
             "bulk_import".to_string(),
             SpectraRouteConfig {
                 operation: "importCatalog".to_string(),
-                mode: ExecutionStrategy::AsyncEdgeCommand,
+                mode: ExecutionStrategy::AsyncCommandReceipt,
                 upstream: None,
                 receipt_status: "ACCEPTED".to_string(),
                 interceptors: vec![],
@@ -276,9 +279,12 @@ mod tests {
         let coverage = analyze_mutation_coverage(&introspection_json, &routes).unwrap();
 
         assert_eq!(coverage.total_mutations, 3);
-        assert_eq!(coverage.strangled_count, 1); // adjustInventory
-        assert_eq!(coverage.mode_b_count, 1); // importCatalog
-        assert_eq!(coverage.monolith_fallback_count, 1); // updateUserEmail
+        assert_eq!(coverage.async_count, 1); // importCatalog
+        assert_eq!(coverage.targeted_count, 1); // adjustInventory
+        assert_eq!(coverage.default_fallback_count, 1); // updateUserEmail
+        assert_eq!(coverage.strangled_count, 1); // backward-compat
+        assert_eq!(coverage.mode_b_count, 1); // backward-compat
+        assert_eq!(coverage.monolith_fallback_count, 1); // backward-compat
         assert_eq!(coverage.drift_count, 1); // nonExistentMutation
         assert_eq!(coverage.drifted_routes.len(), 1);
         assert!(coverage.drifted_routes[0].contains("nonExistentMutation"));
@@ -291,7 +297,7 @@ mod tests {
             .iter()
             .find(|m| m.field_name == "adjustInventory")
             .unwrap();
-        assert_eq!(adjust_mut.classification, "Strangled");
+        assert_eq!(adjust_mut.classification, "TargetedService");
         assert_eq!(adjust_mut.target_upstream, Some("inventory".to_string()));
 
         let import_mut = coverage
@@ -299,14 +305,14 @@ mod tests {
             .iter()
             .find(|m| m.field_name == "importCatalog")
             .unwrap();
-        assert_eq!(import_mut.classification, "EdgeTerminatedModeB");
+        assert_eq!(import_mut.classification, "AsyncReceipt");
 
         let email_mut = coverage
             .mutations
             .iter()
             .find(|m| m.field_name == "updateUserEmail")
             .unwrap();
-        assert_eq!(email_mut.classification, "MonolithFallback");
+        assert_eq!(email_mut.classification, "DefaultUpstream");
         assert_eq!(email_mut.target_upstream, Some("default".to_string()));
     }
 }

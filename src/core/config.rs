@@ -317,7 +317,7 @@ impl SpectraConfig {
             .or_else(|_| env::var("SPECTRAGQL_ENV"))
             .unwrap_or_else(|_| "development".into());
 
-        let builder = Config::builder()
+        let mut builder = Config::builder()
             .set_default("bind_addr", "0.0.0.0:8000")?
             .set_default("upstream.addr", "localhost:4000")?
             .set_default("upstream.name", "default")?
@@ -344,9 +344,32 @@ impl SpectraConfig {
             .set_default("wasm.allow_jit", false)?
             .set_default("wasm.epoch_tick_interval_ms", 1)?
             .set_default("wasm.default_timeout_ms", 25)?
-            .set_default("rest.paths", "/api,/api/{*path}")?
-            .add_source(File::with_name("spectra").required(false))
-            .add_source(File::with_name(&format!("{spectra_env}-spectra")).required(false))
+            .set_default("rest.paths", "/api,/api/{*path}")?;
+
+        // 1. Explicit config file via SPECTRA_CONFIG or SPECTRAGQL_CONFIG takes top precedence
+        if let Ok(config_path) = env::var("SPECTRA_CONFIG").or_else(|_| env::var("SPECTRAGQL_CONFIG")) {
+            builder = builder.add_source(File::with_name(&config_path));
+        } else if spectra_env != "development" {
+            // Non-default environment (e.g. coeval, production, staging).
+            // Check for environment-specific configuration files: {env}-spectra.toml or spectra.{env}.toml
+            let hyphen_file = format!("{spectra_env}-spectra");
+            let dot_file = format!("spectra.{spectra_env}");
+            if std::path::Path::new(&format!("{hyphen_file}.toml")).exists() {
+                builder = builder.add_source(File::with_name(&hyphen_file));
+            } else if std::path::Path::new(&format!("{dot_file}.toml")).exists() {
+                builder = builder.add_source(File::with_name(&dot_file));
+            } else {
+                builder = builder
+                    .add_source(File::with_name("spectra").required(false))
+                    .add_source(File::with_name(&hyphen_file).required(false));
+            }
+        } else {
+            builder = builder
+                .add_source(File::with_name("spectra").required(false))
+                .add_source(File::with_name("development-spectra").required(false));
+        }
+
+        builder = builder
             .add_source(Environment::with_prefix("spectra").separator("_"))
             .add_source(Environment::with_prefix("spectragql").separator("_"));
 

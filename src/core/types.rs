@@ -5,34 +5,57 @@ use serde::{Deserialize, Serialize};
 pub enum ExecutionStrategy {
     #[default]
     #[serde(
-        rename = "sync_upstream_execution",
+        rename = "sync",
+        alias = "SYNC",
+        alias = "sync_upstream_execution",
         alias = "SYNC_UPSTREAM_EXECUTION",
+        alias = "synchronous",
+        alias = "proxy",
         alias = "A",
         alias = "a"
     )]
     SyncUpstreamExecution,
 
     #[serde(
-        rename = "async_edge_command",
+        rename = "async",
+        alias = "ASYNC",
+        alias = "async_command_receipt",
+        alias = "ASYNC_COMMAND_RECEIPT",
+        alias = "async_edge_command",
         alias = "ASYNC_EDGE_COMMAND",
+        alias = "asynchronous",
+        alias = "receipt",
         alias = "B",
         alias = "b"
     )]
-    AsyncEdgeCommand,
+    AsyncCommandReceipt,
 }
 
 pub type OperationMode = ExecutionStrategy;
 
 impl ExecutionStrategy {
     pub const A: ExecutionStrategy = ExecutionStrategy::SyncUpstreamExecution;
-    pub const B: ExecutionStrategy = ExecutionStrategy::AsyncEdgeCommand;
+    pub const B: ExecutionStrategy = ExecutionStrategy::AsyncCommandReceipt;
+    #[allow(non_upper_case_globals)]
+    pub const AsyncEdgeCommand: ExecutionStrategy = ExecutionStrategy::AsyncCommandReceipt;
+
+    pub fn is_async_command_receipt(&self) -> bool {
+        matches!(self, ExecutionStrategy::AsyncCommandReceipt)
+    }
 
     pub fn is_async_edge_command(&self) -> bool {
-        matches!(self, ExecutionStrategy::AsyncEdgeCommand)
+        matches!(self, ExecutionStrategy::AsyncCommandReceipt)
     }
 
     pub fn is_sync_upstream_execution(&self) -> bool {
         matches!(self, ExecutionStrategy::SyncUpstreamExecution)
+    }
+
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            ExecutionStrategy::SyncUpstreamExecution => "Sync",
+            ExecutionStrategy::AsyncCommandReceipt => "Async",
+        }
     }
 }
 

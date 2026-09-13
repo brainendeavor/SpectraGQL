@@ -30,6 +30,8 @@ pub struct TrafficRecord {
 #[serde(rename_all = "camelCase")]
 pub struct TrafficStats {
     pub total_requests: u64,
+    pub async_requests: u64,
+    pub sync_requests: u64,
     pub mode_b_requests: u64,
     pub mode_a_requests: u64,
     pub error_requests: u64,
@@ -76,9 +78,9 @@ impl TrafficRecorder {
     /// Uses non-blocking atomics and try_write to guarantee zero contention on the hot path.
     pub fn record(&self, record: TrafficRecord) {
         self.total_requests.fetch_add(1, Ordering::Relaxed);
-        if record.mode.contains("Mode B") {
+        if record.mode.contains("Async") || record.mode.contains("Mode B") {
             self.mode_b_requests.fetch_add(1, Ordering::Relaxed);
-        } else if record.mode.contains("Mode A") {
+        } else if record.mode.contains("Sync") || record.mode.contains("Mode A") {
             self.mode_a_requests.fetch_add(1, Ordering::Relaxed);
         }
 
@@ -125,6 +127,8 @@ impl TrafficRecorder {
         TrafficResponse {
             stats: TrafficStats {
                 total_requests: total,
+                async_requests: mode_b,
+                sync_requests: mode_a,
                 mode_b_requests: mode_b,
                 mode_a_requests: mode_a,
                 error_requests: errors,

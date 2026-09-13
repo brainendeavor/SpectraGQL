@@ -126,9 +126,9 @@
         <div class="card-meta" id="kpi-traffic-latency">Avg Latency: 0.0ms</div>
       </div>
       <div class="card">
-        <div class="card-title">Strangler Migration</div>
+        <div class="card-title">Mutation Offload</div>
         <div class="card-value" id="kpi-migration-pct">0%</div>
-        <div class="card-meta" id="kpi-migration-meta">0 / 0 Mutations Offloaded</div>
+        <div class="card-meta" id="kpi-migration-meta">0 / 0 Offloaded (Async / Targeted)</div>
       </div>
       <div class="card">
         <div class="card-title">Idempotency Backend</div>
@@ -215,7 +215,8 @@
           <button id="btn-filter-all" class="btn btn-active" onclick="setTrafficFilter('all')">All</button>
           <button id="btn-filter-mutations" class="btn" onclick="setTrafficFilter('mutations')">Mutations</button>
           <button id="btn-filter-queries" class="btn" onclick="setTrafficFilter('queries')">Queries</button>
-          <button id="btn-filter-mode-b" class="btn" onclick="setTrafficFilter('mode-b')">Mode B Edge</button>
+          <button id="btn-filter-async" class="btn" onclick="setTrafficFilter('async')">Async Receipts</button>
+          <button id="btn-filter-sync" class="btn" onclick="setTrafficFilter('sync')">Sync Proxy</button>
           <button id="btn-filter-errors" class="btn" onclick="setTrafficFilter('errors')">Errors</button>
           <button id="btn-toggle-auto" class="btn btn-primary" onclick="toggleAutoRefresh()">● Live (2s)</button>
           <button class="btn" onclick="clearTraffic()">Clear Log</button>
@@ -225,10 +226,10 @@
       <!-- Stats Pill Bar -->
       <div style="display: flex; gap: 14px; background: #21262d; padding: 8px 14px; border-radius: 6px; font-size: 13px; margin-bottom: 12px; flex-wrap: wrap;">
         <div>Total Logged: <strong id="traffic-stat-total" style="color: var(--text-bright);">0</strong></div>
-        <div>Mode B (Edge): <strong id="traffic-stat-mode-b" style="color: var(--primary);">0</strong></div>
-        <div>Mode A (Proxy): <strong id="traffic-stat-mode-a" style="color: var(--accent-purple);">0</strong></div>
+        <div>Async (Receipt): <strong id="traffic-stat-async" style="color: var(--primary);">0</strong></div>
+        <div>Sync (Proxy): <strong id="traffic-stat-sync" style="color: var(--accent-purple);">0</strong></div>
         <div>Errors: <strong id="traffic-stat-errors" style="color: var(--danger);">0</strong></div>
-        <div>Avg Edge Latency: <strong id="traffic-stat-latency" style="color: var(--success);">0.0ms</strong></div>
+        <div>Avg Latency: <strong id="traffic-stat-latency" style="color: var(--success);">0.0ms</strong></div>
       </div>
 
       <!-- Traffic Stream Table -->
@@ -251,32 +252,32 @@
       </table>
     </div>
 
-    <!-- 3. Strangler-Fig Migration Progress -->
+    <!-- 3. GraphQL Mutation Routing Breakdown -->
     <div class="section-card">
       <div class="section-header">
         <div>
-          <div class="section-title">Upstream Schema Strangler-Fig Coverage</div>
+          <div class="section-title">GraphQL Mutation Routing Breakdown</div>
           <div style="font-size: 13px; color: var(--text-muted); margin-top: 4px;">
-            Introspection coverage of root mutations offloaded to microservices vs. edge-terminated vs. monolith fallback.
+            Live upstream schema inspection: Async Receipts vs. Targeted Microservices vs. Default Upstream.
           </div>
         </div>
         <button class="btn btn-primary" onclick="refreshSchema()" id="btn-refresh-schema">Refresh Schema</button>
       </div>
 
       <div class="progress-track">
-        <div id="seg-strangled" class="progress-seg seg-strangled" style="width: 0%"></div>
-        <div id="seg-mode-b" class="progress-seg seg-mode-b" style="width: 0%"></div>
-        <div id="seg-monolith" class="progress-seg seg-monolith" style="width: 100%"></div>
+        <div id="seg-async" class="progress-seg seg-mode-b" style="width: 0%"></div>
+        <div id="seg-targeted" class="progress-seg seg-strangled" style="width: 0%"></div>
+        <div id="seg-default" class="progress-seg seg-monolith" style="width: 100%"></div>
       </div>
 
       <div class="progress-legend">
-        <div class="legend-item"><div class="legend-box seg-strangled"></div> Strangled Microservices (<span id="count-strangled">0</span>)</div>
-        <div class="legend-item"><div class="legend-box seg-mode-b"></div> Edge-Terminated Mode B (<span id="count-mode-b">0</span>)</div>
-        <div class="legend-item"><div class="legend-box seg-monolith"></div> Monolith Fallback (<span id="count-monolith">0</span>)</div>
+        <div class="legend-item"><div class="legend-box seg-mode-b"></div> ⚡ Async Receipts (<span id="count-async">0</span>)</div>
+        <div class="legend-item"><div class="legend-box seg-strangled"></div> 🔀 Targeted Services (<span id="count-targeted">0</span>)</div>
+        <div class="legend-item"><div class="legend-box seg-monolith"></div> 🌐 Default Upstream (<span id="count-default">0</span>)</div>
       </div>
 
       <div id="drift-container" style="display: none; margin-top: 16px;" class="drift-alert">
-        <strong>⚠️ Schema Drift Detected:</strong> Configured routes that no longer exist in the upstream GraphQL schema:
+        <strong>⚠️ Schema Mismatch (Unmapped Routes):</strong> Configured routes whose operations were not found in the upstream GraphQL schema:
         <ul id="drift-list"></ul>
       </div>
     </div>
@@ -288,9 +289,9 @@
         <thead>
           <tr>
             <th>Mutation Field Name</th>
-            <th>Migration Status</th>
-            <th>Mode</th>
-            <th>Target Upstream / Receipt</th>
+            <th>Routing Classification</th>
+            <th>Execution Mode</th>
+            <th>Target / Outcome</th>
           </tr>
         </thead>
         <tbody id="table-schema-mutations">
@@ -453,9 +454,14 @@
         document.getElementById('kpi-traffic-total').innerText = `${stats.totalRequests} reqs`;
         document.getElementById('kpi-traffic-latency').innerText = `Avg Latency: ${stats.avgLatencyMs.toFixed(2)}ms`;
 
+        const asyncCount = stats.asyncRequests !== undefined ? stats.asyncRequests : stats.modeBRequests;
+        const syncCount = stats.syncRequests !== undefined ? stats.syncRequests : stats.modeARequests;
+
         document.getElementById('traffic-stat-total').innerText = stats.totalRequests;
-        document.getElementById('traffic-stat-mode-b').innerText = stats.modeBRequests;
-        document.getElementById('traffic-stat-mode-a').innerText = stats.modeARequests;
+        if (document.getElementById('traffic-stat-async')) document.getElementById('traffic-stat-async').innerText = asyncCount;
+        if (document.getElementById('traffic-stat-sync')) document.getElementById('traffic-stat-sync').innerText = syncCount;
+        if (document.getElementById('traffic-stat-mode-b')) document.getElementById('traffic-stat-mode-b').innerText = asyncCount;
+        if (document.getElementById('traffic-stat-mode-a')) document.getElementById('traffic-stat-mode-a').innerText = syncCount;
         document.getElementById('traffic-stat-errors').innerText = stats.errorRequests;
         document.getElementById('traffic-stat-latency').innerText = `${stats.avgLatencyMs.toFixed(2)}ms`;
       }
@@ -471,8 +477,10 @@
         filtered = filtered.filter(r => r.operationType === 'Mutation');
       } else if (currentFilter === 'queries') {
         filtered = filtered.filter(r => r.operationType === 'Query');
-      } else if (currentFilter === 'mode-b') {
-        filtered = filtered.filter(r => r.mode.includes('Mode B'));
+      } else if (currentFilter === 'async' || currentFilter === 'mode-b') {
+        filtered = filtered.filter(r => r.mode.includes('Async') || r.mode.includes('Mode B'));
+      } else if (currentFilter === 'sync' || currentFilter === 'mode-a') {
+        filtered = filtered.filter(r => r.mode.includes('Sync') || r.mode.includes('Mode A'));
       } else if (currentFilter === 'errors') {
         filtered = filtered.filter(r => r.statusCode >= 400 || (r.receiptStatus && r.receiptStatus.includes('FAIL')));
       }
@@ -485,7 +493,7 @@
       let html = '';
       for (const r of filtered) {
         let modePillClass = 'pill-mode-b';
-        if (r.mode.includes('Mode A')) modePillClass = 'pill-query';
+        if (r.mode.includes('Sync') || r.mode.includes('Mode A')) modePillClass = 'pill-query';
         else if (r.mode.includes('Replay')) modePillClass = 'pill-replay';
         else if (r.mode.includes('Reject')) modePillClass = 'pill-danger';
 
@@ -534,7 +542,7 @@
                 ${r.variablesPreview ? `
                   <div style="margin-top: 8px;">
                     <div class="meta-key" style="margin-bottom: 4px;">GraphQL Variables:</div>
-                    <div class="code-box" style="white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; line-height: 1.5; color: #67e8f9; background: #082f49; border: 1px solid #0e7490; padding: 10px; border-radius: 6px;">${escapeHtml(formattedVars)}</div>
+                    <div class="code-box" style="white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; line-height: 1.5; color: #cbd5e1; background: #0b1329; border: 1px solid #1e293b; padding: 10px; border-radius: 6px;">${escapeHtml(formattedVars)}</div>
                   </div>
                 ` : ''}
               </td>
@@ -561,13 +569,17 @@
         'all': 'btn-filter-all',
         'mutations': 'btn-filter-mutations',
         'queries': 'btn-filter-queries',
+        'async': 'btn-filter-async',
+        'sync': 'btn-filter-sync',
         'mode-b': 'btn-filter-mode-b',
         'errors': 'btn-filter-errors',
       };
       for (const [k, id] of Object.entries(btns)) {
         const el = document.getElementById(id);
-        if (k === filter) el.classList.add('btn-active');
-        else el.classList.remove('btn-active');
+        if (el) {
+          if (k === filter) el.classList.add('btn-active');
+          else el.classList.remove('btn-active');
+        }
       }
       renderTrafficTable();
     }
@@ -602,7 +614,7 @@
 
       const tbody = document.getElementById('table-routes');
       if (!data.routes || data.routes.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: var(--text-muted);">No custom mutation routes configured. All traffic falls through to default monolith.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: var(--text-muted);">No custom mutation routes configured. All traffic falls through to default upstream.</td></tr>';
         return;
       }
 
@@ -610,7 +622,7 @@
         <tr>
           <td><code>${r.name}</code></td>
           <td><strong>${r.operation}</strong></td>
-          <td><span class="pill ${r.mode === 'B' ? 'pill-mode-b' : 'pill-strangled'}">Mode ${r.mode}</span></td>
+          <td><span class="pill ${r.mode === 'Async' || r.mode === 'B' ? 'pill-mode-b' : 'pill-strangled'}">${r.mode}</span></td>
           <td><span class="pill pill-upstream">${r.upstream}</span></td>
           <td><code>${r.upstream_addr}</code></td>
           <td><code>${r.receipt_status}</code></td>
@@ -622,22 +634,32 @@
       const data = await fetchJSON('/admin/api/v1/schema');
       if (!data) return;
 
+      const asyncCount = data.async_count !== undefined ? data.async_count : (data.mode_b_count || 0);
+      const targetedCount = data.targeted_count !== undefined ? data.targeted_count : (data.strangled_count || 0);
+      const defaultCount = data.default_fallback_count !== undefined ? data.default_fallback_count : (data.monolith_fallback_count || 0);
+
       const pct = (data.coverage_percent || 0).toFixed(1);
       document.getElementById('kpi-migration-pct').innerText = pct + '%';
-      document.getElementById('kpi-migration-meta').innerText = `${data.strangled_count + data.mode_b_count} / ${data.total_mutations} Mutations Offloaded`;
+      document.getElementById('kpi-migration-meta').innerText = `${asyncCount + targetedCount} / ${data.total_mutations} Offloaded (Async / Targeted)`;
 
       const total = data.total_mutations || 1;
-      const strangledPct = ((data.strangled_count / total) * 100).toFixed(1);
-      const modeBPct = ((data.mode_b_count / total) * 100).toFixed(1);
-      const monolithPct = ((data.monolith_fallback_count / total) * 100).toFixed(1);
+      const asyncPct = ((asyncCount / total) * 100).toFixed(1);
+      const targetedPct = ((targetedCount / total) * 100).toFixed(1);
+      const defaultPct = ((defaultCount / total) * 100).toFixed(1);
 
-      document.getElementById('seg-strangled').style.width = strangledPct + '%';
-      document.getElementById('seg-mode-b').style.width = modeBPct + '%';
-      document.getElementById('seg-monolith').style.width = monolithPct + '%';
+      if (document.getElementById('seg-async')) document.getElementById('seg-async').style.width = asyncPct + '%';
+      if (document.getElementById('seg-targeted')) document.getElementById('seg-targeted').style.width = targetedPct + '%';
+      if (document.getElementById('seg-default')) document.getElementById('seg-default').style.width = defaultPct + '%';
+      if (document.getElementById('seg-mode-b')) document.getElementById('seg-mode-b').style.width = asyncPct + '%';
+      if (document.getElementById('seg-strangled')) document.getElementById('seg-strangled').style.width = targetedPct + '%';
+      if (document.getElementById('seg-monolith')) document.getElementById('seg-monolith').style.width = defaultPct + '%';
 
-      document.getElementById('count-strangled').innerText = data.strangled_count;
-      document.getElementById('count-mode-b').innerText = data.mode_b_count;
-      document.getElementById('count-monolith').innerText = data.monolith_fallback_count;
+      if (document.getElementById('count-async')) document.getElementById('count-async').innerText = asyncCount;
+      if (document.getElementById('count-targeted')) document.getElementById('count-targeted').innerText = targetedCount;
+      if (document.getElementById('count-default')) document.getElementById('count-default').innerText = defaultCount;
+      if (document.getElementById('count-mode-b')) document.getElementById('count-mode-b').innerText = asyncCount;
+      if (document.getElementById('count-strangled')) document.getElementById('count-strangled').innerText = targetedCount;
+      if (document.getElementById('count-monolith')) document.getElementById('count-monolith').innerText = defaultCount;
 
       const driftBox = document.getElementById('drift-container');
       const driftList = document.getElementById('drift-list');
@@ -656,23 +678,25 @@
 
       tbody.innerHTML = data.mutations.map(m => {
         let pillClass = 'pill-monolith';
-        let label = 'Monolith Fallback';
-        let target = m.target_upstream || 'default (monolith)';
+        let label = 'Default Upstream';
+        let target = m.target_upstream || 'default';
+        let modeLabel = m.mode === 'B' || m.mode === 'Async' ? 'Async' : 'Sync';
 
-        if (m.classification === 'Strangled') {
+        if (m.classification === 'TargetedService' || m.classification === 'Strangled') {
           pillClass = 'pill-strangled';
-          label = 'Strangled (Microservice)';
-        } else if (m.classification === 'EdgeTerminatedModeB') {
+          label = 'Targeted Service';
+          target = m.target_upstream || 'microservice';
+        } else if (m.classification === 'AsyncReceipt' || m.classification === 'EdgeTerminatedModeB') {
           pillClass = 'pill-mode-b';
-          label = 'Edge-Terminated Mode B';
-          target = `Async Receipt (${m.receipt_status || 'ACCEPTED'})`;
+          label = 'Async Receipt';
+          target = `Event Stream (${m.receipt_status || 'ACCEPTED'})`;
         }
 
         return `
           <tr>
             <td><strong>${m.field_name}</strong></td>
             <td><span class="pill ${pillClass}">${label}</span></td>
-            <td><code>${m.mode || 'A'}</code></td>
+            <td><code>${modeLabel}</code></td>
             <td>${m.target_upstream ? `<span class="pill pill-upstream">${target}</span>` : `<code>${target}</code>`}</td>
           </tr>
         `;
@@ -710,7 +734,7 @@
     async function openWorkerLogsModal(workerId) {
       currentWorkerId = workerId;
       document.getElementById('modal-worker-title').innerText = `Worker: ${workerId}`;
-      document.getElementById('modal-worker-subtitle').innerText = `Spectra Worker Telemetry Protocol (SWTP) via subject 'spectra.workers.${workerId}.logs'`;
+      document.getElementById('modal-worker-subtitle').innerText = `Universal Consumer Telemetry (Direct API & Broker SWTP) for '${workerId}'`;
       document.getElementById('worker-logs-modal').style.display = 'flex';
       await refreshWorkerLogs();
     }
@@ -806,7 +830,7 @@
             <h3 id="modal-worker-title" style="margin: 0; font-size: 16px; color: #f8fafc; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;">Worker Logs</h3>
             <span id="modal-worker-status" class="pill pill-success">ONLINE</span>
           </div>
-          <div id="modal-worker-subtitle" style="font-size: 12px; color: #94a3b8; margin-top: 4px;">NATS JetStream Telemetry via Request-Reply (SWTP v1)</div>
+          <div id="modal-worker-subtitle" style="font-size: 12px; color: #94a3b8; margin-top: 4px;">Universal Consumer Telemetry (Direct API & Broker SWTP)</div>
         </div>
         <div style="display: flex; gap: 8px; align-items: center;">
           <button class="btn btn-sm btn-primary" onclick="refreshWorkerLogs()" id="btn-refresh-worker-logs">🔄 Refresh</button>
