@@ -13,10 +13,22 @@ fn main() -> Result<()> {
     let mut server = Server::new(Some(opt))?;
     server.bootstrap();
 
-    let spectra_configuration = SpectraConfig::new()?;
+    let spectra_configuration = match SpectraConfig::new() {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("CRITICAL: SpectraConfig::new failed: {e:?}");
+            return Err(e.into());
+        }
+    };
     log::info!("SPECTRAGQL CONFIGURATION: {spectra_configuration:?}");
 
-    let composite_service = build_composite_service(&spectra_configuration)?;
+    let composite_service = match build_composite_service(&spectra_configuration) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("CRITICAL: build_composite_service failed: {e:?}");
+            return Err(e);
+        }
+    };
 
     let mut proxy_service =
         http_proxy_service_with_name(&server.configuration, composite_service, "SpectraGQL");

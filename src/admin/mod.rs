@@ -1,9 +1,11 @@
 pub mod api;
 pub mod eventsink;
+pub mod registry;
 pub mod schema_inspector;
 pub mod traffic;
 
 pub use eventsink::{ConsumerMetrics, EventSinkInspector, EventSinkResponse, StreamMetrics};
+pub use registry::{WorkerLogEntry, WorkerLogsResponse, WorkerRegistry, WorkerSummary, WorkerTelemetryReport};
 pub use traffic::{TrafficRecord, TrafficRecorder, TrafficResponse, TrafficStats, format_timestamp, now_epoch_ms};
 
 use std::collections::HashMap;
@@ -129,6 +131,7 @@ pub struct AdminEngine {
     pub mode_a_timeout_ms: u64,
     pub traffic_recorder: Arc<TrafficRecorder>,
     pub eventsink_inspector: EventSinkInspector,
+    pub worker_registry: Arc<WorkerRegistry>,
 }
 
 impl AdminEngine {
@@ -138,6 +141,7 @@ impl AdminEngine {
         named_upstreams: Arc<HashMap<String, std::net::SocketAddr>>,
         routes: Arc<HashMap<String, SpectraRouteConfig>>,
         traffic_recorder: Arc<TrafficRecorder>,
+        worker_registry: Arc<WorkerRegistry>,
     ) -> Self {
         let schema_inspector = SchemaInspector::new();
         let default_upstream_addr = spectra_cfg.gql_upstream().addr.clone();
@@ -161,6 +165,7 @@ impl AdminEngine {
             mode_a_timeout_ms: spectra_cfg.gql.mode_a.timeout_ms,
             traffic_recorder,
             eventsink_inspector,
+            worker_registry,
         }
     }
 
@@ -227,19 +232,23 @@ impl AdminEngine {
 
         // REST API: GET /admin/api/v1/status
         if path == "/admin/api/v1/status" || path == "/admin/api/status" {
-            let mode_b_count = self
+            let async_count = self
                 .routes
                 .values()
-                .filter(|r| r.mode == crate::core::types::OperationMode::B)
+                .filter(|r| r.mode.is_async_command_receipt())
                 .count();
 
             let status_resp = AdminStatusResponse {
                 version: env!("CARGO_PKG_VERSION").to_string(),
                 uptime_seconds: self.start_time.elapsed().as_secs(),
+                sync_enabled: self.mode_a_enabled,
+                sync_dispatch_policy: self.mode_a_dispatch_policy.clone(),
+                sync_timeout_ms: self.mode_a_timeout_ms,
+                async_routes_count: async_count,
                 mode_a_enabled: self.mode_a_enabled,
                 mode_a_dispatch_policy: self.mode_a_dispatch_policy.clone(),
                 mode_a_timeout_ms: self.mode_a_timeout_ms,
-                mode_b_routes_count: mode_b_count,
+                mode_b_routes_count: async_count,
                 broker_method: self.broker_method.clone(),
                 broker_addr: self.broker_addr.clone(),
                 broker_status: "online".to_string(),
@@ -261,7 +270,7 @@ impl AdminEngine {
                 route_entries.push(AdminRouteEntry {
                     name: name.clone(),
                     operation: r.operation.clone(),
-                    mode: format!("{:?}", r.mode),
+                    mode: r.mode.display_name().to_string(),
                     upstream: target_name,
                     upstream_addr: target_addr,
                     receipt_status: r.receipt_status.clone(),
@@ -362,7 +371,27 @@ impl AdminEngine {
 
         // REST API: GET /admin/api/v1/eventsink
         if path == "/admin/api/v1/eventsink" || path == "/admin/api/eventsink" {
-            let eventsink_resp = self.eventsink_inspector.inspect().await;
+            let mut eventsink_resp = self.eventsink_inspector.inspect().await;
+
+            // Merge active workers reporting via Telemetry API into consumer list if not already present
+            for worker in self.worker_registry.get_active_workers() {
+                if !eventsink_resp.consumers.iter().any(|c| c.name == worker.worker_id) {
+                    eventsink_resp.consumers.push(ConsumerMetrics {
+                        name: worker.worker_id.clone(),
+                        stream_name: worker.stream.clone(),
+                        created: format!("via Telemetry API (uptime {}s)", worker.uptime_seconds),
+                        filter_subject: Some(format!("{}.*", worker.stream)),
+                        num_pending: 0,
+                        num_ack_pending: 0,
+                        num_redelivered: 0,
+                        num_waiting: 0,
+                        ack_floor_seq: 0,
+                        last_delivered_seq: worker.processed_events,
+                        push_bound: worker.status != "offline",
+                    });
+                }
+            }
+
             return self.respond_json(session, 200, &eventsink_resp).await;
         }
 
@@ -381,6 +410,46 @@ impl AdminEngine {
             return self.respond_json(session, 200, &clear_resp).await;
         }
 
+        // REST API: POST /admin/api/v1/telemetry/report (Consumer Worker status & log rollups)
+        if (path == "/admin/api/v1/telemetry/report" || path == "/admin/api/telemetry/report")
+            && method == http::Method::POST
+        {
+            let mut body_bytes = Vec::new();
+            while let Some(chunk) = session.read_request_body().await? {
+                body_bytes.extend_from_slice(&chunk);
+                if body_bytes.len() > 1024 * 1024 {
+                    break;
+                }
+            }
+
+            match serde_json::from_slice::<crate::admin::WorkerTelemetryReport>(&body_bytes) {
+                Ok(report) => {
+                    log::debug!(
+                        "Received telemetry report from worker '{}' (status: {:?}, logs: {})",
+                        report.worker_id,
+                        report.status,
+                        report.logs.as_ref().map(|l| l.len()).unwrap_or(0)
+                    );
+                    self.worker_registry.record_report(report);
+                    let ok_resp = serde_json::json!({ "status": "accepted" });
+                    return self.respond_json(session, 200, &ok_resp).await;
+                }
+                Err(err) => {
+                    let err_resp = serde_json::json!({
+                        "error": "Invalid telemetry report JSON",
+                        "details": err.to_string()
+                    });
+                    return self.respond_json(session, 400, &err_resp).await;
+                }
+            }
+        }
+
+        // REST API: GET /admin/api/v1/workers (List registered consumer workers)
+        if path == "/admin/api/v1/workers" || path == "/admin/api/workers" {
+            let workers = self.worker_registry.get_active_workers();
+            return self.respond_json(session, 200, &workers).await;
+        }
+
         // REST API: GET /admin/api/v1/workers/:id/logs
         if path.starts_with("/admin/api/v1/workers/") && path.ends_with("/logs") {
             let worker_id = path
@@ -389,6 +458,12 @@ impl AdminEngine {
                 .strip_suffix("/logs")
                 .unwrap_or("");
             if !worker_id.is_empty() {
+                // 1. Check in-memory WorkerRegistry first (works for all sinks: NATS, Kafka, Redis, SierraDB, Iggy)
+                if let Some(logs_data) = self.worker_registry.get_worker_logs(worker_id, 100) {
+                    return self.respond_json(session, 200, &logs_data).await;
+                }
+
+                // 2. Fallback to native broker query (e.g. NATS Request-Reply SWTP)
                 match self.eventsink_inspector.query_worker_logs(worker_id, 100).await {
                     Ok(logs_data) => return self.respond_json(session, 200, &logs_data).await,
                     Err(err) => {
@@ -417,7 +492,9 @@ impl AdminEngine {
                 "/admin/api/v1/eventsink",
                 "/admin/api/v1/traffic",
                 "/admin/api/v1/traffic/clear",
+                "/admin/api/v1/workers",
                 "/admin/api/v1/workers/:id/logs",
+                "/admin/api/v1/telemetry/report",
                 "/admin/api/v1/routes",
                 "/admin/api/v1/schema",
                 "/admin/api/v1/schema/refresh",
@@ -531,7 +608,7 @@ mod tests {
         assert!(ADMIN_HTML.contains("<!DOCTYPE html>"));
         assert!(ADMIN_HTML.contains("SpectraGQL"));
         assert!(ADMIN_HTML.contains("Appliance Gateway Admin"));
-        assert!(ADMIN_HTML.contains("Strangler-Fig Coverage"));
+        assert!(ADMIN_HTML.contains("Mutation Routing Breakdown"));
         assert!(ADMIN_HTML.contains("/admin/api/v1/status"));
         assert!(ADMIN_HTML.contains("/admin/api/v1/schema"));
     }
@@ -541,6 +618,10 @@ mod tests {
         let status = AdminStatusResponse {
             version: "0.1.0".to_string(),
             uptime_seconds: 120,
+            sync_enabled: true,
+            sync_dispatch_policy: "ResponseWithFailure".to_string(),
+            sync_timeout_ms: 3000,
+            async_routes_count: 1,
             mode_a_enabled: true,
             mode_a_dispatch_policy: "ResponseWithFailure".to_string(),
             mode_a_timeout_ms: 3000,
@@ -552,6 +633,7 @@ mod tests {
         let status_json = serde_json::to_string(&status).unwrap();
         assert!(status_json.contains("\"version\":\"0.1.0\""));
         assert!(status_json.contains("\"broker_method\":\"NATS\""));
+        assert!(status_json.contains("\"sync_enabled\":true"));
 
         let routes = AdminRoutesResponse {
             default_upstream: "core".to_string(),
@@ -563,7 +645,7 @@ mod tests {
             routes: vec![AdminRouteEntry {
                 name: "inv_upd".to_string(),
                 operation: "adjustInventory".to_string(),
-                mode: "A".to_string(),
+                mode: "Sync".to_string(),
                 upstream: "inventory".to_string(),
                 upstream_addr: "127.0.0.1:5001".to_string(),
                 receipt_status: "ACCEPTED".to_string(),

@@ -87,6 +87,7 @@ pub fn build_composite_service(spectra_configuration: &SpectraConfig) -> Result<
     let named_upstreams = spectra_configuration.resolve_all_upstreams()?;
     let subscription_hub = Arc::new(crate::subscriptions::SubscriptionHub::new());
     let traffic_recorder = Arc::new(crate::admin::TrafficRecorder::new(250));
+    let worker_registry = Arc::new(crate::admin::WorkerRegistry::default());
 
     let admin_engine = crate::admin::AdminEngine::new(
         spectra_configuration.admin.clone(),
@@ -94,6 +95,7 @@ pub fn build_composite_service(spectra_configuration: &SpectraConfig) -> Result<
         Arc::new(named_upstreams.clone()),
         Arc::new(spectra_configuration.gql.routes.clone()),
         traffic_recorder.clone(),
+        worker_registry,
     );
 
     let interceptor_manager = InterceptorManager::from_config(spectra_configuration)?;

@@ -4,6 +4,10 @@ use serde::{Deserialize, Serialize};
 pub struct AdminStatusResponse {
     pub version: String,
     pub uptime_seconds: u64,
+    pub sync_enabled: bool,
+    pub sync_dispatch_policy: String,
+    pub sync_timeout_ms: u64,
+    pub async_routes_count: usize,
     pub mode_a_enabled: bool,
     pub mode_a_dispatch_policy: String,
     pub mode_a_timeout_ms: u64,
@@ -40,15 +44,18 @@ pub struct AdminRoutesResponse {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AdminMutationCoverageEntry {
     pub field_name: String,
-    pub classification: String, // "Strangled", "EdgeTerminatedModeB", "MonolithFallback"
+    pub classification: String, // "AsyncReceipt", "TargetedService", "DefaultUpstream"
     pub target_upstream: Option<String>,
-    pub mode: Option<String>,
+    pub mode: Option<String>, // "Async", "Sync"
     pub receipt_status: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AdminSchemaCoverageResponse {
     pub total_mutations: usize,
+    pub async_count: usize,
+    pub targeted_count: usize,
+    pub default_fallback_count: usize,
     pub strangled_count: usize,
     pub mode_b_count: usize,
     pub monolith_fallback_count: usize,
