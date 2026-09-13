@@ -594,6 +594,37 @@ impl ProxyHttp for CompositeServiceProxy {
 
                             let latency_ms = ctx.proxy_context.start_time.elapsed().as_secs_f64() * 1000.0;
                             let client_ip = crate::admin::extract_client_ip(session).to_string();
+
+                            // Emit edge rejection audit event to broker
+                            let op_clean = request_info
+                                .gql
+                                .as_ref()
+                                .and_then(|g| g.operation_name.clone())
+                                .unwrap_or_else(|| "anonymous".to_string())
+                                .to_ascii_lowercase();
+                            let rejection_topic = format!("interceptors.rejected.{}", op_clean);
+
+                            let rejection_payload = serde_json::json!({
+                                "requestId": ctx.proxy_context.request_id.to_string(),
+                                "hlc": ctx.proxy_context.hlc.to_compact_string(),
+                                "operationName": request_info.gql.as_ref().and_then(|g| g.operation_name.clone()),
+                                "operationType": request_info.gql.as_ref().map(|g| g.operation_type.to_string()).unwrap_or_else(|| "GQL".to_string()),
+                                "rejectionCode": rejection.code,
+                                "statusCode": rejection.status_code.as_u16(),
+                                "reason": rejection.message,
+                                "clientIp": client_ip,
+                                "timestamp": crate::admin::now_epoch_ms(),
+                                "queryPreview": ctx.proxy_context.query_preview.clone(),
+                                "variablesPreview": ctx.proxy_context.variables_preview.clone(),
+                            });
+
+                            let audit_handler = dispatch_method.clone();
+                            let audit_topic = rejection_topic.clone();
+                            let audit_payload = rejection_payload.to_string();
+                            tokio::spawn(async move {
+                                let _ = audit_handler.dispatch_payload(&audit_topic, &audit_payload).await;
+                            });
+
                             self.traffic_recorder.record(crate::admin::TrafficRecord {
                                 id: ctx.proxy_context.request_id.to_string(),
                                 hlc: ctx.proxy_context.hlc.to_compact_string(),
@@ -608,7 +639,7 @@ impl ProxyHttp for CompositeServiceProxy {
                                 status_code: rejection.status_code.as_u16(),
                                 receipt_status: Some("REJECTED".to_string()),
                                 latency_ms,
-                                target: "Edge Interceptor".to_string(),
+                                target: format!("Sink: {}", rejection_topic),
                                 query_preview: ctx.proxy_context.query_preview.clone(),
                                 variables_preview: ctx.proxy_context.variables_preview.clone(),
                             });
@@ -723,7 +754,7 @@ impl ProxyHttp for CompositeServiceProxy {
                                 path: session.req_header().uri.path().to_string(),
                                 operation_name: request_info.gql.as_ref().and_then(|g| g.operation_name.clone()),
                                 operation_type: "Mutation".to_string(),
-                                mode: "Mode B (Edge)".to_string(),
+                                mode: "Async (Receipt)".to_string(),
                                 status_code: 200,
                                 receipt_status: Some(route.receipt_status.clone()),
                                 latency_ms,
@@ -974,7 +1005,7 @@ impl ProxyHttp for CompositeServiceProxy {
                     path: path.to_string(),
                     operation_name: op_name,
                     operation_type: op_type,
-                    mode: "Mode A (Proxy)".to_string(),
+                    mode: "Sync (Proxy)".to_string(),
                     status_code,
                     receipt_status: None,
                     latency_ms,
@@ -1062,7 +1093,7 @@ mod tests {
             "bulk_import".to_string(),
             SpectraRouteConfig {
                 operation: "importCatalog".to_string(),
-                mode: ExecutionStrategy::AsyncEdgeCommand,
+                mode: ExecutionStrategy::AsyncCommandReceipt,
                 upstream: None,
                 receipt_status: "ACCEPTED".to_string(),
                 interceptors: vec![],
@@ -1093,12 +1124,12 @@ mod tests {
         let target_addr = proxy.named_upstreams.get(crm_route.upstream.as_ref().unwrap()).unwrap();
         assert_eq!(*target_addr, crm_addr);
 
-        // 3. Mutation matching Mode B (async receipt, zero upstream hop)
+        // 3. Mutation matching Async Command Receipt (zero upstream hop)
         let op_mode_b = parse_graphql_operation("mutation { importCatalog(file: \"a.csv\") { status } }").unwrap();
         let matched_b = proxy.routes.values().find(|r| op_mode_b.matches_operation(&r.operation));
         assert!(matched_b.is_some());
         let b_route = matched_b.unwrap();
-        assert_eq!(b_route.mode, ExecutionStrategy::AsyncEdgeCommand);
+        assert_eq!(b_route.mode, ExecutionStrategy::AsyncCommandReceipt);
         assert_eq!(b_route.receipt_status, "ACCEPTED");
 
         // 4. Query or unmapped mutation -> falls back to default upstream

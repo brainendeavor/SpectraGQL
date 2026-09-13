@@ -65,32 +65,28 @@ SpectraGQL supports multiple event sinks. When designing cross-sink features (su
    * **Apache Kafka / Redpanda:** Enterprise partition streaming.
    * **Apache Iggy:** High-throughput Rust zero-copy streaming.
    * **SierraDB:** Causal monotonic event store.
-   * **HTTP Webhooks:** Outbound push delivery.
 2. **Under Evaluation ("Maybe" List):**
    * **RabbitMQ (AMQP):** Deferred to prevent broker sprawl and maintain focus on streaming and event-sourcing architectures.
+3. **Reclassified Components:**
+   * **HTTP Webhooks:** Synchronous HTTP POST on the edge write path causes head-of-line blocking when third-party endpoints lag. Webhooks are implemented as an **out-of-the-box consumer worker** (`spectra-webhook-worker`) reading from the broker with configurable exponential backoff, retries, and dead-letter queues (DLQ).
+
+### Edge Interceptor Rejection Audit Convention
+* When a request is rejected at the gateway edge by an interceptor (CEL rule, WASM plugin, or sanitization failure), SpectraGQL publishes a structured audit event to the active broker:
+  * **Topic Pattern:** `interceptors.rejected.<operation_name>` (e.g., `interceptors.rejected.recordvote`, `interceptors.rejected.anonymous`).
+  * **Payload:** Monotonic UUIDv7 ID, HLC timestamp, operation name/type, rejection code, status code, reason, client IP, and query/variables preview.
 
 ---
 
-## 4. Consumer Worker Telemetry (SWTP) Design Guidelines
+## 4. Consumer Worker Telemetry Design Guidelines
 
-When collecting downstream worker status and logs:
+SpectraGQL employs a hybrid, zero-broker-bloat architecture for downstream worker telemetry:
 
-### Option A: Capability-Driven Degradation (Current Default)
-* The gateway's `EventSinkInspector` reports native broker capabilities in `GET /admin/api/v1/eventsink`.
-* Sinks with native RPC (NATS) declare `"Worker Live Telemetry (SWTP RPC)"` and enable the interactive `[📄 Logs]` drawer.
-* Streaming-only sinks (Kafka, Iggy, SierraDB) declare passive monitoring capabilities. The Admin UI disables RPC-based buttons and renders explanatory badges.
-
-### Option B: The Universal Telemetry Stream Pattern (Universal Least-Common-Denominator)
-If cross-sink worker telemetry is standardized via a shared stream (`spectra.telemetry`):
-* **Mandatory Retention Bounds:** To prevent unbounded storage growth in the broker:
-  * **NATS JetStream:** Configure stream with `max_msgs: 5000` or `max_age: 1h` with `discard: old`.
-  * **Redis Streams:** Mandate `MAXLEN ~ 1000` on `XADD`.
-  * **Kafka:** Topic retention must enforce `retention.ms=3600000` (1 hour) or `cleanup.policy=compact` keyed by `workerId`.
-  * **Iggy:** Enforce max segment size / stream retention.
-* **Throttled / Rollup Emission:** Workers must **never** publish individual `DEBUG`/`INFO` lines on every processed event (which doubles broker write volume). Workers must publish only on state transitions, errors, and periodic batched rollups (e.g., once every 3–5 seconds).
-
-### Redis / Valkey Considerations
-* Standardizing on Redis/Valkey for both distributed idempotency and worker telemetry lists (`LPUSH` + `LTRIM 0 199`) is technically clean, but **must remain optional**. SpectraGQL must operate as a zero-dependency self-contained appliance for teams running purely on NATS or Kafka.
+### Option C: Universal Direct Telemetry API with In-Memory Registry (Active Standard)
+* **API Endpoint:** `POST /admin/api/v1/telemetry/report`
+* **Zero Broker Bloat:** Workers never publish raw, verbose `DEBUG`/`INFO` lines to the event sink. Instead, workers maintain a small in-memory ring buffer and POST a throttled heartbeat with recent log rollups every 3–5 seconds (or immediately upon unhandled exceptions).
+* **Bounded In-Memory Worker Registry:** `WorkerRegistry` (`src/admin/registry.rs`) caps log history to 200 entries per worker and monitors heartbeat freshness with a 15-second liveness timeout.
+* **Universal Cross-Sink UI:** The Admin UI's `[📄 Logs]` modal queries `/admin/api/v1/workers/:id/logs`, which resolves instantly from `WorkerRegistry` regardless of whether the cluster runs on NATS, Kafka, Redis Streams, SierraDB, or Iggy.
+* **Backward-Compatible NATS RPC Fallback:** If a worker is not yet registered via the direct API, the gateway gracefully falls back to NATS Request-Reply SWTP if the active sink is NATS.
 
 ---
 
