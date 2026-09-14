@@ -134,6 +134,7 @@ fn test_worker_registry_lifecycle_and_summaries() {
     // Report from worker 1
     registry.record_report(WorkerTelemetryReport {
         worker_id: "projection-worker".to_string(),
+        app_id: None,
         sink: Some("nats".to_string()),
         stream: Some("SPECTRA".to_string()),
         status: Some("healthy".to_string()),
