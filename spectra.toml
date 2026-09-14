@@ -40,9 +40,23 @@ upstream = "crm"
 # Route-specific interceptors (appended after global interceptors)
 # interceptors = ["leak_guard"]
 
+[upstreams.spectral_flux]
+addr = "127.0.0.1:8081"
+name = "spectral_flux"
+
 # Mode B Route Overrides: Pure async command receipts (edge-terminated)
 [gql.routes.bulk_import]
 operation = "importCatalog"
+mode = "B"
+receipt_status = "ACCEPTED"
+
+[gql.routes.magic_link]
+operation = "requestMagicLink"
+mode = "B"
+receipt_status = "ACCEPTED"
+
+[gql.routes.webhook_dispatch]
+operation = "dispatchWebhook"
 mode = "B"
 receipt_status = "ACCEPTED"
 

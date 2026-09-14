@@ -1,0 +1,42 @@
+# syntax=docker/dockerfile:1
+# ------------------------------------------------------------------------------
+# Spectral Flux Dockerfile (Downstream Execution Chassis & Fluxcell Harness)
+# ------------------------------------------------------------------------------
+
+FROM rust:1.85-slim-bookworm AS builder
+
+WORKDIR /usr/src/spectragql
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    pkg-config \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY Cargo.toml Cargo.lock ./
+COPY src ./src
+COPY spectral-flux ./spectral-flux
+COPY wit ./wit
+
+RUN cargo build --release -p spectral-flux
+
+# Runtime Image (<25 MB base)
+FROM debian:bookworm-slim AS runtime
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /usr/src/spectragql/target/release/spectral-flux /usr/local/bin/spectral-flux
+COPY spectral-flux/spectral-flux.toml /etc/spectral-flux/spectral-flux.toml
+
+WORKDIR /etc/spectral-flux
+EXPOSE 8081
+
+ENV FLUX_PORT=8081
+ENV FLUX_HOST=0.0.0.0
+
+HEALTHCHECK --interval=5s --timeout=3s --retries=3 \
+  CMD curl -f http://localhost:8081/healthz || exit 1
+
+ENTRYPOINT ["spectral-flux"]

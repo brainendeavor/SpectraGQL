@@ -1,0 +1,61 @@
+services:
+  gateway:
+    image: spectragql/gateway:latest
+    build:
+      context: ../../../
+      dockerfile: docker/Dockerfile.gateway
+    deploy:
+      replicas: 2
+    environment:
+      - SPECTRA_BIND_ADDR=0.0.0.0:8000
+      - SPECTRA_DISPATCH_METHOD=NATS
+      - SPECTRA_DISPATCH_ADDR=nats://broker:4222
+      - SPECTRA_UPSTREAM_ADDR=host.docker.internal:4000
+      - SPECTRA_UPSTREAMS_WORKER_ADDR=http://flux:8081
+      - SPECTRA_IDEMPOTENCY_BACKEND=redis
+      - SPECTRA_IDEMPOTENCY_ADDR=redis:6379
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.spectra-gw.rule=Host(`api.yourdomain.com`)"
+      - "traefik.http.routers.spectra-gw.entrypoints=websecure"
+      - "traefik.http.routers.spectra-gw.tls.certresolver=letsencrypt"
+      - "traefik.http.services.spectra-gw.loadbalancer.server.port=8000"
+    depends_on:
+      - broker
+      - redis
+      - flux
+
+  flux:
+    image: spectragql/spectral-flux:latest
+    build:
+      context: ../../../
+      dockerfile: docker/Dockerfile.spectral-flux
+    deploy:
+      replicas: 2
+    environment:
+      - FLUX_PORT=8081
+      - FLUX_HOST=0.0.0.0
+      - FLUX__BROKER__METHOD=nats
+      - FLUX__BROKER__ADDR=nats://broker:4222
+      - FLUX__STORAGE__BACKEND=redis
+      - FLUX__STORAGE__ADDR=redis://redis:6379
+      - FLUX__GATEWAY_ADMIN_URL=http://gateway:8000
+    depends_on:
+      - broker
+      - redis
+
+  redis:
+    image: valkey/valkey:8-alpine
+    command: ["valkey-server", "--save", "60", "1", "--loglevel", "warning"]
+    volumes:
+      - redis_data:/data
+
+  broker:
+    image: nats:latest
+    command: ["-js", "-m", "8222"]
+    volumes:
+      - nats_data:/data
+
+volumes:
+  redis_data:
+  nats_data:

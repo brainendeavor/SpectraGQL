@@ -1,0 +1,45 @@
+services:
+  gateway:
+    image: spectragql/gateway:latest
+    build:
+      context: ../../../
+      dockerfile: docker/Dockerfile.gateway
+    environment:
+      - SPECTRA_BIND_ADDR=0.0.0.0:8000
+      - SPECTRA_DISPATCH_METHOD=NATS
+      - SPECTRA_DISPATCH_ADDR=nats://broker:4222
+      - SPECTRA_UPSTREAM_ADDR=host.docker.internal:4000
+      - SPECTRA_UPSTREAMS_WORKER_ADDR=http://flux:8081
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.spectra-gw.rule=Host(`api.yourdomain.com`)"
+      - "traefik.http.routers.spectra-gw.entrypoints=websecure"
+      - "traefik.http.routers.spectra-gw.tls.certresolver=letsencrypt"
+      - "traefik.http.services.spectra-gw.loadbalancer.server.port=8000"
+    depends_on:
+      - broker
+      - flux
+
+  flux:
+    image: spectragql/spectral-flux:latest
+    build:
+      context: ../../../
+      dockerfile: docker/Dockerfile.spectral-flux
+    environment:
+      - FLUX_PORT=8081
+      - FLUX_HOST=0.0.0.0
+      - FLUX__BROKER__METHOD=nats
+      - FLUX__BROKER__ADDR=nats://broker:4222
+      - FLUX__STORAGE__BACKEND=embedded_kevy
+      - FLUX__GATEWAY_ADMIN_URL=http://gateway:8000
+    depends_on:
+      - broker
+
+  broker:
+    image: nats:latest
+    command: ["-js", "-m", "8222"]
+    volumes:
+      - nats_data:/data
+
+volumes:
+  nats_data:
