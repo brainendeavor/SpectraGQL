@@ -1,0 +1,67 @@
+package spectragql:fluxcell@0.1.0;
+
+interface types {
+    enum http-method {
+        get,
+        post,
+        put,
+        delete,
+        options,
+    }
+
+    record http-route {
+        method: http-method,
+        path: string,          /// Relative path, e.g. "/verify", "/status", "/dlq"
+        description: string,
+    }
+
+    record http-request {
+        method: http-method,
+        path: string,          /// Relative path within fluxcell namespace
+        query-params: list<tuple<string, string>>,
+        headers: list<tuple<string, string>>,
+        body: list<u8>,
+    }
+
+    record http-response {
+        status: u16,
+        headers: list<tuple<string, string>>,
+        body: list<u8>,
+    }
+
+    record event-context {
+        event-id: string,
+        hlc: string,
+        topic: string,
+        payload-json: string,
+    }
+
+    enum event-verdict {
+        ack,
+        nack,
+        dead-letter,
+    }
+}
+
+world fluxcell-guest {
+    import types;
+
+    /// Host capabilities imported by guest
+    import kv-store: interface {
+        get: func(key: string) -> option<string>;
+        set: func(key: string, value: string, ttl-seconds: u64) -> bool;
+        delete: func(key: string) -> bool;
+    };
+
+    import host-broker: interface {
+        publish: func(topic: string, payload-json: string) -> bool;
+    };
+
+    /// Guest declarations exported to host
+    export get-subscriptions: func() -> list<string>;
+    export get-routes: func() -> list<types.http-route>;
+
+    /// Runtime execution handlers
+    export handle-event: func(event: types.event-context) -> types.event-verdict;
+    export handle-http: func(req: types.http-request) -> types.http-response;
+}
