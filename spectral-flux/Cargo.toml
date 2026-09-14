@@ -1,0 +1,83 @@
+[package]
+name = "spectral-flux"
+version = "0.1.0"
+edition = "2024"
+description = "High-velocity streaming execution chassis and Fluxcell harness for SpectraGQL"
+license = "MIT"
+authors = ["SpectraGQL Contributors"]
+
+[dependencies]
+# Async Runtime & Utilities
+tokio = { version = "1", features = [
+    "rt-multi-thread",
+    "macros",
+    "sync",
+    "signal",
+    "time",
+    "io-util",
+    "net"
+] }
+bytes = "1.10"
+futures-util = { version = "0.3", default-features = false, features = ["std", "sink"] }
+async-trait = "0.1"
+anyhow = "1.0"
+thiserror = "2.0"
+
+# Routing & Serialization
+matchit = "0.8.6"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0.140", features = ["raw_value"] }
+uuid = { version = "1.16.0", features = ["v4", "v7", "serde"] }
+chrono = "0.4"
+
+# Outbound HTTP & Connection Pooling (Webhooks, Email APIs, Telemetry)
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+http = "1.3.1"
+http-body-util = "0.1.2"
+hyper = { version = "1", features = ["http1", "server"] }
+hyper-util = { version = "0.1", features = ["tokio", "server-auto"] }
+
+# Configuration & Logging
+config = { version = "0.15.11", default-features = false, features = ["toml"] }
+log = "0.4"
+env_logger = "0.10"
+
+# WASM Sandboxed Execution Engine
+wasmtime = { version = "48.0.2", default-features = false, features = [
+    "cranelift",
+    "pooling-allocator",
+    "async",
+    "runtime",
+    "parallel-compilation"
+] }
+wat = "1.259.0"
+
+# Unified Storage Layer: Redis Client & Embedded Kevy Engine
+redis = { version = "0.23.3", default-features = false, features = [
+    "tokio-comp",
+    "connection-manager"
+] }
+kevy-embedded = { version = "6.3.0", optional = true, default-features = false, features = [
+    "core",
+    "persist",
+    "replicate"
+] }
+
+# Message Broker Drivers (Optional / Feature-Gated)
+async-nats = { version = "0.40.0", optional = true }
+rskafka = { version = "0.6", optional = true }
+
+[features]
+# Default build targets universal deployment with all primary streaming backends
+default = ["all-brokers", "kevy"]
+
+# Meta-feature bundling all tier-1 brokers
+all-brokers = ["nats", "redis-streams", "kafka"]
+
+# Individual broker drivers
+nats = ["dep:async-nats"]
+redis-streams = [] # redis crate is already included for state
+kafka = ["dep:rskafka"]
+
+# Embedded in-process Redis storage engine
+kevy = ["dep:kevy-embedded"]

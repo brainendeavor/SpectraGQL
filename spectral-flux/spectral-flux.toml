@@ -1,0 +1,23 @@
+# Spectral Flux Default Configuration
+
+port = 8081
+host = "0.0.0.0"
+
+[broker]
+method = "nats"
+addr = "nats://127.0.0.1:4222"
+consumer_group = "spectral-flux-workers"
+
+[storage]
+backend = "embedded_kevy"
+# addr = "redis://127.0.0.1:6379" # For external Redis/Valkey
+
+[fluxcells.magic_link]
+wasm_module = "fluxcells/magic_link.wasm"
+mount_path = "/auth"
+enabled = true
+
+[fluxcells.webhook]
+wasm_module = "fluxcells/webhook.wasm"
+mount_path = "/api/webhooks"
+enabled = true
