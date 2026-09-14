@@ -84,18 +84,19 @@ impl TelemetryDispatcher {
                     .take()
                     .unwrap_or_else(|| ResponseBody::new(&http_response_headers, ""));
 
+                let has_upstream_response = ctx.proxy_context.response_parts.is_some();
                 let is_http_err = status_code
                     .map(|s| s.is_client_error() || s.is_server_error())
-                    .unwrap_or(false);
+                    .unwrap_or(!has_upstream_response);
 
-                if is_http_err {
+                if is_http_err || !has_upstream_response {
                     if let Some(key) = ctx.proxy_context.idempotency_key.as_ref() {
                         idempotency_engine.remove(key).await;
                     }
                     if ctx.proxy_context.dispatch_policy == ModeADispatchPolicy::ResponseOnly {
                         log::info!(
-                            "Mode A response_only: suppressing event dispatch on HTTP error: {}",
-                            status_code.unwrap()
+                            "Mode A response_only: suppressing event dispatch on HTTP error: {:?}",
+                            status_code
                         );
                     } else {
                         let response_info = ResponseInfo::new(
@@ -104,6 +105,9 @@ impl TelemetryDispatcher {
                             response_body,
                             http_response_headers,
                         );
+                        let err_msg = status_code
+                            .map(|s| format!("HTTP {}", s))
+                            .unwrap_or_else(|| "No upstream response received".to_string());
                         let terminal_event = TerminalEvent::failure(
                             request_id,
                             hlc,
@@ -111,7 +115,7 @@ impl TelemetryDispatcher {
                             op_name,
                             request_info,
                             Some(response_info),
-                            format!("HTTP {}", status_code.unwrap()),
+                            err_msg,
                         );
                         let failed_topic = format!("{}.failed", ctx.proxy_context.request_topic);
                         let dispatch_result = dispatch_method
@@ -124,7 +128,7 @@ impl TelemetryDispatcher {
                         );
                     }
                 } else {
-                    // Complete idempotency tracking for successful response
+                    // Complete idempotency tracking for successful upstream response
                     if let Some(key) = ctx.proxy_context.idempotency_key.as_ref() {
                         let status_u16 = status_code.map(|s| s.as_u16()).unwrap_or(200);
                         let body_str = response_body

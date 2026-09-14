@@ -559,11 +559,37 @@ impl ProxyHttp for CompositeServiceProxy {
             IdempotencyInterceptResult::None => {}
         }
 
-        // Enable retry buffering and read request body if POST
+        // Enable retry buffering and read request body if POST (capped at 10MB to prevent OOM denial of service)
+        const MAX_GATEWAY_BODY_BYTES: usize = 10 * 1024 * 1024; // 10MB
+
         if session.req_header().method == http::Method::POST {
             session.enable_retry_buffering();
+            let mut payload_too_large = false;
             while let Some(chunk) = session.read_request_body().await? {
+                if ctx.proxy_context.buffer.len() + chunk.len() > MAX_GATEWAY_BODY_BYTES {
+                    payload_too_large = true;
+                    break;
+                }
                 ctx.proxy_context.buffer.extend_from_slice(&chunk);
+            }
+
+            if payload_too_large {
+                log::warn!(
+                    "Request body exceeded {} bytes limit from client",
+                    MAX_GATEWAY_BODY_BYTES
+                );
+                let mut header = pingora::http::ResponseHeader::build(413, None).unwrap();
+                let _ = header.insert_header("content-type", "application/json");
+                let _ = header.insert_header(REQUEST_ID_HEADER, ctx.proxy_context.request_id.to_string());
+                let _ = header.insert_header("x-spectra-hlc", ctx.proxy_context.hlc.to_compact_string());
+                let err_body = r#"{"errors":[{"message":"Payload Too Large: request body exceeds 10MB limit"}]}"#;
+                session.set_keepalive(None);
+                session.write_response_header(Box::new(header), false).await?;
+                session.write_response_body(Some(bytes::Bytes::from(err_body)), true).await?;
+                if let Some(key) = ctx.proxy_context.idempotency_key.take() {
+                    self.idempotency_engine.remove(&key).await;
+                }
+                return Ok(true);
             }
         }
 
@@ -657,6 +683,9 @@ impl ProxyHttp for CompositeServiceProxy {
                                 rejection.code,
                                 rejection.status_code
                             );
+                            if let Some(key) = ctx.proxy_context.idempotency_key.take() {
+                                self.idempotency_engine.remove(&key).await;
+                            }
                             let err_body = rejection.to_graphql_response();
                             let mut header = pingora::http::ResponseHeader::build(
                                 rejection.status_code.as_u16(),

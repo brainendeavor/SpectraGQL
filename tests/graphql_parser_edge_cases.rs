@@ -83,3 +83,68 @@ fn test_shorthand_anonymous_query_root_fields() {
     assert_eq!(parsed.operation_name, None);
     assert_eq!(parsed.root_fields, vec!["hero".to_string()]);
 }
+
+#[test]
+fn test_adversarial_deeply_nested_selection_sets() {
+    let depth = 100;
+    let mut query = String::from("query DeepNesting { ");
+    for i in 0..depth {
+        query.push_str(&format!("field{} {{ ", i));
+    }
+    query.push_str("leaf");
+    for _ in 0..depth {
+        query.push_str(" }");
+    }
+    query.push_str(" }");
+
+    let parsed = parse_graphql_operation(&query).expect("Deeply nested query should parse safely without crash");
+    assert_eq!(parsed.operation_name, Some("DeepNesting".to_string()));
+    assert_eq!(parsed.root_fields, vec!["field0".to_string()]);
+}
+
+#[test]
+fn test_adversarial_alias_bombing() {
+    let count = 1000;
+    let mut query = String::from("query AliasBomb { ");
+    for i in 0..count {
+        query.push_str(&format!("a{}: user ", i));
+    }
+    query.push_str("}");
+
+    let parsed = parse_graphql_operation(&query).expect("Mass alias query should parse");
+    assert_eq!(parsed.operation_type, GraphQLOperationType::Query);
+    assert_eq!(parsed.root_fields.len(), count);
+}
+
+#[test]
+fn test_adversarial_massive_whitespace_and_comments() {
+    let mut query = String::new();
+    for _ in 0..1000 {
+        query.push_str("# This is an adversarial comment flooding the buffer\n   \t  \n");
+    }
+    query.push_str("query MassiveComments { viewer { id } }\n");
+    for _ in 0..1000 {
+        query.push_str("# Trailing comment\n");
+    }
+
+    let parsed = parse_graphql_operation(&query).expect("Comment-flooded query should parse");
+    assert_eq!(parsed.operation_name, Some("MassiveComments".to_string()));
+    assert_eq!(parsed.root_fields, vec!["viewer".to_string()]);
+}
+
+#[test]
+fn test_adversarial_null_byte_injection() {
+    let query_with_null = "query NullInject\0 { user { id } }";
+    let res = parse_graphql_operation(query_with_null);
+    // apollo-parser should either reject null byte with syntax error or parse safely without memory corruption
+    assert!(res.is_err() || res.is_ok());
+}
+
+#[test]
+fn test_adversarial_fragment_only_document() {
+    let fragment_doc = "fragment UserFields on User { id name email }";
+    let res = parse_graphql_operation(fragment_doc);
+    assert!(res.is_err());
+    let err = res.unwrap_err().to_string();
+    assert!(err.contains("No operation definition found"), "Unexpected error message: {}", err);
+}

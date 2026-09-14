@@ -115,13 +115,15 @@ async fn test_e2e_gateway_mode_a_and_idempotency_replay() {
 
     let bin_path = env!("CARGO_BIN_EXE_spectragql");
 
+    let unreachable_dispatch_port = get_free_port().await;
+
     // Spawn the real SpectraGQL gateway binary
     let child = Command::new(bin_path)
         .env("SPECTRA_BIND_ADDR", format!("127.0.0.1:{}", gateway_port))
         .env("SPECTRA_UPSTREAM_ADDR", format!("127.0.0.1:{}", mock_upstream.addr.port()))
         .env("SPECTRA_GQL_PATHS", "/graphql,/gql")
         .env("SPECTRA_DISPATCH_METHOD", "nats")
-        .env("SPECTRA_DISPATCH_ADDR", "127.0.0.1:4222")
+        .env("SPECTRA_DISPATCH_ADDR", format!("127.0.0.1:{}", unreachable_dispatch_port))
         .env("SPECTRA_ADMIN_ENABLED", "true")
         .env("SPECTRA_ADMIN_ALLOWED_IPS", "127.0.0.1")
         .spawn()

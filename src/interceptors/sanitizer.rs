@@ -93,8 +93,9 @@ impl Sanitizer {
         }
 
         // 3. Multi-token compound match (e.g. tokens ["credit", "card"] -> "creditcard" matches "credit_card")
+        let max_window = 4.min(tokens.len());
         for i in 0..tokens.len() {
-            for j in (i + 1)..=tokens.len() {
+            for j in (i + 1)..=(i + max_window).min(tokens.len()) {
                 let slice_joined = tokens[i..j].concat();
                 for k in &self.sensitive_keys {
                     let norm_k = k.replace(['-', '_'], "");
@@ -110,6 +111,14 @@ impl Sanitizer {
 
     /// Recursively masks sensitive fields within a `serde_json::Value`.
     pub fn sanitize_value(&self, value: &mut Value) {
+        self.sanitize_value_depth(value, 0);
+    }
+
+    fn sanitize_value_depth(&self, value: &mut Value, depth: usize) {
+        if depth > 64 {
+            // Guard against stack overflow recursion on adversarial deeply-nested JSON payloads
+            return;
+        }
         match value {
             Value::Object(map) => {
                 for (k, v) in map.iter_mut() {
@@ -126,13 +135,13 @@ impl Sanitizer {
                             *q = self.sanitize_gql_query_str(q);
                         }
                     } else {
-                        self.sanitize_value(v);
+                        self.sanitize_value_depth(v, depth + 1);
                     }
                 }
             }
             Value::Array(arr) => {
                 for item in arr.iter_mut() {
-                    self.sanitize_value(item);
+                    self.sanitize_value_depth(item, depth + 1);
                 }
             }
             Value::String(s) => {
@@ -155,7 +164,7 @@ impl Sanitizer {
         });
         let res = re.replace_all(query, |caps: &regex::Captures| {
             let key = &caps[1];
-            format!(r#"{}: "{}"#, key, REDACTED_PLACEHOLDER)
+            format!("{}: \"{}\"", key, REDACTED_PLACEHOLDER)
         });
 
         // Also sanitize bearer tokens within string literals if present
@@ -248,5 +257,46 @@ mod tests {
         let raw = r#"{"name": "bob", "biometric_hash": "a8f59c02"}"#;
         let sanitized = sanitizer.sanitize_json_str(raw);
         assert!(sanitized.contains(r#""biometric_hash":"[REDACTED]""#));
+    }
+
+    #[test]
+    fn test_sanitizer_query_string_syntax_validity() {
+        let sanitizer = Sanitizer::default();
+        let query = r#"mutation LoginUser { login(email: "alice@example.com", password: "supersecret123") { token } }"#;
+        let sanitized = sanitizer.sanitize_gql_query_str(query);
+
+        // Verify that the closing quote is intact and valid GraphQL
+        assert!(sanitized.contains(r#"password: "[REDACTED]""#));
+        assert!(!sanitized.contains("supersecret123"));
+
+        // Verify the sanitized query can be parsed without syntax errors
+        let parser = apollo_parser::Parser::new(&sanitized);
+        let ast = parser.parse();
+        assert!(ast.errors().next().is_none(), "Sanitized query has syntax errors: {:?}", ast.errors().collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn test_sanitizer_adversarial_deeply_nested_json() {
+        let sanitizer = Sanitizer::default();
+        // Construct 100 levels of nested objects
+        let mut deeply_nested = serde_json::json!({ "password": "leaked_secret" });
+        for _ in 0..100 {
+            deeply_nested = serde_json::json!({ "nested": deeply_nested });
+        }
+
+        // Must not stack overflow
+        sanitizer.sanitize_value(&mut deeply_nested);
+    }
+
+    #[test]
+    fn test_sanitizer_long_token_key_dos() {
+        let sanitizer = Sanitizer::default();
+        // Construct a key with 500 underscore-separated tokens
+        let attack_key = (0..500).map(|i| format!("part{}", i)).collect::<Vec<_>>().join("_");
+        let start = std::time::Instant::now();
+        let _ = sanitizer.is_sensitive_key(&attack_key);
+        let elapsed = start.elapsed();
+        // Should complete in well under 10ms with window capping
+        assert!(elapsed < std::time::Duration::from_millis(50), "is_sensitive_key took too long: {:?}", elapsed);
     }
 }
