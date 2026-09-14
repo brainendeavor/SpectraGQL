@@ -148,6 +148,7 @@ async fn main() -> Result<()> {
     match create_broker(&config.broker).await {
         Ok(broker) => {
             let tele_clone = telemetry.clone();
+            let storage_clone = storage.clone();
             let subjects = vec!["mutation.>".to_string(), "webhook.>".to_string(), "auth.>".to_string()];
             let group = config.broker.consumer_group.clone();
 
@@ -163,6 +164,28 @@ async fn main() -> Result<()> {
                                 &format!("Processed event id={} topic={}", msg.id, msg.topic),
                                 None,
                             );
+
+                            // Handle built-in fluxcell event routing
+                            if msg.topic.ends_with("requestmagiclink") || msg.topic == "auth.magic_link" {
+                                let email = if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&msg.payload) {
+                                    val.pointer("/request/gql/jsonBody/variables/email")
+                                        .or_else(|| val.pointer("/variables/email"))
+                                        .or_else(|| val.pointer("/email"))
+                                        .and_then(|v| v.as_str())
+                                        .map(|s| s.to_string())
+                                        .unwrap_or_else(|| "user@example.com".to_string())
+                                } else {
+                                    "user@example.com".to_string()
+                                };
+                                let token = fluxcell_magic_link::mint_magic_token(&email);
+                                let _ = storage_clone.set(&format!("magic_token:{}", token), &email, 900).await;
+                                tele_clone.record_log(
+                                    "INFO",
+                                    &format!("Minted magic link token for {} in storage (token: {})", email, token),
+                                    None,
+                                );
+                            }
+
                             let _ = broker.ack(&msg).await;
                         }
                     }

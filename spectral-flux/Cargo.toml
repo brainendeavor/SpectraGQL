@@ -63,6 +63,10 @@ kevy-embedded = { version = "6.3.0", optional = true, default-features = false, 
     "replicate"
 ] }
 
+# Out-of-the-Box Fluxcells
+fluxcell-magic-link = { path = "fluxcells/magic-link" }
+fluxcell-webhook = { path = "fluxcells/webhook" }
+
 # Message Broker Drivers (Optional / Feature-Gated)
 async-nats = { version = "0.40.0", optional = true }
 rskafka = { version = "0.6", optional = true }

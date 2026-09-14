@@ -1,5 +1,4 @@
 use http_body_util::{BodyExt, Full};
-use hyper::body::Incoming;
 use hyper::{Request, Response, StatusCode};
 use matchit::Router;
 use std::collections::HashMap;
@@ -30,7 +29,7 @@ pub struct RouteMatch<'a> {
     pub params: HashMap<String, String>,
 }
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum RouterError {
     #[error("Route collision: path '{path}' already registered by fluxcell '{existing_fluxcell}' (attempted by '{new_fluxcell}')")]
     Collision {
@@ -43,10 +42,11 @@ pub enum RouterError {
         method: String,
         path: String,
     },
-    #[error("Method not allowed: {method} for {path}")]
+    #[error("Method not allowed: {method} for {path} (Allowed: {})", allowed.join(", "))]
     MethodNotAllowed {
         method: String,
         path: String,
+        allowed: Vec<String>,
     },
     #[error("Invalid route pattern: {0}")]
     InvalidPattern(String),
@@ -77,7 +77,11 @@ impl FluxRouter {
 
         for route in routes {
             let clean_rel = clean_path_suffix(&route.relative_path);
-            let full_path = format!("{}{}", clean_mount, clean_rel);
+            let full_path = if clean_mount.is_empty() && clean_rel.is_empty() {
+                "/".to_string()
+            } else {
+                format!("{}{}", clean_mount, clean_rel)
+            };
             let method = route.method.to_uppercase();
 
             let route_key = format!("{} {}", method, full_path);
@@ -92,9 +96,9 @@ impl FluxRouter {
 
             let reg = RegisteredRoute {
                 fluxcell_name: fluxcell_name.to_string(),
-                mount_path: clean_mount.clone(),
+                mount_path: if clean_mount.is_empty() { "/".to_string() } else { clean_mount.clone() },
                 method: method.clone(),
-                relative_path: clean_rel,
+                relative_path: if clean_rel.is_empty() { "/".to_string() } else { clean_rel },
                 full_path: full_path.clone(),
             };
 
@@ -112,32 +116,49 @@ impl FluxRouter {
 
     pub fn lookup<'a>(&'a self, method: &str, path: &str) -> Result<RouteMatch<'a>, RouterError> {
         let method_upper = method.to_uppercase();
-        let router = self.routers.get(&method_upper).ok_or_else(|| {
-            RouterError::NotFound {
-                method: method_upper.clone(),
-                path: path.to_string(),
-            }
-        })?;
+        let normalized_path = if path.len() > 1 && path.ends_with('/') {
+            path.trim_end_matches('/')
+        } else {
+            path
+        };
 
-        match router.at(path) {
-            Ok(matched) => {
+        if let Some(router) = self.routers.get(&method_upper) {
+            if let Ok(matched) = router.at(normalized_path) {
                 let mut params = HashMap::new();
                 for (k, v) in matched.params.iter() {
                     params.insert(k.to_string(), v.to_string());
                 }
-                Ok(RouteMatch {
+                return Ok(RouteMatch {
                     fluxcell_name: &matched.value.fluxcell_name,
                     mount_path: &matched.value.mount_path,
                     relative_path: &matched.value.relative_path,
                     full_path: &matched.value.full_path,
                     params,
-                })
+                });
             }
-            Err(matchit::MatchError::NotFound) => Err(RouterError::NotFound {
+        }
+
+        // Check if any other registered method supports this route for RFC 9110 MethodNotAllowed
+        let mut allowed = Vec::new();
+        for (m, router) in &self.routers {
+            if m != &method_upper && router.at(normalized_path).is_ok() {
+                allowed.push(m.clone());
+            }
+        }
+
+        if !allowed.is_empty() {
+            allowed.sort();
+            return Err(RouterError::MethodNotAllowed {
                 method: method_upper,
                 path: path.to_string(),
-            }),
+                allowed,
+            });
         }
+
+        Err(RouterError::NotFound {
+            method: method_upper,
+            path: path.to_string(),
+        })
     }
 }
 
@@ -148,20 +169,20 @@ impl Default for FluxRouter {
 }
 
 fn clean_path_prefix(prefix: &str) -> String {
-    let mut p = prefix.trim();
-    if !p.starts_with('/') {
-        p = &p[..];
-        return format!("/{}", p.trim_end_matches('/'));
+    let p = prefix.trim().trim_matches('/');
+    if p.is_empty() {
+        "".to_string()
+    } else {
+        format!("/{}", p)
     }
-    p.trim_end_matches('/').to_string()
 }
 
 fn clean_path_suffix(suffix: &str) -> String {
-    let s = suffix.trim();
-    if !s.starts_with('/') {
-        format!("/{}", s)
+    let s = suffix.trim().trim_matches('/');
+    if s.is_empty() {
+        "".to_string()
     } else {
-        s.to_string()
+        format!("/{}", s)
     }
 }
 
@@ -177,14 +198,25 @@ pub trait FluxcellHttpDispatcher: Send + Sync {
     ) -> Result<(u16, Vec<(String, String)>, Vec<u8>), anyhow::Error>;
 }
 
-pub async fn handle_request(
-    req: Request<Incoming>,
+pub async fn handle_request<B>(
+    req: Request<B>,
     router: Arc<FluxRouter>,
     telemetry: Arc<crate::telemetry::TelemetryClient>,
     dispatcher: Arc<dyn FluxcellHttpDispatcher>,
-) -> Result<Response<Full<bytes::Bytes>>, std::convert::Infallible> {
+) -> Result<Response<Full<bytes::Bytes>>, std::convert::Infallible>
+where
+    B: hyper::body::Body + Send + 'static,
+    B::Data: Send,
+    B::Error: std::error::Error + Send + Sync + 'static,
+{
     let method = req.method().to_string();
-    let path = req.uri().path().to_string();
+    let raw_path = req.uri().path().to_string();
+    let query_string = req.uri().query().map(|q| q.to_string());
+    let path = if raw_path.len() > 1 && raw_path.ends_with('/') {
+        raw_path.trim_end_matches('/').to_string()
+    } else {
+        raw_path
+    };
 
     // 1. Built-in liveness / readiness probes
     if path == "/healthz" {
@@ -247,10 +279,12 @@ pub async fn handle_request(
                 )))
                 .unwrap());
         }
-        Err(RouterError::MethodNotAllowed { .. }) => {
+        Err(RouterError::MethodNotAllowed { allowed, .. }) => {
+            let allow_header = allowed.join(", ");
             return Ok(Response::builder()
                 .status(StatusCode::METHOD_NOT_ALLOWED)
                 .header("Content-Type", "application/json")
+                .header("Allow", allow_header)
                 .body(Full::new(bytes::Bytes::from(
                     "{\"error\":\"METHOD_NOT_ALLOWED\"}",
                 )))
@@ -287,7 +321,11 @@ pub async fn handle_request(
 
     // 4. Dispatch to Fluxcell
     let fluxcell_name = route_match.fluxcell_name.to_string();
-    let relative_path = route_match.relative_path.to_string();
+    let relative_path = if let Some(q) = &query_string {
+        format!("{}?{}", route_match.relative_path, q)
+    } else {
+        route_match.relative_path.to_string()
+    };
 
     match dispatcher
         .dispatch(&fluxcell_name, &relative_path, &method, headers, body_bytes)
@@ -314,10 +352,34 @@ pub async fn handle_request(
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct MockDispatcher {
+        status: u16,
+        headers: Vec<(String, String)>,
+        body: Vec<u8>,
+        should_fail: bool,
+    }
+
+    #[async_trait::async_trait]
+    impl FluxcellHttpDispatcher for MockDispatcher {
+        async fn dispatch(
+            &self,
+            _fluxcell_name: &str,
+            _relative_path: &str,
+            _method: &str,
+            _headers: Vec<(String, String)>,
+            _body: Vec<u8>,
+        ) -> Result<(u16, Vec<(String, String)>, Vec<u8>), anyhow::Error> {
+            if self.should_fail {
+                Err(anyhow::anyhow!("Mock execution error"))
+            } else {
+                Ok((self.status, self.headers.clone(), self.body.clone()))
+            }
+        }
+    }
 
     #[test]
     fn test_router_registration_and_lookup() {
@@ -367,10 +429,6 @@ mod tests {
         assert_eq!(m2.fluxcell_name, "webhook");
         assert_eq!(m2.mount_path, "/api/webhooks");
         assert_eq!(m2.relative_path, "/dlq");
-
-        // Verify 404
-        assert!(router.lookup("GET", "/auth/nonexistent").is_err());
-        assert!(router.lookup("DELETE", "/auth/verify").is_err());
     }
 
     #[test]
@@ -402,6 +460,333 @@ mod tests {
                 assert_eq!(new_fluxcell, "auth-v2");
             }
             other => panic!("Expected Collision error, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_router_method_not_allowed_and_rfc9110_allow_header() {
+        let mut router = FluxRouter::new();
+
+        let routes = vec![
+            RouteDefinition {
+                method: "GET".to_string(),
+                relative_path: "/verify".to_string(),
+                description: "Check token".to_string(),
+            },
+            RouteDefinition {
+                method: "POST".to_string(),
+                relative_path: "/verify".to_string(),
+                description: "Redeem token".to_string(),
+            },
+        ];
+
+        router.register_fluxcell_routes("auth", "/auth", &routes).unwrap();
+
+        // DELETE /auth/verify should return MethodNotAllowed with allowed: ["GET", "POST"]
+        let err = router.lookup("DELETE", "/auth/verify").unwrap_err();
+        match err {
+            RouterError::MethodNotAllowed { method, path, allowed } => {
+                assert_eq!(method, "DELETE");
+                assert_eq!(path, "/auth/verify");
+                assert_eq!(allowed, vec!["GET".to_string(), "POST".to_string()]);
+            }
+            other => panic!("Expected MethodNotAllowed, got: {:?}", other),
+        }
+
+        // Truly nonexistent path returns NotFound
+        let err_not_found = router.lookup("GET", "/auth/nonexistent").unwrap_err();
+        assert!(matches!(err_not_found, RouterError::NotFound { .. }));
+    }
+
+    #[test]
+    fn test_router_trailing_slash_normalization() {
+        let mut router = FluxRouter::new();
+
+        let routes = vec![RouteDefinition {
+            method: "GET".to_string(),
+            relative_path: "/verify".to_string(),
+            description: "Verify".to_string(),
+        }];
+
+        router.register_fluxcell_routes("auth", "/auth", &routes).unwrap();
+
+        // Should resolve both with and without trailing slash
+        let m1 = router.lookup("GET", "/auth/verify").unwrap();
+        let m2 = router.lookup("GET", "/auth/verify/").unwrap();
+        assert_eq!(m1.full_path, m2.full_path);
+        assert_eq!(m1.relative_path, m2.relative_path);
+    }
+
+    #[test]
+    fn test_router_root_mount_path_cleaning() {
+        let mut router = FluxRouter::new();
+
+        let routes = vec![RouteDefinition {
+            method: "GET".to_string(),
+            relative_path: "/health".to_string(),
+            description: "Health".to_string(),
+        }];
+
+        // Mount at root "" or "/"
+        router.register_fluxcell_routes("root_cell", "", &routes).unwrap();
+
+        let m = router.lookup("GET", "/health").unwrap();
+        assert_eq!(m.full_path, "/health");
+        assert_eq!(m.relative_path, "/health");
+    }
+
+    #[tokio::test]
+    async fn test_handle_request_probes() {
+        let router = Arc::new(FluxRouter::new());
+        let telemetry = Arc::new(crate::telemetry::TelemetryClient::new(
+            "worker-test-1".to_string(),
+            "nats".to_string(),
+            None,
+            100,
+        ));
+        telemetry.record_log("INFO", "Initialized test", None);
+
+        let dispatcher = Arc::new(MockDispatcher {
+            status: 200,
+            headers: vec![],
+            body: vec![],
+            should_fail: false,
+        });
+
+        // 1. /healthz
+        let req = Request::builder().uri("/healthz").body(Full::new(bytes::Bytes::new())).unwrap();
+        let resp = handle_request(req, router.clone(), telemetry.clone(), dispatcher.clone()).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body_bytes = resp.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(json["status"], "ok");
+
+        // 2. /healthz/ (with trailing slash)
+        let req = Request::builder().uri("/healthz/").body(Full::new(bytes::Bytes::new())).unwrap();
+        let resp = handle_request(req, router.clone(), telemetry.clone(), dispatcher.clone()).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        // 3. /readyz
+        let req = Request::builder().uri("/readyz").body(Full::new(bytes::Bytes::new())).unwrap();
+        let resp = handle_request(req, router.clone(), telemetry.clone(), dispatcher.clone()).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        // 4. /metrics
+        let req = Request::builder().uri("/metrics").body(Full::new(bytes::Bytes::new())).unwrap();
+        let resp = handle_request(req, router.clone(), telemetry.clone(), dispatcher.clone()).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body_bytes = resp.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(json["worker_id"], "worker-test-1");
+
+        // 5. /admin/logs
+        let req = Request::builder().uri("/admin/logs").body(Full::new(bytes::Bytes::new())).unwrap();
+        let resp = handle_request(req, router.clone(), telemetry.clone(), dispatcher.clone()).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body_bytes = resp.into_body().collect().await.unwrap().to_bytes();
+        let json: Vec<serde_json::Value> = serde_json::from_slice(&body_bytes).unwrap();
+        assert!(!json.is_empty());
+        assert_eq!(json[0]["message"], "Initialized test");
+    }
+
+    #[tokio::test]
+    async fn test_handle_request_route_dispatch_success_with_custom_headers() {
+        let mut router = FluxRouter::new();
+        router.register_fluxcell_routes("auth", "/auth", &[RouteDefinition {
+            method: "POST".to_string(),
+            relative_path: "/login".to_string(),
+            description: "Login redirect".to_string(),
+        }]).unwrap();
+
+        let router = Arc::new(router);
+        let telemetry = Arc::new(crate::telemetry::TelemetryClient::new(
+            "worker-test".to_string(),
+            "nats".to_string(),
+            None,
+            100,
+        ));
+
+        let dispatcher = Arc::new(MockDispatcher {
+            status: 302,
+            headers: vec![
+                ("Location".to_string(), "/dashboard".to_string()),
+                ("Set-Cookie".to_string(), "session=abc123xyz; Path=/".to_string()),
+            ],
+            body: b"Redirecting...".to_vec(),
+            should_fail: false,
+        });
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/auth/login")
+            .body(Full::new(bytes::Bytes::from("{\"username\":\"admin\"}")))
+            .unwrap();
+
+        let resp = handle_request(req, router, telemetry, dispatcher).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::FOUND);
+        assert_eq!(resp.headers().get("Location").unwrap(), "/dashboard");
+        assert_eq!(resp.headers().get("Set-Cookie").unwrap(), "session=abc123xyz; Path=/");
+
+        let body_bytes = resp.into_body().collect().await.unwrap().to_bytes();
+        assert_eq!(body_bytes.as_ref(), b"Redirecting...");
+    }
+
+    #[tokio::test]
+    async fn test_handle_request_method_not_allowed_header() {
+        let mut router = FluxRouter::new();
+        router.register_fluxcell_routes("auth", "/auth", &[RouteDefinition {
+            method: "GET".to_string(),
+            relative_path: "/verify".to_string(),
+            description: "Verify".to_string(),
+        }]).unwrap();
+
+        let router = Arc::new(router);
+        let telemetry = Arc::new(crate::telemetry::TelemetryClient::new(
+            "worker-test".to_string(),
+            "nats".to_string(),
+            None,
+            100,
+        ));
+        let dispatcher = Arc::new(MockDispatcher {
+            status: 200,
+            headers: vec![],
+            body: vec![],
+            should_fail: false,
+        });
+
+        let req = Request::builder()
+            .method("DELETE")
+            .uri("/auth/verify")
+            .body(Full::new(bytes::Bytes::new()))
+            .unwrap();
+
+        let resp = handle_request(req, router, telemetry, dispatcher).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::METHOD_NOT_ALLOWED);
+        assert_eq!(resp.headers().get("Allow").unwrap(), "GET");
+    }
+
+    #[tokio::test]
+    async fn test_handle_request_dispatcher_error_increments_telemetry() {
+        let mut router = FluxRouter::new();
+        router.register_fluxcell_routes("flaky", "/flaky", &[RouteDefinition {
+            method: "GET".to_string(),
+            relative_path: "/fail".to_string(),
+            description: "Failing route".to_string(),
+        }]).unwrap();
+
+        let router = Arc::new(router);
+        let telemetry = Arc::new(crate::telemetry::TelemetryClient::new(
+            "worker-test".to_string(),
+            "nats".to_string(),
+            None,
+            100,
+        ));
+        let dispatcher = Arc::new(MockDispatcher {
+            status: 200,
+            headers: vec![],
+            body: vec![],
+            should_fail: true,
+        });
+
+        let req = Request::builder()
+            .method("GET")
+            .uri("/flaky/fail")
+            .body(Full::new(bytes::Bytes::new()))
+            .unwrap();
+
+        let resp = handle_request(req, router, telemetry.clone(), dispatcher).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(telemetry.error_count.load(std::sync::atomic::Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn test_http_adversarial_oversized_body() {
+        let mut router = FluxRouter::new();
+        router.register_fluxcell_routes("echo", "/echo", &[RouteDefinition {
+            method: "POST".to_string(),
+            relative_path: "/data".to_string(),
+            description: "Echo data".to_string(),
+        }]).unwrap();
+
+        let router = Arc::new(router);
+        let telemetry = Arc::new(crate::telemetry::TelemetryClient::new(
+            "worker-test".to_string(),
+            "nats".to_string(),
+            None,
+            100,
+        ));
+
+        // 3MB payload
+        let big_body = vec![b'Z'; 3 * 1024 * 1024];
+        let big_body_clone = big_body.clone();
+
+        struct EchoDispatcher;
+        #[async_trait::async_trait]
+        impl FluxcellHttpDispatcher for EchoDispatcher {
+            async fn dispatch(
+                &self,
+                _fluxcell_name: &str,
+                _relative_path: &str,
+                _method: &str,
+                _headers: Vec<(String, String)>,
+                body: Vec<u8>,
+            ) -> Result<(u16, Vec<(String, String)>, Vec<u8>), anyhow::Error> {
+                Ok((200, vec![], body))
+            }
+        }
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/echo/data")
+            .body(Full::new(bytes::Bytes::from(big_body)))
+            .unwrap();
+
+        let resp = handle_request(req, router, telemetry, Arc::new(EchoDispatcher)).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let resp_bytes = resp.into_body().collect().await.unwrap().to_bytes();
+        assert_eq!(resp_bytes.len(), big_body_clone.len());
+    }
+
+    #[tokio::test]
+    async fn test_http_adversarial_path_traversal_attempts() {
+        let mut router = FluxRouter::new();
+        router.register_fluxcell_routes("auth", "/auth", &[RouteDefinition {
+            method: "GET".to_string(),
+            relative_path: "/verify".to_string(),
+            description: "Verify".to_string(),
+        }]).unwrap();
+
+        let router = Arc::new(router);
+        let telemetry = Arc::new(crate::telemetry::TelemetryClient::new(
+            "worker-test".to_string(),
+            "nats".to_string(),
+            None,
+            100,
+        ));
+        let dispatcher = Arc::new(MockDispatcher {
+            status: 200,
+            headers: vec![],
+            body: vec![],
+            should_fail: false,
+        });
+
+        let malicious_uris = vec![
+            "/auth/../../etc/passwd",
+            "/auth/..%2f..%2fetc/shadow",
+            "/api/webhooks/../../secret.key",
+            "/auth/%00/verify",
+        ];
+
+        for uri in malicious_uris {
+            let req = Request::builder()
+                .method("GET")
+                .uri(uri)
+                .body(Full::new(bytes::Bytes::new()))
+                .unwrap();
+
+            let resp = handle_request(req, router.clone(), telemetry.clone(), dispatcher.clone()).await.unwrap();
+            // Should be safely rejected with 404 Not Found without panicking or path traversal
+            assert_eq!(resp.status(), StatusCode::NOT_FOUND);
         }
     }
 }

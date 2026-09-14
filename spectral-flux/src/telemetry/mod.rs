@@ -194,4 +194,54 @@ mod tests {
         assert_eq!(report.total_errors, Some(1));
         assert_eq!(report.last_event_hlc, Some("hlc-100".to_string()));
     }
+
+    #[test]
+    fn test_telemetry_report_json_schema_matches_gateway() {
+        let client = TelemetryClient::new(
+            "flux-worker-7".to_string(),
+            "kafka".to_string(),
+            Some("mutations.v1".to_string()),
+            10,
+        );
+
+        client.record_log("WARN", "Network latency spike", Some("hlc-200".to_string()));
+        client.increment_processed(Some("hlc-200"));
+        client.increment_error();
+
+        let report = client.build_report();
+        let json_val = serde_json::to_value(&report).unwrap();
+
+        // Verify camelCase JSON keys matching gateway WorkerRegistry schema
+        assert_eq!(json_val["workerId"], "flux-worker-7");
+        assert_eq!(json_val["appId"], "spectral-flux");
+        assert_eq!(json_val["sink"], "kafka");
+        assert_eq!(json_val["stream"], "mutations.v1");
+        assert_eq!(json_val["status"], "running");
+        assert_eq!(json_val["processedEvents"], 1);
+        assert_eq!(json_val["totalErrors"], 1);
+        assert_eq!(json_val["lastEventHlc"], "hlc-200");
+
+        let logs = json_val["logs"].as_array().unwrap();
+        assert_eq!(logs.len(), 1);
+        assert_eq!(logs[0]["level"], "WARN");
+        assert_eq!(logs[0]["message"], "Network latency spike");
+        assert_eq!(logs[0]["hlc"], "hlc-200");
+    }
+
+    #[test]
+    fn test_telemetry_hlc_monotonic_updates() {
+        let client = TelemetryClient::new("worker-hlc".to_string(), "nats".to_string(), None, 5);
+
+        assert_eq!(client.build_report().last_event_hlc, None);
+
+        client.increment_processed(Some("100-node1"));
+        assert_eq!(client.build_report().last_event_hlc.as_deref(), Some("100-node1"));
+
+        client.increment_processed(Some("101-node1"));
+        assert_eq!(client.build_report().last_event_hlc.as_deref(), Some("101-node1"));
+
+        // Event processed without HLC leaves existing last_hlc intact
+        client.increment_processed(None);
+        assert_eq!(client.build_report().last_event_hlc.as_deref(), Some("101-node1"));
+    }
 }
