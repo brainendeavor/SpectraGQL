@@ -60,6 +60,28 @@ operation = "dispatchWebhook"
 mode = "B"
 receipt_status = "ACCEPTED"
 
+# Remote Fluxcell Deployment Routes (Disabled by default for production security)
+[gql.routes.fluxcell_deploy]
+operation = "deployFluxcell"
+mode = "B"
+enabled = false
+receipt_status = "ACCEPTED"
+interceptors = ["deploy_guard"]
+
+[gql.routes.fluxcell_activate]
+operation = "activateFluxcell"
+mode = "B"
+enabled = false
+receipt_status = "ACCEPTED"
+interceptors = ["deploy_guard"]
+
+[gql.routes.fluxcell_remove]
+operation = "removeFluxcell"
+mode = "B"
+enabled = false
+receipt_status = "ACCEPTED"
+interceptors = ["deploy_guard"]
+
 [dispatch]
 # Options: "NATS", "KAFKA", "RABBITMQ", "IGGY", "REDIS_STREAMS", "SIERRADB", "WEBHOOK"
 method = "NATS"
@@ -109,6 +131,8 @@ allowed_ips = [
   "172.16.0.0/12",
   "192.168.0.0/16"
 ]
+# Deployment authorization token: can also be set via SPECTRA_DEPLOY_TOKEN environment variable
+# deploy_token = "sk_deploy_change_this_token_in_production"
 
 [rest]
 paths = "/api,/api/{*path}"
@@ -120,6 +144,13 @@ allow_jit = true
 epoch_tick_interval_ms = 1
 
 # Interceptor Definitions (CEL, WASM, or Native)
+[interceptors.deploy_guard]
+stage = "request"
+type = "native"
+kind = "deploy_auth"
+# Optional fallback if SPECTRA_DEPLOY_TOKEN environment variable is unset:
+# token = "sk_deploy_change_this_token_in_production"
+
 [interceptors.auth_guard]
 stage = "request"
 type = "cel"

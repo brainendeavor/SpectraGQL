@@ -14,7 +14,7 @@
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-2024%20edition-orange.svg" alt="Rust Edition" /></a>
   <a href="https://github.com/cloudflare/pingora"><img src="https://img.shields.io/badge/engine-Cloudflare%20Pingora-black.svg" alt="Pingora" /></a>
   <a href="https://spectragql.dev"><img src="https://img.shields.io/badge/website-spectragql.dev-00F0FF" alt="Website" /></a>
-  <img src="https://img.shields.io/badge/tests-111%20passed-brightgreen.svg" alt="Test Status" />
+  <img src="https://img.shields.io/badge/tests-218%20passed-brightgreen.svg" alt="Test Status" />
 </p>
 
 ---
@@ -218,26 +218,80 @@ curl -X POST http://127.0.0.1:8000/graphql \
 
 ---
 
+## Downstream Appliance: Spectral Flux & Fluxcells
+
+SpectraGQL is paired with **Spectral Flux** (`spectral-flux/`), an ultra-lightweight downstream execution chassis that subscribes to mutation events and executes sandboxed WebAssembly **Fluxcells** with embedded in-process Redis-compatible storage (**`kevy-embedded`**):
+
+* **Zero-Compiler Appliance Tenet:** Downstream runtime containers remain $<25\text{ MB}$, with zero `rustc`, `cargo`, or `git` bloat.
+* **Remote Fluxcell Ingress:** Deployments are initiated via Mode B mutations (`deployFluxcell`, `activateFluxcell`, `removeFluxcell`) returning sub-millisecond command receipts.
+* **SSRF Shield:** Artifact URLs are validated against HTTPS, host allowlists, and DNS pre-resolution blocking loopbacks, private subnets, and cloud instance metadata (`169.254.169.254`).
+* **Two-Phase Governance:** Downloaded `.wasm` modules enter `Staged` state without mounting routes until explicitly activated in the SpectraHub Admin UI.
+
+### Configuring the Deployment Authentication Token (`SPECTRA_DEPLOY_TOKEN`)
+
+Deployment mutations are protected at the edge by `DeployAuthInterceptor`, which uses constant-time token comparison. The deployment token can be configured in three places (ordered by precedence):
+
+1. **Environment Variable (Recommended for Production & 12-Factor Platforms):**
+   ```bash
+   export SPECTRA_DEPLOY_TOKEN="sk_deploy_live_your_secret_token_here"
+   ```
+2. **Configuration File (`spectra.toml` under `[interceptors.deploy_guard]`):**
+   ```toml
+   [interceptors.deploy_guard]
+   stage = "request"
+   type = "native"
+   kind = "deploy_auth"
+   token = "sk_deploy_live_your_secret_token_here"
+   ```
+3. **Admin Configuration Fallback (`spectra.toml` under `[admin]`):**
+   ```toml
+   [admin]
+   enabled = true
+   deploy_token = "sk_deploy_live_your_secret_token_here"
+   ```
+
+> [!CAUTION]
+> If no token is configured in either the environment or `spectra.toml`, all deployment operations are **unconditionally rejected with HTTP 401 `DEPLOY_UNAUTHORIZED`**.
+
+When submitting deployment operations, pass the token via standard HTTP headers:
+```bash
+# Via Bearer authorization header:
+-H "Authorization: Bearer ${SPECTRA_DEPLOY_TOKEN}"
+
+# Or via custom header:
+-H "x-spectra-deploy-key: ${SPECTRA_DEPLOY_TOKEN}"
+```
+
+---
+
 ## Automated Test Verification
 
-SpectraGQL maintains a comprehensive, isolated test suite organized into dedicated files under `tests/`:
+SpectraGQL maintains an adversarial, comprehensive test suite spanning unit tests, chaos fuzzing, concurrency raceways, and end-to-end CQRS sagas:
 
 ```bash
-cargo test
+cargo test --workspace
 ```
 
 ```
-test result: ok. 73 passed (lib unit tests)
+test result: ok. 89 passed (spectragql core lib)
+test result: ok. 52 passed (spectral-flux engine, wasm, storage, deployer)
 test result: ok.  6 passed (tests/admin_security.rs)
-test result: ok.  2 passed (tests/dispatch_failure.rs)
+test result: ok.  5 passed (tests/deployer_governance.rs)
+test result: ok.  3 passed (tests/dispatch_failure.rs)
+test result: ok.  3 passed (tests/e2e_dual_pillar_saga.rs)
 test result: ok.  1 passed (tests/e2e_gateway.rs)
-test result: ok.  4 passed (tests/graphql_parser_edge_cases.rs)
+test result: ok.  3 passed (tests/gateway_interceptors.rs)
+test result: ok.  5 passed (tests/idempotency_concurrency.rs)
 test result: ok. 10 passed (tests/interceptor_pipeline.rs)
-test result: ok.  3 passed (tests/idempotency_concurrency.rs)
 test result: ok.  4 passed (tests/sanitizer_edge_cases.rs)
 test result: ok.  5 passed (tests/subscription_protocol.rs)
 test result: ok.  6 passed (tests/typestate_sanitization.rs)
-Total: 111 passed; 0 failed; 0 ignored; 0 warnings
+test result: ok.  9 passed (tests/wasm_interceptor.rs)
+test result: ok.  7 passed (fluxcells/magic-link)
+test result: ok.  7 passed (fluxcells/webhook)
+test result: ok.  2 passed (templates/fluxcell-seed)
+
+Grand Total: 218 passed; 0 failed; 0 ignored; 0 warnings
 ```
 
 ---

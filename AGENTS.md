@@ -96,3 +96,31 @@ SpectraGQL employs a hybrid, zero-broker-bloat architecture for downstream worke
 * **Run Unit Tests:** `cargo test --lib`
 * **Admin HTML Assets:** Embedded at compile time via `include_str!("assets/admin.html")`. Verify HTML test assertions in `src/admin/mod.rs` whenever updating UI assets.
 * **Sandbox Awareness:** In sandboxed test environments, ephemeral network binding may fail with `PermissionDenied`. Integration tests requiring real TCP sockets should run with unsandboxed execution if permitted.
+
+---
+
+## 6. Remote Fluxcell Deployment & Security Governance Standards
+
+SpectraGQL supports remote, dynamic deployment and hot-swapping of WebAssembly **Fluxcells** into the downstream `spectral-flux` chassis. Autonomous agents and developers must strictly follow these invariants:
+
+### Zero-Compiler Downstream Container Invariant
+* **Rule:** `spectral-flux` runtime containers must NEVER bundle `rustc`, `cargo`, or `git`. Container images must remain ultra-lean ($< 25\text{ MB}$).
+* **Build Pattern:** Compilation occurs in external CI/CD pipelines (e.g. GitHub Actions, Docker multi-stage builds). The gateway/chassis operates exclusively on immutable pre-compiled `.wasm` binaries published to remote HTTPS object stores (GitHub Releases, AWS S3, Cloudflare R2).
+
+### Deployment Authentication & Token Configuration Hierarchy
+All deployment operations (`deployFluxcell`, `activateFluxcell`, `removeFluxcell`) are intercepted by `DeployAuthInterceptor` using constant-time token comparison. The deployment token is resolved using the following strict hierarchy:
+1. **Environment Variable (Top Precedence - 12-Factor Secret Standard):**
+   `SPECTRA_DEPLOY_TOKEN` (or `SPECTRAGQL_DEPLOY_TOKEN`).
+2. **Route/Interceptor-Level Token (`spectra.toml`):**
+   `[interceptors.deploy_guard]` with `token = "..."`.
+3. **Admin Configuration Fallback (`spectra.toml`):**
+   `[admin]` with `deploy_token = "..."`.
+4. **Fail-Safe Default:**
+   If no token is configured in either the environment or `spectra.toml`, all deployment operations are **unconditionally rejected with HTTP 401 `DEPLOY_UNAUTHORIZED`**.
+
+### Multi-Layer Security Invariants
+1. **Disabled-by-Default Routes:** Deployment routes must default to `enabled = false` in `spectra.toml`.
+2. **Downstream SSRF Shield:** Remote artifact URLs must use `https://`, match configured host allowlists, and pass pre-connect DNS inspection blocking loopback, private RFC 1918 subnets, and cloud instance metadata (`169.254.169.254`).
+3. **Atomic Dual Killswitches:** `external_deploy_enabled` and `dev_upload_enabled` must use lock-free atomics and be instantly killable via `POST /admin/api/v1/security/lockdown`.
+4. **Two-Phase Staging:** Deployments default to `auto_activate = false`. Cells remain in `Staged` state without mounting routes into the Radix tree until explicit administrator approval or `activateFluxcell`.
+
