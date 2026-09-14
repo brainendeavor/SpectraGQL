@@ -290,6 +290,29 @@ impl Default for SpectraAdminConfig {
     }
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct SpectraAppConfig {
+    pub id: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub domains: Vec<String>,
+    #[serde(default)]
+    pub path_prefixes: Vec<String>,
+    #[serde(default)]
+    pub upstream: String,
+    #[serde(default)]
+    pub subject_prefix: Option<String>,
+}
+
+impl SpectraAppConfig {
+    pub fn effective_subject_prefix(&self) -> String {
+        self.subject_prefix
+            .clone()
+            .unwrap_or_else(|| format!("mutation.{}", self.id))
+    }
+}
+
 #[derive(Debug, Deserialize, Clone)]
 pub struct SpectraConfig {
     pub bind_addr: String,
@@ -298,6 +321,10 @@ pub struct SpectraConfig {
     pub upstream: SpectraUpstreamConfig,
     #[serde(default)]
     pub upstreams: HashMap<String, SpectraUpstreamConfig>,
+    #[serde(default)]
+    pub apps: Vec<SpectraAppConfig>,
+    #[serde(default)]
+    pub default_app: Option<String>,
     pub dispatch: SpectraDispatchConfig,
     #[serde(default)]
     pub idempotency: SpectraIdempotencyConfig,
@@ -449,6 +476,56 @@ impl SpectraConfig {
         upstream_name
             .and_then(|name| named_upstreams.get(name))
             .unwrap_or(default_addr)
+    }
+
+    pub fn find_app_by_host(&self, host: &str) -> Option<&SpectraAppConfig> {
+        let clean_host = host.split(':').next().unwrap_or(host).trim();
+        self.apps.iter().find(|app| {
+            app.domains.iter().any(|d| {
+                let clean_d = d.split(':').next().unwrap_or(d).trim();
+                clean_d.eq_ignore_ascii_case(clean_host)
+            })
+        })
+    }
+
+    pub fn find_app_by_id(&self, id: &str) -> Option<&SpectraAppConfig> {
+        self.apps.iter().find(|app| app.id.eq_ignore_ascii_case(id))
+    }
+
+    pub fn find_app_by_path(&self, path: &str) -> Option<&SpectraAppConfig> {
+        self.apps.iter().find(|app| {
+            app.path_prefixes.iter().any(|prefix| {
+                let clean_prefix = prefix.trim_end_matches('/');
+                path == clean_prefix || path.starts_with(&format!("{}/", clean_prefix))
+            })
+        })
+    }
+
+    pub fn resolve_app<'a>(
+        &'a self,
+        host: Option<&str>,
+        header_app: Option<&str>,
+        path: &str,
+    ) -> Option<&'a SpectraAppConfig> {
+        if let Some(h_app) = header_app {
+            if let Some(app) = self.find_app_by_id(h_app) {
+                return Some(app);
+            }
+        }
+        if let Some(h) = host {
+            if let Some(app) = self.find_app_by_host(h) {
+                return Some(app);
+            }
+        }
+        if let Some(app) = self.find_app_by_path(path) {
+            return Some(app);
+        }
+        if let Some(ref def_id) = self.default_app {
+            if let Some(app) = self.find_app_by_id(def_id) {
+                return Some(app);
+            }
+        }
+        self.apps.first()
     }
 }
 
@@ -665,5 +742,74 @@ mod tests {
         assert_eq!(cfg.gql.interceptors, vec!["syntax_validator", "tenant_check"]);
         let route = cfg.gql.routes.get("customer_profile").unwrap();
         assert_eq!(route.interceptors, vec!["wasm_anonymizer"]);
+    }
+
+    #[test]
+    fn test_multi_app_configuration_and_resolution() {
+        let toml_str = r#"
+            bind_addr = "0.0.0.0:8000"
+            default_app = "coeval"
+
+            [upstream]
+            addr = "127.0.0.1:4000"
+
+            [dispatch]
+            name = "default"
+            method = "NATS"
+            addr = "127.0.0.1:4222"
+
+            [gql]
+            paths = "/graphql"
+            ops_to_dispatch = "mutation"
+
+            [rest]
+            paths = "/api"
+
+            [[apps]]
+            id = "coeval"
+            name = "Open CoEval"
+            domains = ["coeval.bio", "coeval.us"]
+            path_prefixes = ["/coeval"]
+            upstream = "coeval_upstream"
+            subject_prefix = "mutation.coeval"
+
+            [[apps]]
+            id = "humanbase"
+            name = "HumanBase"
+            domains = ["humanbase.bio", "humanbase.io"]
+            path_prefixes = ["/humanbase"]
+            upstream = "humanbase_upstream"
+        "#;
+
+        let cfg: SpectraConfig = Config::builder()
+            .add_source(config::File::from_str(toml_str, config::FileFormat::Toml))
+            .build()
+            .unwrap()
+            .try_deserialize()
+            .unwrap();
+
+        assert_eq!(cfg.apps.len(), 2);
+        assert_eq!(cfg.default_app.as_deref(), Some("coeval"));
+
+        // Host resolution (with and without port)
+        let app1 = cfg.resolve_app(Some("coeval.bio:8000"), None, "/graphql").unwrap();
+        assert_eq!(app1.id, "coeval");
+        assert_eq!(app1.effective_subject_prefix(), "mutation.coeval");
+
+        let app2 = cfg.resolve_app(Some("humanbase.io"), None, "/graphql").unwrap();
+        assert_eq!(app2.id, "humanbase");
+        assert_eq!(app2.effective_subject_prefix(), "mutation.humanbase");
+
+        // Header resolution takes top priority
+        let app3 = cfg.resolve_app(Some("coeval.bio"), Some("humanbase"), "/graphql").unwrap();
+        assert_eq!(app3.id, "humanbase");
+
+        // Path resolution when host is unknown
+        let app4 = cfg.resolve_app(Some("api.internal"), None, "/humanbase/graphql").unwrap();
+        assert_eq!(app4.id, "humanbase");
+
+        // Fallback to default_app
+        let app5 = cfg.resolve_app(Some("unknown.com"), None, "/graphql").unwrap();
+        assert_eq!(app5.id, "coeval");
     }
 }

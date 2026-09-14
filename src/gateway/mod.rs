@@ -57,6 +57,7 @@ pub struct SpectraProxyCtx {
     pub has_response_interception: bool,
     pub query_preview: Option<String>,
     pub variables_preview: Option<String>,
+    pub app_id: String,
 }
 
 #[derive(Clone)]

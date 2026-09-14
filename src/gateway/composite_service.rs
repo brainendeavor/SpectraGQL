@@ -47,6 +47,8 @@ pub struct CompositeServiceProxy {
     pub admin_engine: Option<crate::admin::AdminEngine>,
     pub interceptor_manager: Arc<crate::interceptors::InterceptorManager>,
     pub traffic_recorder: Arc<crate::admin::TrafficRecorder>,
+    pub apps: Arc<Vec<crate::core::SpectraAppConfig>>,
+    pub default_app: Option<String>,
 }
 
 impl ServiceConfig {
@@ -85,6 +87,8 @@ impl CompositeServiceProxy {
             admin_engine: None,
             interceptor_manager: Arc::new(crate::interceptors::InterceptorManager::empty()),
             traffic_recorder: Arc::new(crate::admin::TrafficRecorder::new(250)),
+            apps: Arc::new(vec![]),
+            default_app: None,
         }
     }
 
@@ -98,6 +102,54 @@ impl CompositeServiceProxy {
         self.mode_a = mode_a;
         self.routes = Arc::new(routes);
         self
+    }
+
+    pub fn with_apps(
+        mut self,
+        apps: Vec<crate::core::SpectraAppConfig>,
+        default_app: Option<String>,
+    ) -> Self {
+        self.apps = Arc::new(apps);
+        self.default_app = default_app;
+        self
+    }
+
+    pub fn resolve_app<'a>(
+        &'a self,
+        host: Option<&str>,
+        header_app: Option<&str>,
+        path: &str,
+    ) -> Option<&'a crate::core::SpectraAppConfig> {
+        if let Some(h_app) = header_app {
+            if let Some(app) = self.apps.iter().find(|a| a.id.eq_ignore_ascii_case(h_app)) {
+                return Some(app);
+            }
+        }
+        if let Some(h) = host {
+            let clean_host = h.split(':').next().unwrap_or(h).trim();
+            if let Some(app) = self.apps.iter().find(|a| {
+                a.domains.iter().any(|d| {
+                    let clean_d = d.split(':').next().unwrap_or(d).trim();
+                    clean_d.eq_ignore_ascii_case(clean_host)
+                })
+            }) {
+                return Some(app);
+            }
+        }
+        if let Some(app) = self.apps.iter().find(|a| {
+            a.path_prefixes.iter().any(|prefix| {
+                let clean_prefix = prefix.trim_end_matches('/');
+                path == clean_prefix || path.starts_with(&format!("{}/", clean_prefix))
+            })
+        }) {
+            return Some(app);
+        }
+        if let Some(ref def_id) = self.default_app {
+            if let Some(app) = self.apps.iter().find(|a| a.id.eq_ignore_ascii_case(def_id)) {
+                return Some(app);
+            }
+        }
+        self.apps.first()
     }
 
     pub fn with_idempotency_engine(
@@ -321,6 +373,7 @@ impl ProxyHttp for CompositeServiceProxy {
             has_response_interception: false,
             query_preview: None,
             variables_preview: None,
+            app_id: self.default_app.clone().unwrap_or_else(|| "default".to_string()),
         };
         CompositeServiceProxyCtx {
             proxy_context,
@@ -348,6 +401,25 @@ impl ProxyHttp for CompositeServiceProxy {
         // 2. Admin Engine requests do not need an upstream service
         if AdminFilter::is_admin_request(self.admin_engine.as_ref(), path) {
             return Ok(());
+        }
+
+        // 3. Resolve app based on Host, X-App-ID / X-Tenant-ID header, or path
+        let host = req.headers.get("host").and_then(|v| v.to_str().ok());
+        let header_app = req.headers.get("x-app-id")
+            .or_else(|| req.headers.get("x-tenant-id"))
+            .and_then(|v| v.to_str().ok());
+        if let Some(app) = self.resolve_app(host, header_app, path) {
+            ctx.proxy_context.app_id = app.id.clone();
+            if let Some(addr) = self.named_upstreams.get(&app.upstream) {
+                ctx.proxy_context.target_upstream_addr = Some(*addr);
+            }
+        } else if let Some(ref def_id) = self.default_app {
+            ctx.proxy_context.app_id = def_id.clone();
+            if let Some(app) = self.apps.iter().find(|a| a.id == *def_id) {
+                if let Some(addr) = self.named_upstreams.get(&app.upstream) {
+                    ctx.proxy_context.target_upstream_addr = Some(*addr);
+                }
+            }
         }
 
         match self.get_service_config_and_handle_by_path(path) {
@@ -442,6 +514,9 @@ impl ProxyHttp for CompositeServiceProxy {
         {
             log::warn!("Failed to append x-spectra-hlc: {}", e);
         }
+        if let Err(e) = req.append_header("x-spectra-app", &ctx.proxy_context.app_id) {
+            log::warn!("Failed to append x-spectra-app: {}", e);
+        }
 
         // 4. Check for explicit Idempotency-Key in request headers
         match IdempotencyFilter::handle_explicit_key(
@@ -465,6 +540,7 @@ impl ProxyHttp for CompositeServiceProxy {
                     client_ip,
                     method: session.req_header().method.to_string(),
                     path: session.req_header().uri.path().to_string(),
+                    app_id: ctx.proxy_context.app_id.clone(),
                     operation_name: None,
                     operation_type: "Mutation".to_string(),
                     mode: "Replay (Idempotency)".to_string(),
@@ -508,8 +584,19 @@ impl ProxyHttp for CompositeServiceProxy {
                 session.req_header().as_owned_parts(),
                 &body_str,
             ) {
-                ctx.proxy_context.request_topic =
-                    dispatch_method.get_dispatch_topic(&request_info);
+                let base_topic = dispatch_method.get_dispatch_topic(&request_info);
+                let app_prefix = self.apps.iter()
+                    .find(|a| a.id == ctx.proxy_context.app_id)
+                    .map(|a| a.effective_subject_prefix());
+                ctx.proxy_context.request_topic = if let Some(prefix) = app_prefix {
+                    if let Some(op) = base_topic.split('.').nth(1) {
+                        format!("{}.{}", prefix, op)
+                    } else {
+                        format!("{}.{}", prefix, base_topic)
+                    }
+                } else {
+                    base_topic
+                };
                 ctx.proxy_context.request_info = Some(request_info.clone());
 
                 let operation_name = request_info
@@ -633,6 +720,7 @@ impl ProxyHttp for CompositeServiceProxy {
                                 client_ip,
                                 method: session.req_header().method.to_string(),
                                 path: session.req_header().uri.path().to_string(),
+                                app_id: ctx.proxy_context.app_id.clone(),
                                 operation_name: request_info.gql.as_ref().and_then(|g| g.operation_name.clone()),
                                 operation_type: request_info.gql.as_ref().map(|g| g.operation_type.to_string()).unwrap_or_else(|| "GQL".to_string()),
                                 mode: "Rejected (Edge)".to_string(),
@@ -709,6 +797,7 @@ impl ProxyHttp for CompositeServiceProxy {
                                     client_ip,
                                     method: session.req_header().method.to_string(),
                                     path: session.req_header().uri.path().to_string(),
+                                    app_id: ctx.proxy_context.app_id.clone(),
                                     operation_name: op_name.map(|s| s.to_string()),
                                     operation_type: "Mutation".to_string(),
                                     mode: "Replay (Fingerprint)".to_string(),
@@ -752,6 +841,7 @@ impl ProxyHttp for CompositeServiceProxy {
                                 client_ip,
                                 method: session.req_header().method.to_string(),
                                 path: session.req_header().uri.path().to_string(),
+                                app_id: ctx.proxy_context.app_id.clone(),
                                 operation_name: request_info.gql.as_ref().and_then(|g| g.operation_name.clone()),
                                 operation_type: "Mutation".to_string(),
                                 mode: "Async (Receipt)".to_string(),
@@ -1003,6 +1093,7 @@ impl ProxyHttp for CompositeServiceProxy {
                     client_ip: crate::admin::extract_client_ip(session).to_string(),
                     method: session.req_header().method.to_string(),
                     path: path.to_string(),
+                    app_id: ctx.proxy_context.app_id.clone(),
                     operation_name: op_name,
                     operation_type: op_type,
                     mode: "Sync (Proxy)".to_string(),
@@ -1141,5 +1232,47 @@ mod tests {
         let matched_unmapped = proxy.routes.values().find(|r| op_unmapped.matches_operation(&r.operation));
         assert!(matched_unmapped.is_none());
     }
+
+    #[test]
+    fn test_composite_proxy_multi_app_resolution() {
+        let apps = vec![
+            crate::core::SpectraAppConfig {
+                id: "coeval".to_string(),
+                name: "Open CoEval".to_string(),
+                domains: vec!["coeval.bio".to_string()],
+                path_prefixes: vec!["/coeval".to_string()],
+                upstream: "coeval_core".to_string(),
+                subject_prefix: Some("mutation.coeval".to_string()),
+            },
+            crate::core::SpectraAppConfig {
+                id: "humanbase".to_string(),
+                name: "HumanBase".to_string(),
+                domains: vec!["humanbase.bio".to_string()],
+                path_prefixes: vec!["/humanbase".to_string()],
+                upstream: "humanbase_core".to_string(),
+                subject_prefix: None,
+            },
+        ];
+
+        let proxy = CompositeServiceProxy::new().with_apps(apps, Some("coeval".to_string()));
+
+        // Resolve by domain
+        let resolved_domain = proxy.resolve_app(Some("coeval.bio"), None, "/graphql").unwrap();
+        assert_eq!(resolved_domain.id, "coeval");
+
+        // Resolve by header override
+        let resolved_header = proxy.resolve_app(Some("coeval.bio"), Some("humanbase"), "/graphql").unwrap();
+        assert_eq!(resolved_header.id, "humanbase");
+        assert_eq!(resolved_header.effective_subject_prefix(), "mutation.humanbase");
+
+        // Resolve by path prefix
+        let resolved_path = proxy.resolve_app(None, None, "/humanbase/api").unwrap();
+        assert_eq!(resolved_path.id, "humanbase");
+
+        // Fallback to default
+        let resolved_default = proxy.resolve_app(Some("other.internal"), None, "/graphql").unwrap();
+        assert_eq!(resolved_default.id, "coeval");
+    }
 }
+
 

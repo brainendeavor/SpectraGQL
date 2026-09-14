@@ -10,7 +10,7 @@ pub mod telemetry;
 pub use core::{
     ExecutionStrategy, HlcClock, HlcTimestamp, IdempotencyBackendType, InterceptorConfig,
     InterceptorStage, InterceptorType, ModeADispatchPolicy, OperationMode, OperationOutcome,
-    SpectraAdminConfig, SpectraConfig, SpectraDispatchConfig, SpectraGqlConfig,
+    SpectraAdminConfig, SpectraAppConfig, SpectraConfig, SpectraDispatchConfig, SpectraGqlConfig,
     SpectraIdempotencyConfig, SpectraModeAConfig, SpectraRestConfig, SpectraRouteConfig,
     SpectraSubscriptionsConfig, SpectraUpstreamConfig, SpectraWasmConfig,
 };
@@ -105,6 +105,10 @@ pub fn build_composite_service(spectra_configuration: &SpectraConfig) -> Result<
             named_upstreams,
             spectra_configuration.gql.mode_a.clone(),
             spectra_configuration.gql.routes.clone(),
+        )
+        .with_apps(
+            spectra_configuration.apps.clone(),
+            spectra_configuration.default_app.clone(),
         )
         .with_idempotency_engine(idempotency_engine)
         .with_subscriptions(subscription_hub, spectra_configuration.subscriptions.clone())
