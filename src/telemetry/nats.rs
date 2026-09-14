@@ -87,8 +87,9 @@ impl DispatchHandler for NatsDispatch {
                 let op_type = gql_op.operation_type.to_string();
                 let op_name = gql_op
                     .operation_name
-                    .to_owned()
-                    .unwrap_or("anonymous".to_string());
+                    .clone()
+                    .or_else(|| gql_op.root_fields.first().cloned())
+                    .unwrap_or_else(|| "anonymous".to_string());
                 return format!("{}.{}", op_type, op_name).to_lowercase();
             }
             None => {

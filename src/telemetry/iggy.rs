@@ -127,7 +127,8 @@ impl DispatchHandler for IggyDispatch {
                 let op_type = gql_op.operation_type.to_string();
                 let op_name = gql_op
                     .operation_name
-                    .to_owned()
+                    .clone()
+                    .or_else(|| gql_op.root_fields.first().cloned())
                     .unwrap_or_else(|| "anonymous".to_string());
                 format!("{}.{}", op_type, op_name).to_lowercase()
             }
