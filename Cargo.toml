@@ -62,3 +62,10 @@ futures-util = { version = "0.3", default-features = false, features = ["sink", 
 cel = { version = "0.14.5", features = ["json", "regex", "chrono"] }
 wasmtime = { version = "48.0.2", default-features = false, features = ["cranelift", "pooling-allocator", "wat", "async", "runtime", "parallel-compilation"] }
 wat = "1.259.0"
+
+[dev-dependencies]
+spectral-flux = { path = "spectral-flux" }
+fluxcell-magic-link = { path = "spectral-flux/fluxcells/magic-link" }
+fluxcell-webhook = { path = "spectral-flux/fluxcells/webhook" }
+hyper = { version = "1", features = ["http1", "server"] }
+hyper-util = { version = "0.1", features = ["tokio", "server-auto"] }
