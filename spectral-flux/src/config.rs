@@ -16,6 +16,8 @@ pub struct FluxConfig {
     pub gateway_admin_url: Option<String>,
     #[serde(default)]
     pub fluxcells: HashMap<String, FluxcellConfig>,
+    #[serde(default)]
+    pub deployer: DeployerConfig,
 }
 
 impl Default for FluxConfig {
@@ -50,6 +52,7 @@ impl FluxConfig {
             storage: StorageConfig::default(),
             gateway_admin_url: Some("http://127.0.0.1:8000".to_string()),
             fluxcells: HashMap::new(),
+            deployer: DeployerConfig::default(),
         }
     }
 }
@@ -130,6 +133,56 @@ fn default_true() -> bool {
     true
 }
 
+fn default_false() -> bool {
+    false
+}
+
+fn default_max_wasm_size() -> usize {
+    20 * 1024 * 1024 // 20 MB
+}
+
+fn default_storage_dir() -> String {
+    "fluxcells".to_string()
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct DeployerConfig {
+    #[serde(default = "default_false")]
+    pub enabled: bool,
+    #[serde(default = "default_false")]
+    pub external_deploy_enabled: bool,
+    #[serde(default = "default_false")]
+    pub dev_upload_enabled: bool,
+    #[serde(default = "default_false")]
+    pub auto_activate: bool,
+    #[serde(default)]
+    pub allowed_artifact_hosts: Vec<String>,
+    #[serde(default = "default_true")]
+    pub require_https: bool,
+    #[serde(default = "default_true")]
+    pub block_private_networks: bool,
+    #[serde(default = "default_max_wasm_size")]
+    pub max_wasm_size_bytes: usize,
+    #[serde(default = "default_storage_dir")]
+    pub storage_dir: String,
+}
+
+impl Default for DeployerConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            external_deploy_enabled: false,
+            dev_upload_enabled: false,
+            auto_activate: false,
+            allowed_artifact_hosts: Vec::new(),
+            require_https: true,
+            block_private_networks: true,
+            max_wasm_size_bytes: default_max_wasm_size(),
+            storage_dir: default_storage_dir(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -146,6 +199,13 @@ mod tests {
         assert_eq!(cfg.storage.addr, None);
         assert_eq!(cfg.gateway_admin_url, Some("http://127.0.0.1:8000".to_string()));
         assert!(cfg.fluxcells.is_empty());
+        assert!(!cfg.deployer.enabled);
+        assert!(!cfg.deployer.external_deploy_enabled);
+        assert!(!cfg.deployer.dev_upload_enabled);
+        assert!(!cfg.deployer.auto_activate);
+        assert!(cfg.deployer.require_https);
+        assert!(cfg.deployer.block_private_networks);
+        assert_eq!(cfg.deployer.storage_dir, "fluxcells");
     }
 
     #[test]

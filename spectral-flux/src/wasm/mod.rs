@@ -346,6 +346,16 @@ impl WasmHost {
             .unwrap_or(false)
     }
 
+    pub fn unregister_fluxcell(&self, name: &str) -> bool {
+        self.fluxcells.write().unwrap().remove(name).is_some()
+    }
+
+    pub fn list_registered_fluxcells(&self) -> Vec<String> {
+        let mut list: Vec<String> = self.fluxcells.read().unwrap().keys().cloned().collect();
+        list.sort();
+        list
+    }
+
     pub fn invoke_http(
         &self,
         fluxcell_name: &str,

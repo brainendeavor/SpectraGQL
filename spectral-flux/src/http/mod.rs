@@ -4,14 +4,14 @@ use matchit::Router;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct RouteDefinition {
     pub method: String,
     pub relative_path: String,
     pub description: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RegisteredRoute {
     pub fluxcell_name: String,
     pub mount_path: String,
@@ -57,6 +57,8 @@ pub struct FluxRouter {
     routers: HashMap<String, Router<RegisteredRoute>>,
     // Set of all full paths mapped to the registering fluxcell for quick collision reporting
     registered_paths: HashMap<String, String>,
+    // Map of fluxcell_name -> (mount_path, Vec<RouteDefinition>) for rebuild on unregister
+    fluxcell_routes: HashMap<String, (String, Vec<RouteDefinition>)>,
 }
 
 impl FluxRouter {
@@ -64,7 +66,20 @@ impl FluxRouter {
         Self {
             routers: HashMap::new(),
             registered_paths: HashMap::new(),
+            fluxcell_routes: HashMap::new(),
         }
+    }
+
+    pub fn is_reserved_mount_path(mount_path: &str) -> bool {
+        let clean = clean_path_prefix(mount_path);
+        clean == "/admin"
+            || clean.starts_with("/admin/")
+            || clean == "/graphql"
+            || clean == "/gql"
+            || clean.starts_with("/_flux")
+            || clean == "/healthz"
+            || clean == "/readyz"
+            || clean == "/metrics"
     }
 
     pub fn register_fluxcell_routes(
@@ -74,6 +89,13 @@ impl FluxRouter {
         routes: &[RouteDefinition],
     ) -> Result<(), RouterError> {
         let clean_mount = clean_path_prefix(mount_path);
+
+        if Self::is_reserved_mount_path(&clean_mount) {
+            return Err(RouterError::InvalidPattern(format!(
+                "Mount path '{}' is reserved for system infrastructure",
+                clean_mount
+            )));
+        }
 
         for route in routes {
             let clean_rel = clean_path_suffix(&route.relative_path);
@@ -111,7 +133,52 @@ impl FluxRouter {
                 .insert(route_key, fluxcell_name.to_string());
         }
 
+        self.fluxcell_routes
+            .insert(fluxcell_name.to_string(), (mount_path.to_string(), routes.to_vec()));
+
         Ok(())
+    }
+
+    pub fn unregister_fluxcell_routes(&mut self, fluxcell_name: &str) -> bool {
+        if self.fluxcell_routes.remove(fluxcell_name).is_some() {
+            self.rebuild_routers();
+            true
+        } else {
+            false
+        }
+    }
+
+    fn rebuild_routers(&mut self) {
+        self.routers.clear();
+        self.registered_paths.clear();
+        let old_routes = std::mem::take(&mut self.fluxcell_routes);
+        for (name, (mount, routes)) in old_routes {
+            let _ = self.register_fluxcell_routes(&name, &mount, &routes);
+        }
+    }
+
+    pub fn list_registered_routes(&self) -> Vec<RegisteredRoute> {
+        let mut list = Vec::new();
+        for (name, (mount, routes)) in &self.fluxcell_routes {
+            let clean_mount = clean_path_prefix(mount);
+            for r in routes {
+                let clean_rel = clean_path_suffix(&r.relative_path);
+                let full_path = if clean_mount.is_empty() && clean_rel.is_empty() {
+                    "/".to_string()
+                } else {
+                    format!("{}{}", clean_mount, clean_rel)
+                };
+                list.push(RegisteredRoute {
+                    fluxcell_name: name.clone(),
+                    mount_path: mount.clone(),
+                    method: r.method.to_uppercase(),
+                    relative_path: r.relative_path.clone(),
+                    full_path,
+                });
+            }
+        }
+        list.sort_by(|a, b| a.full_path.cmp(&b.full_path));
+        list
     }
 
     pub fn lookup<'a>(&'a self, method: &str, path: &str) -> Result<RouteMatch<'a>, RouterError> {
@@ -168,7 +235,7 @@ impl Default for FluxRouter {
     }
 }
 
-fn clean_path_prefix(prefix: &str) -> String {
+pub fn clean_path_prefix(prefix: &str) -> String {
     let p = prefix.trim().trim_matches('/');
     if p.is_empty() {
         "".to_string()
@@ -177,13 +244,35 @@ fn clean_path_prefix(prefix: &str) -> String {
     }
 }
 
-fn clean_path_suffix(suffix: &str) -> String {
+pub fn clean_path_suffix(suffix: &str) -> String {
     let s = suffix.trim().trim_matches('/');
     if s.is_empty() {
         "".to_string()
     } else {
         format!("/{}", s)
     }
+}
+
+pub fn simple_url_decode(input: &str) -> String {
+    let mut result = String::new();
+    let mut chars = input.chars();
+    while let Some(c) = chars.next() {
+        if c == '%' {
+            let h1 = chars.next();
+            let h2 = chars.next();
+            if let (Some(h1), Some(h2)) = (h1, h2) {
+                if let Ok(byte) = u8::from_str_radix(&format!("{}{}", h1, h2), 16) {
+                    result.push(byte as char);
+                    continue;
+                }
+            }
+        } else if c == '+' {
+            result.push(' ');
+        } else {
+            result.push(c);
+        }
+    }
+    result
 }
 
 #[async_trait::async_trait]
@@ -200,9 +289,10 @@ pub trait FluxcellHttpDispatcher: Send + Sync {
 
 pub async fn handle_request<B>(
     req: Request<B>,
-    router: Arc<FluxRouter>,
+    router: Arc<std::sync::RwLock<FluxRouter>>,
     telemetry: Arc<crate::telemetry::TelemetryClient>,
     dispatcher: Arc<dyn FluxcellHttpDispatcher>,
+    deployer: Option<Arc<crate::deployer::FluxcellDeployer>>,
 ) -> Result<Response<Full<bytes::Bytes>>, std::convert::Infallible>
 where
     B: hyper::body::Body + Send + 'static,
@@ -267,42 +357,302 @@ where
             .unwrap());
     }
 
-    // 2. Lookup route in FluxRouter
-    let route_match = match router.lookup(&method, &path) {
-        Ok(m) => m,
-        Err(RouterError::NotFound { .. }) => {
+    // 2. Deployment Governance & Admin Lockdown Controls
+    if path == "/admin/api/v1/security/lockdown" && method == "POST" {
+        if let Some(dep) = &deployer {
+            dep.guard().emergency_lockdown();
+            let body = serde_json::json!({
+                "status": "locked_down",
+                "external_deploy_enabled": dep.guard().is_external_deploy_allowed(),
+                "dev_upload_enabled": dep.guard().is_dev_upload_allowed(),
+                "message": "Emergency lockdown activated. All deployments frozen."
+            });
             return Ok(Response::builder()
-                .status(StatusCode::NOT_FOUND)
+                .status(StatusCode::OK)
                 .header("Content-Type", "application/json")
-                .body(Full::new(bytes::Bytes::from(
-                    "{\"error\":\"NOT_FOUND\",\"message\":\"No fluxcell route matches request\"}",
-                )))
+                .body(Full::new(bytes::Bytes::from(body.to_string())))
+                .unwrap());
+        } else {
+            return Ok(Response::builder()
+                .status(StatusCode::SERVICE_UNAVAILABLE)
+                .header("Content-Type", "application/json")
+                .body(Full::new(bytes::Bytes::from("{\"error\":\"DEPLOYER_NOT_ENABLED\"}")))
                 .unwrap());
         }
-        Err(RouterError::MethodNotAllowed { allowed, .. }) => {
-            let allow_header = allowed.join(", ");
+    }
+
+    if path == "/_flux/deployer/status" && method == "GET" {
+        if let Some(dep) = &deployer {
+            let records = dep.registry().list_records();
+            let body = serde_json::json!({
+                "external_deploy_enabled": dep.guard().is_external_deploy_allowed(),
+                "dev_upload_enabled": dep.guard().is_dev_upload_allowed(),
+                "auto_activate": dep.config().auto_activate,
+                "fluxcells": records,
+            });
             return Ok(Response::builder()
-                .status(StatusCode::METHOD_NOT_ALLOWED)
+                .status(StatusCode::OK)
                 .header("Content-Type", "application/json")
-                .header("Allow", allow_header)
-                .body(Full::new(bytes::Bytes::from(
-                    "{\"error\":\"METHOD_NOT_ALLOWED\"}",
-                )))
+                .body(Full::new(bytes::Bytes::from(body.to_string())))
+                .unwrap());
+        } else {
+            return Ok(Response::builder()
+                .status(StatusCode::SERVICE_UNAVAILABLE)
+                .header("Content-Type", "application/json")
+                .body(Full::new(bytes::Bytes::from("{\"error\":\"DEPLOYER_NOT_ENABLED\"}")))
                 .unwrap());
         }
-        Err(e) => {
+    }
+
+    if path == "/_flux/deployer/history" && method == "GET" {
+        if let Some(dep) = &deployer {
+            let events = dep.registry().list_audit_events();
+            let body = serde_json::json!({ "events": events });
             return Ok(Response::builder()
-                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .status(StatusCode::OK)
                 .header("Content-Type", "application/json")
-                .body(Full::new(bytes::Bytes::from(format!(
-                    "{{\"error\":\"ROUTER_ERROR\",\"message\":\"{}\"}}",
-                    e
-                ))))
+                .body(Full::new(bytes::Bytes::from(body.to_string())))
                 .unwrap());
+        } else {
+            return Ok(Response::builder()
+                .status(StatusCode::SERVICE_UNAVAILABLE)
+                .header("Content-Type", "application/json")
+                .body(Full::new(bytes::Bytes::from("{\"error\":\"DEPLOYER_NOT_ENABLED\"}")))
+                .unwrap());
+        }
+    }
+
+    if path == "/_flux/deployer/upload" && method == "POST" {
+        if let Some(dep) = &deployer {
+            let mut name = req.headers().get("X-Fluxcell-Name").and_then(|v| v.to_str().ok()).map(|s| s.to_string());
+            let mut mount = req.headers().get("X-Fluxcell-Mount").and_then(|v| v.to_str().ok()).map(|s| s.to_string());
+
+            if let Some(q) = &query_string {
+                for param in q.split('&') {
+                    let mut kv = param.split('=');
+                    if let (Some(k), Some(v)) = (kv.next(), kv.next()) {
+                        if k == "name" && name.is_none() {
+                            name = Some(simple_url_decode(v));
+                        } else if k == "mount" && mount.is_none() {
+                            mount = Some(simple_url_decode(v));
+                        }
+                    }
+                }
+            }
+
+            let cell_name = match name {
+                Some(n) if !n.trim().is_empty() => n.trim().to_string(),
+                _ => {
+                    return Ok(Response::builder()
+                        .status(StatusCode::BAD_REQUEST)
+                        .header("Content-Type", "application/json")
+                        .body(Full::new(bytes::Bytes::from("{\"error\":\"Missing required 'name' parameter or 'X-Fluxcell-Name' header\"}")))
+                        .unwrap());
+                }
+            };
+
+            let mount_path = match mount {
+                Some(m) if !m.trim().is_empty() => m.trim().to_string(),
+                _ => format!("/api/{}", cell_name),
+            };
+
+            let body_bytes = match req.into_body().collect().await {
+                Ok(collected) => collected.to_bytes().to_vec(),
+                Err(e) => {
+                    return Ok(Response::builder()
+                        .status(StatusCode::BAD_REQUEST)
+                        .body(Full::new(bytes::Bytes::from(format!("Failed to read body: {}", e))))
+                        .unwrap());
+                }
+            };
+
+            match dep.stage_uploaded_artifact(&cell_name, body_bytes, &mount_path, None, None) {
+                Ok(record) => {
+                    let body = serde_json::to_string(&record).unwrap_or_default();
+                    return Ok(Response::builder()
+                        .status(StatusCode::CREATED)
+                        .header("Content-Type", "application/json")
+                        .body(Full::new(bytes::Bytes::from(body)))
+                        .unwrap());
+                }
+                Err(e) => {
+                    let status = if !dep.guard().is_dev_upload_allowed() {
+                        StatusCode::FORBIDDEN
+                    } else {
+                        StatusCode::BAD_REQUEST
+                    };
+                    return Ok(Response::builder()
+                        .status(status)
+                        .header("Content-Type", "application/json")
+                        .body(Full::new(bytes::Bytes::from(serde_json::json!({
+                            "error": "DEPLOY_ERROR",
+                            "message": e.to_string()
+                        }).to_string())))
+                        .unwrap());
+                }
+            }
+        } else {
+            return Ok(Response::builder()
+                .status(StatusCode::SERVICE_UNAVAILABLE)
+                .header("Content-Type", "application/json")
+                .body(Full::new(bytes::Bytes::from("{\"error\":\"DEPLOYER_NOT_ENABLED\"}")))
+                .unwrap());
+        }
+    }
+
+    if path == "/_flux/deployer/activate" && method == "POST" {
+        if let Some(dep) = &deployer {
+            let body_bytes = match req.into_body().collect().await {
+                Ok(collected) => collected.to_bytes().to_vec(),
+                Err(e) => {
+                    return Ok(Response::builder()
+                        .status(StatusCode::BAD_REQUEST)
+                        .body(Full::new(bytes::Bytes::from(format!("Failed to read body: {}", e))))
+                        .unwrap());
+                }
+            };
+
+            #[derive(serde::Deserialize)]
+            struct ActivateRequest {
+                name: String,
+                sha256: String,
+            }
+
+            let activate_req: ActivateRequest = match serde_json::from_slice(&body_bytes) {
+                Ok(r) => r,
+                Err(e) => {
+                    return Ok(Response::builder()
+                        .status(StatusCode::BAD_REQUEST)
+                        .header("Content-Type", "application/json")
+                        .body(Full::new(bytes::Bytes::from(format!("{{\"error\":\"INVALID_PAYLOAD\",\"message\":\"{}\"}}", e))))
+                        .unwrap());
+                }
+            };
+
+            match dep.activate(&activate_req.name, &activate_req.sha256) {
+                Ok(record) => {
+                    let body = serde_json::to_string(&record).unwrap_or_default();
+                    return Ok(Response::builder()
+                        .status(StatusCode::OK)
+                        .header("Content-Type", "application/json")
+                        .body(Full::new(bytes::Bytes::from(body)))
+                        .unwrap());
+                }
+                Err(e) => {
+                    return Ok(Response::builder()
+                        .status(StatusCode::BAD_REQUEST)
+                        .header("Content-Type", "application/json")
+                        .body(Full::new(bytes::Bytes::from(serde_json::json!({
+                            "error": "ACTIVATION_ERROR",
+                            "message": e.to_string()
+                        }).to_string())))
+                        .unwrap());
+                }
+            }
+        } else {
+            return Ok(Response::builder()
+                .status(StatusCode::SERVICE_UNAVAILABLE)
+                .header("Content-Type", "application/json")
+                .body(Full::new(bytes::Bytes::from("{\"error\":\"DEPLOYER_NOT_ENABLED\"}")))
+                .unwrap());
+        }
+    }
+
+    if path.starts_with("/_flux/deployer/fluxcells") && method == "DELETE" {
+        if let Some(dep) = &deployer {
+            let cell_name = if path.len() > "/_flux/deployer/fluxcells/".len() {
+                path["/_flux/deployer/fluxcells/".len()..].trim_matches('/').to_string()
+            } else {
+                let mut q_name = None;
+                if let Some(q) = &query_string {
+                    for param in q.split('&') {
+                        let mut kv = param.split('=');
+                        if let (Some("name"), Some(v)) = (kv.next(), kv.next()) {
+                            q_name = Some(v.to_string());
+                        }
+                    }
+                }
+                q_name.unwrap_or_default()
+            };
+
+            if cell_name.is_empty() {
+                return Ok(Response::builder()
+                    .status(StatusCode::BAD_REQUEST)
+                    .header("Content-Type", "application/json")
+                    .body(Full::new(bytes::Bytes::from("{\"error\":\"Fluxcell name required\"}")))
+                    .unwrap());
+            }
+
+            match dep.remove(&cell_name) {
+                Ok(record) => {
+                    return Ok(Response::builder()
+                        .status(StatusCode::OK)
+                        .header("Content-Type", "application/json")
+                        .body(Full::new(bytes::Bytes::from(serde_json::json!({
+                            "status": "removed",
+                            "fluxcell": record
+                        }).to_string())))
+                        .unwrap());
+                }
+                Err(e) => {
+                    return Ok(Response::builder()
+                        .status(StatusCode::BAD_REQUEST)
+                        .header("Content-Type", "application/json")
+                        .body(Full::new(bytes::Bytes::from(serde_json::json!({
+                            "error": "REMOVE_ERROR",
+                            "message": e.to_string()
+                        }).to_string())))
+                        .unwrap());
+                }
+            }
+        } else {
+            return Ok(Response::builder()
+                .status(StatusCode::SERVICE_UNAVAILABLE)
+                .header("Content-Type", "application/json")
+                .body(Full::new(bytes::Bytes::from("{\"error\":\"DEPLOYER_NOT_ENABLED\"}")))
+                .unwrap());
+        }
+    }
+
+    // 3. Lookup route in FluxRouter
+    let (fluxcell_name, relative_path_matched) = {
+        let router_lock = router.read().unwrap();
+        match router_lock.lookup(&method, &path) {
+            Ok(m) => (m.fluxcell_name.to_string(), m.relative_path.to_string()),
+            Err(RouterError::NotFound { .. }) => {
+                return Ok(Response::builder()
+                    .status(StatusCode::NOT_FOUND)
+                    .header("Content-Type", "application/json")
+                    .body(Full::new(bytes::Bytes::from(
+                        "{\"error\":\"NOT_FOUND\",\"message\":\"No fluxcell route matches request\"}",
+                    )))
+                    .unwrap());
+            }
+            Err(RouterError::MethodNotAllowed { allowed, .. }) => {
+                let allow_header = allowed.join(", ");
+                return Ok(Response::builder()
+                    .status(StatusCode::METHOD_NOT_ALLOWED)
+                    .header("Content-Type", "application/json")
+                    .header("Allow", allow_header)
+                    .body(Full::new(bytes::Bytes::from(
+                        "{\"error\":\"METHOD_NOT_ALLOWED\"}",
+                    )))
+                    .unwrap());
+            }
+            Err(e) => {
+                return Ok(Response::builder()
+                    .status(StatusCode::INTERNAL_SERVER_ERROR)
+                    .header("Content-Type", "application/json")
+                    .body(Full::new(bytes::Bytes::from(format!(
+                        "{{\"error\":\"ROUTER_ERROR\",\"message\":\"{}\"}}",
+                        e
+                    ))))
+                    .unwrap());
+            }
         }
     };
 
-    // 3. Collect headers & body
+    // 4. Collect headers & body
     let headers: Vec<(String, String)> = req
         .headers()
         .iter()
@@ -319,12 +669,11 @@ where
         }
     };
 
-    // 4. Dispatch to Fluxcell
-    let fluxcell_name = route_match.fluxcell_name.to_string();
+    // 5. Dispatch to Fluxcell
     let relative_path = if let Some(q) = &query_string {
-        format!("{}?{}", route_match.relative_path, q)
+        format!("{}?{}", relative_path_matched, q)
     } else {
-        route_match.relative_path.to_string()
+        relative_path_matched
     };
 
     match dispatcher
@@ -537,7 +886,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_request_probes() {
-        let router = Arc::new(FluxRouter::new());
+        let router = Arc::new(std::sync::RwLock::new(FluxRouter::new()));
         let telemetry = Arc::new(crate::telemetry::TelemetryClient::new(
             "worker-test-1".to_string(),
             "nats".to_string(),
@@ -555,7 +904,7 @@ mod tests {
 
         // 1. /healthz
         let req = Request::builder().uri("/healthz").body(Full::new(bytes::Bytes::new())).unwrap();
-        let resp = handle_request(req, router.clone(), telemetry.clone(), dispatcher.clone()).await.unwrap();
+        let resp = handle_request(req, router.clone(), telemetry.clone(), dispatcher.clone(), None).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
         let body_bytes = resp.into_body().collect().await.unwrap().to_bytes();
         let json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
@@ -563,17 +912,17 @@ mod tests {
 
         // 2. /healthz/ (with trailing slash)
         let req = Request::builder().uri("/healthz/").body(Full::new(bytes::Bytes::new())).unwrap();
-        let resp = handle_request(req, router.clone(), telemetry.clone(), dispatcher.clone()).await.unwrap();
+        let resp = handle_request(req, router.clone(), telemetry.clone(), dispatcher.clone(), None).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
 
         // 3. /readyz
         let req = Request::builder().uri("/readyz").body(Full::new(bytes::Bytes::new())).unwrap();
-        let resp = handle_request(req, router.clone(), telemetry.clone(), dispatcher.clone()).await.unwrap();
+        let resp = handle_request(req, router.clone(), telemetry.clone(), dispatcher.clone(), None).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
 
         // 4. /metrics
         let req = Request::builder().uri("/metrics").body(Full::new(bytes::Bytes::new())).unwrap();
-        let resp = handle_request(req, router.clone(), telemetry.clone(), dispatcher.clone()).await.unwrap();
+        let resp = handle_request(req, router.clone(), telemetry.clone(), dispatcher.clone(), None).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
         let body_bytes = resp.into_body().collect().await.unwrap().to_bytes();
         let json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
@@ -581,7 +930,7 @@ mod tests {
 
         // 5. /admin/logs
         let req = Request::builder().uri("/admin/logs").body(Full::new(bytes::Bytes::new())).unwrap();
-        let resp = handle_request(req, router.clone(), telemetry.clone(), dispatcher.clone()).await.unwrap();
+        let resp = handle_request(req, router.clone(), telemetry.clone(), dispatcher.clone(), None).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
         let body_bytes = resp.into_body().collect().await.unwrap().to_bytes();
         let json: Vec<serde_json::Value> = serde_json::from_slice(&body_bytes).unwrap();
@@ -598,7 +947,7 @@ mod tests {
             description: "Login redirect".to_string(),
         }]).unwrap();
 
-        let router = Arc::new(router);
+        let router = Arc::new(std::sync::RwLock::new(router));
         let telemetry = Arc::new(crate::telemetry::TelemetryClient::new(
             "worker-test".to_string(),
             "nats".to_string(),
@@ -622,7 +971,7 @@ mod tests {
             .body(Full::new(bytes::Bytes::from("{\"username\":\"admin\"}")))
             .unwrap();
 
-        let resp = handle_request(req, router, telemetry, dispatcher).await.unwrap();
+        let resp = handle_request(req, router, telemetry, dispatcher, None).await.unwrap();
         assert_eq!(resp.status(), StatusCode::FOUND);
         assert_eq!(resp.headers().get("Location").unwrap(), "/dashboard");
         assert_eq!(resp.headers().get("Set-Cookie").unwrap(), "session=abc123xyz; Path=/");
@@ -640,7 +989,7 @@ mod tests {
             description: "Verify".to_string(),
         }]).unwrap();
 
-        let router = Arc::new(router);
+        let router = Arc::new(std::sync::RwLock::new(router));
         let telemetry = Arc::new(crate::telemetry::TelemetryClient::new(
             "worker-test".to_string(),
             "nats".to_string(),
@@ -660,7 +1009,7 @@ mod tests {
             .body(Full::new(bytes::Bytes::new()))
             .unwrap();
 
-        let resp = handle_request(req, router, telemetry, dispatcher).await.unwrap();
+        let resp = handle_request(req, router, telemetry, dispatcher, None).await.unwrap();
         assert_eq!(resp.status(), StatusCode::METHOD_NOT_ALLOWED);
         assert_eq!(resp.headers().get("Allow").unwrap(), "GET");
     }
@@ -674,7 +1023,7 @@ mod tests {
             description: "Failing route".to_string(),
         }]).unwrap();
 
-        let router = Arc::new(router);
+        let router = Arc::new(std::sync::RwLock::new(router));
         let telemetry = Arc::new(crate::telemetry::TelemetryClient::new(
             "worker-test".to_string(),
             "nats".to_string(),
@@ -694,7 +1043,7 @@ mod tests {
             .body(Full::new(bytes::Bytes::new()))
             .unwrap();
 
-        let resp = handle_request(req, router, telemetry.clone(), dispatcher).await.unwrap();
+        let resp = handle_request(req, router, telemetry.clone(), dispatcher, None).await.unwrap();
         assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(telemetry.error_count.load(std::sync::atomic::Ordering::Relaxed), 1);
     }
@@ -708,7 +1057,7 @@ mod tests {
             description: "Echo data".to_string(),
         }]).unwrap();
 
-        let router = Arc::new(router);
+        let router = Arc::new(std::sync::RwLock::new(router));
         let telemetry = Arc::new(crate::telemetry::TelemetryClient::new(
             "worker-test".to_string(),
             "nats".to_string(),
@@ -741,7 +1090,7 @@ mod tests {
             .body(Full::new(bytes::Bytes::from(big_body)))
             .unwrap();
 
-        let resp = handle_request(req, router, telemetry, Arc::new(EchoDispatcher)).await.unwrap();
+        let resp = handle_request(req, router, telemetry, Arc::new(EchoDispatcher), None).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
         let resp_bytes = resp.into_body().collect().await.unwrap().to_bytes();
         assert_eq!(resp_bytes.len(), big_body_clone.len());
@@ -756,7 +1105,7 @@ mod tests {
             description: "Verify".to_string(),
         }]).unwrap();
 
-        let router = Arc::new(router);
+        let router = Arc::new(std::sync::RwLock::new(router));
         let telemetry = Arc::new(crate::telemetry::TelemetryClient::new(
             "worker-test".to_string(),
             "nats".to_string(),
@@ -784,9 +1133,78 @@ mod tests {
                 .body(Full::new(bytes::Bytes::new()))
                 .unwrap();
 
-            let resp = handle_request(req, router.clone(), telemetry.clone(), dispatcher.clone()).await.unwrap();
+            let resp = handle_request(req, router.clone(), telemetry.clone(), dispatcher.clone(), None).await.unwrap();
             // Should be safely rejected with 404 Not Found without panicking or path traversal
             assert_eq!(resp.status(), StatusCode::NOT_FOUND);
         }
+    }
+
+    #[tokio::test]
+    async fn test_handle_request_deployer_governance_and_lockdown() {
+        let temp_dir = std::env::temp_dir().join(format!("spectral_deploy_http_{}", uuid::Uuid::new_v4()));
+        let mut dep_cfg = crate::config::DeployerConfig::default();
+        dep_cfg.enabled = true;
+        dep_cfg.storage_dir = temp_dir.to_string_lossy().to_string();
+        dep_cfg.external_deploy_enabled = true;
+        dep_cfg.dev_upload_enabled = true;
+
+        let guard = Arc::new(crate::deployer::DeployerGuard::new(true, true));
+        let registry = Arc::new(crate::deployer::DeployerRegistry::new(&temp_dir).unwrap());
+        let wasm_host = Arc::new(crate::wasm::WasmHost::new(5, None).unwrap());
+        let router = Arc::new(std::sync::RwLock::new(FluxRouter::new()));
+
+        let deployer = Arc::new(crate::deployer::FluxcellDeployer::new(
+            dep_cfg,
+            guard.clone(),
+            registry,
+            wasm_host,
+            router.clone(),
+        ));
+
+        let telemetry = Arc::new(crate::telemetry::TelemetryClient::new(
+            "test-worker".to_string(),
+            "nats".to_string(),
+            None,
+            100,
+        ));
+        let dispatcher = Arc::new(MockDispatcher {
+            status: 200,
+            headers: vec![],
+            body: vec![],
+            should_fail: false,
+        });
+
+        // 1. GET /_flux/deployer/status
+        let req = Request::builder()
+            .method("GET")
+            .uri("/_flux/deployer/status")
+            .body(Full::new(bytes::Bytes::new()))
+            .unwrap();
+        let resp = handle_request(req, router.clone(), telemetry.clone(), dispatcher.clone(), Some(deployer.clone())).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["external_deploy_enabled"], true);
+        assert_eq!(json["dev_upload_enabled"], true);
+
+        // 2. POST /admin/api/v1/security/lockdown
+        let req = Request::builder()
+            .method("POST")
+            .uri("/admin/api/v1/security/lockdown")
+            .body(Full::new(bytes::Bytes::new()))
+            .unwrap();
+        let resp = handle_request(req, router.clone(), telemetry.clone(), dispatcher.clone(), Some(deployer.clone())).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["status"], "locked_down");
+        assert_eq!(json["external_deploy_enabled"], false);
+        assert_eq!(json["dev_upload_enabled"], false);
+
+        // Verify guard state changed immediately
+        assert!(!guard.is_external_deploy_allowed());
+        assert!(!guard.is_dev_upload_allowed());
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }

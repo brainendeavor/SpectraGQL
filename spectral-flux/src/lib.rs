@@ -6,3 +6,4 @@ pub mod http;
 pub mod storage;
 pub mod telemetry;
 pub mod wasm;
+pub mod deployer;
