@@ -250,6 +250,7 @@ mod tests {
             SpectraRouteConfig {
                 operation: "adjustInventory".to_string(),
                 mode: ExecutionStrategy::SyncUpstreamExecution,
+                enabled: true,
                 upstream: Some("inventory".to_string()),
                 receipt_status: "ACCEPTED".to_string(),
                 interceptors: vec![],
@@ -260,6 +261,7 @@ mod tests {
             SpectraRouteConfig {
                 operation: "importCatalog".to_string(),
                 mode: ExecutionStrategy::AsyncCommandReceipt,
+                enabled: true,
                 upstream: None,
                 receipt_status: "ACCEPTED".to_string(),
                 interceptors: vec![],
@@ -270,6 +272,7 @@ mod tests {
             SpectraRouteConfig {
                 operation: "nonExistentMutation".to_string(),
                 mode: ExecutionStrategy::SyncUpstreamExecution,
+                enabled: true,
                 upstream: Some("ghost_service".to_string()),
                 receipt_status: "ACCEPTED".to_string(),
                 interceptors: vec![],

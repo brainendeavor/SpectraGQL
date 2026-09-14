@@ -322,15 +322,84 @@
             <th>Route ID</th>
             <th>Operation Name</th>
             <th>Mode</th>
+            <th>Status</th>
             <th>Upstream Target</th>
             <th>Target Address</th>
             <th>Receipt Status</th>
           </tr>
         </thead>
         <tbody id="table-routes">
-          <tr><td colspan="6" style="text-align: center; color: var(--text-muted);">Loading route mapping...</td></tr>
+          <tr><td colspan="7" style="text-align: center; color: var(--text-muted);">Loading route mapping...</td></tr>
         </tbody>
       </table>
+    </div>
+
+    <!-- 6. Fluxcell Governance & Staged Deployment Panel -->
+    <div class="section-card" id="fluxcell-governance-panel">
+      <div class="section-header">
+        <div>
+          <div class="section-title">Fluxcell Deployment Governance & Staged Activation</div>
+          <div style="font-size: 13px; color: var(--text-muted); margin-top: 4px;">
+            Dual-killswitch controls, staged artifact inspection, and one-click emergency lockdown.
+          </div>
+        </div>
+        <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+          <span id="badge-external-deploy" class="pill pill-success">External CI/CD: ACTIVE</span>
+          <span id="badge-dev-upload" class="pill pill-warning">Dev Upload: ACTIVE</span>
+          <button class="btn" onclick="triggerEmergencyLockdown()" style="background: rgba(248, 81, 73, 0.2); color: var(--danger); border: 1px solid var(--danger); font-weight: 700;">
+            🛑 Instant Lockdown
+          </button>
+          <button class="btn btn-primary" onclick="openDevUploadModal()">+ Dev Upload</button>
+        </div>
+      </div>
+
+      <!-- Staged Fluxcells (Human-in-the-Loop Activation) -->
+      <div style="margin-top: 14px; margin-bottom: 20px;">
+        <div style="font-size: 14px; font-weight: 600; margin-bottom: 8px; color: var(--text-bright); display: flex; align-items: center; gap: 8px;">
+          <span>Staged Fluxcells (Awaiting Production Activation)</span>
+          <span id="staged-count-pill" class="pill pill-warning">0 Pending</span>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th>Cell Name</th>
+              <th>Version / Git</th>
+              <th>SHA-256 Checksum</th>
+              <th>Mount Path</th>
+              <th>Status</th>
+              <th>Installed At</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="table-staged-fluxcells">
+            <tr><td colspan="7" style="text-align: center; color: var(--text-muted);">No fluxcells currently staged. New artifacts will appear here before serving live traffic.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Active Fluxcells Registry -->
+      <div style="margin-top: 14px;">
+        <div style="font-size: 14px; font-weight: 600; margin-bottom: 8px; color: var(--text-bright);">
+          Active Fluxcells Registry
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th>Cell Name</th>
+              <th>Version / Git</th>
+              <th>SHA-256 Checksum</th>
+              <th>Mount Path</th>
+              <th>Declared Routes</th>
+              <th>Event Subscriptions</th>
+              <th>Status</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="table-active-fluxcells">
+            <tr><td colspan="8" style="text-align: center; color: var(--text-muted);">Loading active fluxcells from Spectral Flux...</td></tr>
+          </tbody>
+        </table>
+      </div>
     </div>
   </div>
 
@@ -712,7 +781,7 @@
 
       const tbody = document.getElementById('table-routes');
       if (!data.routes || data.routes.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: var(--text-muted);">No custom mutation routes configured. All traffic falls through to default upstream.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="7" style="text-align: center; color: var(--text-muted);">No custom mutation routes configured. All traffic falls through to default upstream.</td></tr>';
         return;
       }
 
@@ -721,11 +790,169 @@
           <td><code>${r.name}</code></td>
           <td><strong>${r.operation}</strong></td>
           <td><span class="pill ${r.mode === 'Async' || r.mode === 'B' ? 'pill-mode-b' : 'pill-strangled'}">${r.mode}</span></td>
+          <td>${r.enabled !== false ? '<span class="pill pill-success">Active</span>' : '<span class="pill pill-danger">Disabled</span>'}</td>
           <td><span class="pill pill-upstream">${r.upstream}</span></td>
           <td><code>${r.upstream_addr}</code></td>
           <td><code>${r.receipt_status}</code></td>
         </tr>
       `).join('');
+    }
+
+    async function loadFluxcells() {
+      let data = null;
+      try {
+        const res = await fetch('http://localhost:8081/_flux/deployer/status');
+        if (res.ok) data = await res.json();
+      } catch (e) {}
+
+      const extBadge = document.getElementById('badge-external-deploy');
+      const devBadge = document.getElementById('badge-dev-upload');
+      if (data) {
+        extBadge.className = `pill ${data.external_deploy_enabled ? 'pill-success' : 'pill-danger'}`;
+        extBadge.innerText = `External CI/CD: ${data.external_deploy_enabled ? 'ACTIVE' : 'LOCKED'}`;
+        devBadge.className = `pill ${data.dev_upload_enabled ? 'pill-success' : 'pill-danger'}`;
+        devBadge.innerText = `Dev Upload: ${data.dev_upload_enabled ? 'ACTIVE' : 'LOCKED'}`;
+
+        const stagedTable = document.getElementById('table-staged-fluxcells');
+        const activeTable = document.getElementById('table-active-fluxcells');
+        const stagedList = (data.fluxcells || []).filter(c => c.status === 'Staged');
+        const activeList = (data.fluxcells || []).filter(c => c.status === 'Active');
+
+        document.getElementById('staged-count-pill').innerText = `${stagedList.length} Pending`;
+
+        if (stagedList.length === 0) {
+          stagedTable.innerHTML = '<tr><td colspan="7" style="text-align: center; color: var(--text-muted);">No fluxcells currently staged. New artifacts will appear here before serving live traffic.</td></tr>';
+        } else {
+          stagedTable.innerHTML = stagedList.map(c => `
+            <tr>
+              <td><code>${c.name}</code></td>
+              <td>${c.version} ${c.git_hash ? `<span style="color:var(--text-muted)">(${c.git_hash.slice(0, 7)})</span>` : ''}</td>
+              <td><code>${c.sha256.slice(0, 12)}...</code></td>
+              <td><code>${c.mount_path}</code></td>
+              <td><span class="pill pill-warning">STAGED</span></td>
+              <td>${new Date(c.installed_at * 1000).toLocaleTimeString()}</td>
+              <td>
+                <button class="btn btn-sm btn-primary" onclick="activateFluxcell('${c.name}', '${c.sha256}')">🚀 Activate</button>
+                <button class="btn btn-sm" onclick="removeFluxcell('${c.name}')" style="color:var(--danger)">✕ Discard</button>
+              </td>
+            </tr>
+          `).join('');
+        }
+
+        if (activeList.length === 0) {
+          activeTable.innerHTML = '<tr><td colspan="8" style="text-align: center; color: var(--text-muted);">No dynamically deployed fluxcells registered yet.</td></tr>';
+        } else {
+          activeTable.innerHTML = activeList.map(c => `
+            <tr>
+              <td><code>${c.name}</code></td>
+              <td>${c.version} ${c.git_hash ? `<span style="color:var(--text-muted)">(${c.git_hash.slice(0, 7)})</span>` : ''}</td>
+              <td><code>${c.sha256.slice(0, 12)}...</code></td>
+              <td><code>${c.mount_path}</code></td>
+              <td><code>${(c.routes || []).length} routes</code></td>
+              <td><code>${(c.subscriptions || []).length} events</code></td>
+              <td><span class="pill pill-success">ACTIVE</span></td>
+              <td>
+                <button class="btn btn-sm" onclick="removeFluxcell('${c.name}')" style="color:var(--danger)">Unmount</button>
+              </td>
+            </tr>
+          `).join('');
+        }
+      } else {
+        extBadge.className = 'pill pill-monolith';
+        extBadge.innerText = 'Spectral Flux: Standalone';
+        devBadge.className = 'pill pill-monolith';
+        devBadge.innerText = 'Dev Upload: Standalone';
+      }
+    }
+
+    async function triggerEmergencyLockdown() {
+      if (!confirm("EMERGENCY LOCKDOWN: Freeze all incoming Fluxcell deployments immediately? Running production traffic will not be affected.")) return;
+      try {
+        const res = await fetch('http://localhost:8081/admin/api/v1/security/lockdown', { method: 'POST' });
+        if (res.ok) {
+          alert("Lockdown successful! All deployment ingestion is frozen.");
+          loadFluxcells();
+        } else {
+          alert("Lockdown failed with status " + res.status);
+        }
+      } catch (e) {
+        alert("Lockdown request failed: " + e.message);
+      }
+    }
+
+    async function activateFluxcell(name, sha256) {
+      if (!confirm(`Activate fluxcell '${name}' into live production traffic?`)) return;
+      try {
+        const res = await fetch('http://localhost:8081/_flux/deployer/activate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, sha256 }),
+        });
+        if (res.ok) {
+          alert(`Fluxcell '${name}' activated successfully!`);
+          loadFluxcells();
+        } else {
+          const err = await res.json();
+          alert(`Activation failed: ${err.message || res.statusText}`);
+        }
+      } catch (e) {
+        alert("Activation error: " + e.message);
+      }
+    }
+
+    async function removeFluxcell(name) {
+      if (!confirm(`Remove fluxcell '${name}' from chassis?`)) return;
+      try {
+        const res = await fetch(`http://localhost:8081/_flux/deployer/fluxcells/${encodeURIComponent(name)}`, { method: 'DELETE' });
+        if (res.ok) {
+          alert(`Fluxcell '${name}' removed successfully.`);
+          loadFluxcells();
+        } else {
+          alert("Removal failed with status " + res.status);
+        }
+      } catch (e) {
+        alert("Removal error: " + e.message);
+      }
+    }
+
+    function openDevUploadModal() {
+      document.getElementById('dev-upload-modal').style.display = 'flex';
+    }
+
+    function closeDevUploadModal() {
+      document.getElementById('dev-upload-modal').style.display = 'none';
+    }
+
+    async function submitDevUpload() {
+      const name = document.getElementById('upload-cell-name').value.trim();
+      const mount = document.getElementById('upload-cell-mount').value.trim();
+      const fileInput = document.getElementById('upload-cell-file');
+
+      if (!name) { alert("Please provide a Fluxcell Name"); return; }
+      if (!fileInput.files || fileInput.files.length === 0) { alert("Please select a .wasm file"); return; }
+
+      const file = fileInput.files[0];
+      const buffer = await file.arrayBuffer();
+
+      try {
+        const url = `http://localhost:8081/_flux/deployer/upload?name=${encodeURIComponent(name)}&mount=${encodeURIComponent(mount || '/api/' + name)}`;
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/wasm' },
+          body: buffer,
+        });
+
+        if (res.ok) {
+          alert(`Fluxcell '${name}' uploaded and staged successfully!`);
+          closeDevUploadModal();
+          loadFluxcells();
+        } else {
+          const err = await res.json();
+          alert(`Upload failed: ${err.message || res.statusText}`);
+        }
+      } catch (e) {
+        alert("Upload error: " + e.message);
+      }
     }
 
     async function loadSchema() {
@@ -824,7 +1051,7 @@
 
     async function refreshAll() {
       if (!autoRefreshActive) return;
-      await Promise.all([loadStatus(), loadEventSink(), loadTraffic(), loadRoutes(), loadSchema(), loadIdemp()]);
+      await Promise.all([loadStatus(), loadEventSink(), loadTraffic(), loadRoutes(), loadFluxcells(), loadSchema(), loadIdemp()]);
     }
 
     let currentWorkerId = null;
@@ -945,6 +1172,34 @@
       <!-- Logs Container -->
       <div id="modal-worker-body" style="padding: 16px 20px; overflow-y: auto; flex: 1; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; line-height: 1.6; background: #0b1120; color: #cbd5e1; min-height: 280px; max-height: 60vh;">
         <div style="text-align: center; color: var(--text-muted); padding: 40px 0;">Loading logs...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Direct WASM Dev Upload Modal -->
+  <div id="dev-upload-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.75); z-index:9999; justify-content:center; align-items:center; backdrop-filter:blur(3px);">
+    <div style="width: 520px; max-width: 94vw; background: #0f172a; border: 1px solid #334155; border-radius: 10px; box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.7); overflow: hidden;">
+      <div style="padding: 16px 20px; border-bottom: 1px solid #334155; display: flex; justify-content: space-between; align-items: center; background: #1e293b;">
+        <h3 style="margin: 0; font-size: 16px; color: #f8fafc;">Deploy Fluxcell (Dev Upload)</h3>
+        <button class="btn btn-sm" onclick="closeDevUploadModal()" style="background:#334155; color:#cbd5e1; border: 1px solid #475569;">✕</button>
+      </div>
+      <div style="padding: 20px; display: flex; flex-direction: column; gap: 14px; font-size: 13px;">
+        <div>
+          <label style="display:block; margin-bottom:4px; font-weight:600; color:#f8fafc;">Fluxcell Name</label>
+          <input id="upload-cell-name" type="text" placeholder="e.g. invoice-mailer" style="width:100%; padding:8px 10px; background:#1e293b; border:1px solid #334155; border-radius:6px; color:#f8fafc;">
+        </div>
+        <div>
+          <label style="display:block; margin-bottom:4px; font-weight:600; color:#f8fafc;">Mount Path</label>
+          <input id="upload-cell-mount" type="text" placeholder="e.g. /api/invoices" style="width:100%; padding:8px 10px; background:#1e293b; border:1px solid #334155; border-radius:6px; color:#f8fafc;">
+        </div>
+        <div>
+          <label style="display:block; margin-bottom:4px; font-weight:600; color:#f8fafc;">Compiled .wasm Binary File</label>
+          <input id="upload-cell-file" type="file" accept=".wasm" style="width:100%; padding:8px; background:#1e293b; border:1px solid #334155; border-radius:6px; color:#f8fafc;">
+        </div>
+        <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:8px;">
+          <button class="btn" onclick="closeDevUploadModal()" style="background:#334155; color:#cbd5e1;">Cancel</button>
+          <button class="btn btn-primary" onclick="submitDevUpload()">Stage Artifact</button>
+        </div>
       </div>
     </div>
   </div>

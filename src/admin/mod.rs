@@ -287,6 +287,7 @@ impl AdminEngine {
                     upstream: target_name,
                     upstream_addr: target_addr,
                     receipt_status: r.receipt_status.clone(),
+                    enabled: r.enabled,
                 });
             }
             route_entries.sort_by(|a, b| a.name.cmp(&b.name));
@@ -691,6 +692,7 @@ mod tests {
                 upstream: "inventory".to_string(),
                 upstream_addr: "127.0.0.1:5001".to_string(),
                 receipt_status: "ACCEPTED".to_string(),
+                enabled: true,
             }],
         };
         let routes_json = serde_json::to_string(&routes).unwrap();

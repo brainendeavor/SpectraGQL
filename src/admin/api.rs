@@ -35,6 +35,12 @@ pub struct AdminRouteEntry {
     pub upstream: String,
     pub upstream_addr: String,
     pub receipt_status: String,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
