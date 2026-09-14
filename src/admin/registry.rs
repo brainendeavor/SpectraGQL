@@ -19,6 +19,8 @@ pub struct WorkerLogEntry {
 pub struct WorkerTelemetryReport {
     pub worker_id: String,
     #[serde(default)]
+    pub app_id: Option<String>,
+    #[serde(default)]
     pub sink: Option<String>,
     #[serde(default)]
     pub stream: Option<String>,
@@ -41,6 +43,8 @@ pub struct WorkerTelemetryReport {
 #[serde(rename_all = "camelCase")]
 pub struct WorkerLogsResponse {
     pub worker_id: String,
+    #[serde(default)]
+    pub app_id: Option<String>,
     pub status: String,
     pub uptime_seconds: u64,
     pub processed_events: u64,
@@ -54,6 +58,8 @@ pub struct WorkerLogsResponse {
 #[serde(rename_all = "camelCase")]
 pub struct WorkerSummary {
     pub worker_id: String,
+    #[serde(default)]
+    pub app_id: Option<String>,
     pub sink: String,
     pub stream: String,
     pub status: String,
@@ -65,6 +71,7 @@ pub struct WorkerSummary {
 
 struct WorkerState {
     worker_id: String,
+    app_id: Option<String>,
     sink: String,
     stream: String,
     status: String,
@@ -109,6 +116,7 @@ impl WorkerRegistry {
 
         let entry = map.entry(report.worker_id.clone()).or_insert_with(|| WorkerState {
             worker_id: report.worker_id.clone(),
+            app_id: report.app_id.clone(),
             sink: report.sink.clone().unwrap_or_else(|| "unknown".to_string()),
             stream: report.stream.clone().unwrap_or_else(|| "default".to_string()),
             status: "online".to_string(),
@@ -120,6 +128,9 @@ impl WorkerRegistry {
             logs: VecDeque::with_capacity(self.max_logs_per_worker),
         });
 
+        if let Some(a) = report.app_id {
+            entry.app_id = Some(a);
+        }
         if let Some(s) = report.sink {
             entry.sink = s;
         }
@@ -175,6 +186,7 @@ impl WorkerRegistry {
 
         Some(WorkerLogsResponse {
             worker_id: state.worker_id.clone(),
+            app_id: state.app_id.clone(),
             status,
             uptime_seconds: state.uptime_seconds,
             processed_events: state.processed_events,
@@ -186,6 +198,11 @@ impl WorkerRegistry {
 
     /// Returns summaries of all known workers, marking stale ones as offline.
     pub fn get_active_workers(&self) -> Vec<WorkerSummary> {
+        self.get_active_workers_with_filter(None)
+    }
+
+    /// Returns summaries of all known workers with optional app_id filtering.
+    pub fn get_active_workers_with_filter(&self, app_filter: Option<&str>) -> Vec<WorkerSummary> {
         let map = match self.workers.read() {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
@@ -193,6 +210,18 @@ impl WorkerRegistry {
 
         let mut summaries = Vec::with_capacity(map.len());
         for state in map.values() {
+            if let Some(app) = app_filter {
+                if !app.is_empty() && app != "all" {
+                    if let Some(ref w_app) = state.app_id {
+                        if !w_app.eq_ignore_ascii_case(app) {
+                            continue;
+                        }
+                    } else if !state.worker_id.to_lowercase().contains(&app.to_lowercase()) {
+                        continue;
+                    }
+                }
+            }
+
             let elapsed = state.last_heartbeat.elapsed();
             let is_alive = elapsed <= self.liveness_timeout;
             let status = if is_alive {
@@ -203,6 +232,7 @@ impl WorkerRegistry {
 
             summaries.push(WorkerSummary {
                 worker_id: state.worker_id.clone(),
+                app_id: state.app_id.clone(),
                 sink: state.sink.clone(),
                 stream: state.stream.clone(),
                 status,
@@ -212,7 +242,6 @@ impl WorkerRegistry {
                 last_seen_secs_ago: elapsed.as_secs(),
             });
         }
-
         summaries.sort_by(|a, b| a.worker_id.cmp(&b.worker_id));
         summaries
     }
@@ -235,6 +264,7 @@ mod tests {
 
         let report = WorkerTelemetryReport {
             worker_id: "test-worker-1".to_string(),
+            app_id: Some("coeval".to_string()),
             sink: Some("nats".to_string()),
             stream: Some("SPECTRA".to_string()),
             status: Some("healthy".to_string()),
@@ -262,6 +292,7 @@ mod tests {
 
         let data = registry.get_worker_logs("test-worker-1", 10).expect("Worker should be found");
         assert_eq!(data.worker_id, "test-worker-1");
+        assert_eq!(data.app_id.as_deref(), Some("coeval"));
         assert_eq!(data.status, "healthy");
         assert_eq!(data.uptime_seconds, 42);
         assert_eq!(data.processed_events, 100);
@@ -286,6 +317,7 @@ mod tests {
 
         registry.record_report(WorkerTelemetryReport {
             worker_id: "bounded-worker".to_string(),
+            app_id: None,
             sink: None,
             stream: None,
             status: None,
@@ -307,6 +339,7 @@ mod tests {
 
         registry.record_report(WorkerTelemetryReport {
             worker_id: "expiring-worker".to_string(),
+            app_id: None,
             sink: Some("kafka".to_string()),
             stream: Some("events".to_string()),
             status: Some("active".to_string()),
@@ -327,5 +360,54 @@ mod tests {
 
         let summaries = registry.get_active_workers();
         assert_eq!(summaries[0].status, "offline");
+    }
+
+    #[test]
+    fn test_worker_registry_app_filtering() {
+        let registry = WorkerRegistry::new(10, Duration::from_secs(5));
+
+        registry.record_report(WorkerTelemetryReport {
+            worker_id: "w-coeval".to_string(),
+            app_id: Some("coeval".to_string()),
+            sink: Some("nats".to_string()),
+            stream: Some("SPECTRA".to_string()),
+            status: Some("active".to_string()),
+            uptime_seconds: Some(10),
+            processed_events: Some(5),
+            total_errors: None,
+            last_event_hlc: None,
+            logs: None,
+        });
+
+        registry.record_report(WorkerTelemetryReport {
+            worker_id: "w-humanbase".to_string(),
+            app_id: Some("humanbase".to_string()),
+            sink: Some("nats".to_string()),
+            stream: Some("SPECTRA".to_string()),
+            status: Some("active".to_string()),
+            uptime_seconds: Some(10),
+            processed_events: Some(5),
+            total_errors: None,
+            last_event_hlc: None,
+            logs: None,
+        });
+
+        // Query all
+        let all = registry.get_active_workers_with_filter(None);
+        assert_eq!(all.len(), 2);
+
+        // Query coeval
+        let coeval = registry.get_active_workers_with_filter(Some("coeval"));
+        assert_eq!(coeval.len(), 1);
+        assert_eq!(coeval[0].worker_id, "w-coeval");
+
+        // Query humanbase
+        let hb = registry.get_active_workers_with_filter(Some("humanbase"));
+        assert_eq!(hb.len(), 1);
+        assert_eq!(hb[0].worker_id, "w-humanbase");
+
+        // Query nonexistent
+        let none = registry.get_active_workers_with_filter(Some("unknown"));
+        assert_eq!(none.len(), 0);
     }
 }

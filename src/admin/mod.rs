@@ -132,6 +132,7 @@ pub struct AdminEngine {
     pub traffic_recorder: Arc<TrafficRecorder>,
     pub eventsink_inspector: EventSinkInspector,
     pub worker_registry: Arc<WorkerRegistry>,
+    pub apps: Vec<crate::admin::api::SpectraAppSummary>,
 }
 
 impl AdminEngine {
@@ -149,6 +150,16 @@ impl AdminEngine {
         let broker_method = spectra_cfg.gql_dispatch().method.clone();
         let broker_addr = spectra_cfg.gql_dispatch().addr.clone();
         let eventsink_inspector = EventSinkInspector::new(&broker_method, &broker_addr);
+        let apps = spectra_cfg
+            .apps
+            .iter()
+            .map(|a| crate::admin::api::SpectraAppSummary {
+                id: a.id.clone(),
+                name: if a.name.is_empty() { a.id.clone() } else { a.name.clone() },
+                domains: a.domains.clone(),
+                upstream: a.upstream.clone(),
+            })
+            .collect();
 
         AdminEngine {
             config,
@@ -166,6 +177,7 @@ impl AdminEngine {
             traffic_recorder,
             eventsink_inspector,
             worker_registry,
+            apps,
         }
     }
 
@@ -252,6 +264,7 @@ impl AdminEngine {
                 broker_method: self.broker_method.clone(),
                 broker_addr: self.broker_addr.clone(),
                 broker_status: "online".to_string(),
+                apps: self.apps.clone(),
             };
             return self.respond_json(session, 200, &status_resp).await;
         }
@@ -397,7 +410,21 @@ impl AdminEngine {
 
         // REST API: GET /admin/api/v1/traffic
         if path == "/admin/api/v1/traffic" || path == "/admin/api/traffic" {
-            let traffic_resp = self.traffic_recorder.get_response(50);
+            let app_param = session
+                .req_header()
+                .uri
+                .query()
+                .and_then(|q| {
+                    q.split('&').find_map(|pair| {
+                        let mut parts = pair.split('=');
+                        if parts.next()? == "app" {
+                            parts.next()
+                        } else {
+                            None
+                        }
+                    })
+                });
+            let traffic_resp = self.traffic_recorder.get_response_with_filter(50, app_param);
             return self.respond_json(session, 200, &traffic_resp).await;
         }
 
@@ -446,7 +473,21 @@ impl AdminEngine {
 
         // REST API: GET /admin/api/v1/workers (List registered consumer workers)
         if path == "/admin/api/v1/workers" || path == "/admin/api/workers" {
-            let workers = self.worker_registry.get_active_workers();
+            let app_param = session
+                .req_header()
+                .uri
+                .query()
+                .and_then(|q| {
+                    q.split('&').find_map(|pair| {
+                        let mut parts = pair.split('=');
+                        if parts.next()? == "app" {
+                            parts.next()
+                        } else {
+                            None
+                        }
+                    })
+                });
+            let workers = self.worker_registry.get_active_workers_with_filter(app_param);
             return self.respond_json(session, 200, &workers).await;
         }
 
@@ -629,6 +670,7 @@ mod tests {
             broker_method: "NATS".to_string(),
             broker_addr: "127.0.0.1:4222".to_string(),
             broker_status: "online".to_string(),
+            apps: vec![],
         };
         let status_json = serde_json::to_string(&status).unwrap();
         assert!(status_json.contains("\"version\":\"0.1.0\""));

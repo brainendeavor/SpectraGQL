@@ -3,6 +3,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+fn default_app_id() -> String {
+    "default".to_string()
+}
+
 /// Detailed record of a GraphQL or HTTP transaction processed through SpectraGQL.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -14,6 +18,8 @@ pub struct TrafficRecord {
     pub client_ip: String,
     pub method: String,
     pub path: String,
+    #[serde(default = "default_app_id")]
+    pub app_id: String,
     pub operation_name: Option<String>,
     pub operation_type: String,
     pub mode: String,
@@ -104,24 +110,68 @@ impl TrafficRecorder {
 
     /// Fetches the recent traffic slice and current statistics.
     pub fn get_response(&self, limit: usize) -> TrafficResponse {
-        let records = if let Ok(lock) = self.records.read() {
-            let n = if limit == 0 { lock.len() } else { limit.min(lock.len()) };
-            lock.iter().take(n).cloned().collect()
+        self.get_response_with_filter(limit, None)
+    }
+
+    /// Fetches the recent traffic slice with optional app_id filtering and current statistics.
+    pub fn get_response_with_filter(&self, limit: usize, app_filter: Option<&str>) -> TrafficResponse {
+        let records: Vec<TrafficRecord> = if let Ok(lock) = self.records.read() {
+            let filtered = lock.iter().filter(|r| {
+                if let Some(app) = app_filter {
+                    if !app.is_empty() && app != "all" {
+                        return r.app_id.eq_ignore_ascii_case(app);
+                    }
+                }
+                true
+            });
+            let n = if limit == 0 { lock.len() } else { limit };
+            filtered.take(n).cloned().collect()
         } else {
             Vec::new()
         };
 
-        let total = self.total_requests.load(Ordering::Relaxed);
-        let mode_b = self.mode_b_requests.load(Ordering::Relaxed);
-        let mode_a = self.mode_a_requests.load(Ordering::Relaxed);
-        let errors = self.error_requests.load(Ordering::Relaxed);
-        let count = self.recorded_count.load(Ordering::Relaxed);
-
-        let avg_latency = if count > 0 {
-            let total_us = self.total_latency_us.load(Ordering::Relaxed);
-            (total_us as f64 / 1000.0) / (count as f64)
+        // If app_filter is specified, compute stats scoped to that app from the buffer
+        let (total, mode_b, mode_a, errors, avg_latency) = if let Some(app) = app_filter {
+            if !app.is_empty() && app != "all" {
+                let app_records: Vec<&TrafficRecord> = records.iter().filter(|r| r.app_id.eq_ignore_ascii_case(app)).collect();
+                let tot = app_records.len() as u64;
+                let mb = app_records.iter().filter(|r| r.mode.contains("Async") || r.mode.contains("Mode B")).count() as u64;
+                let ma = app_records.iter().filter(|r| r.mode.contains("Sync") || r.mode.contains("Mode A")).count() as u64;
+                let errs = app_records.iter().filter(|r| r.status_code >= 400 || r.receipt_status.as_deref() == Some("DISPATCH_FAILED")).count() as u64;
+                let lat = if tot > 0 {
+                    let sum: f64 = app_records.iter().map(|r| r.latency_ms).sum();
+                    sum / tot as f64
+                } else {
+                    0.0
+                };
+                (tot, mb, ma, errs, lat)
+            } else {
+                let total = self.total_requests.load(Ordering::Relaxed);
+                let mode_b = self.mode_b_requests.load(Ordering::Relaxed);
+                let mode_a = self.mode_a_requests.load(Ordering::Relaxed);
+                let errors = self.error_requests.load(Ordering::Relaxed);
+                let count = self.recorded_count.load(Ordering::Relaxed);
+                let avg_latency = if count > 0 {
+                    let total_us = self.total_latency_us.load(Ordering::Relaxed);
+                    (total_us as f64 / 1000.0) / (count as f64)
+                } else {
+                    0.0
+                };
+                (total, mode_b, mode_a, errors, avg_latency)
+            }
         } else {
-            0.0
+            let total = self.total_requests.load(Ordering::Relaxed);
+            let mode_b = self.mode_b_requests.load(Ordering::Relaxed);
+            let mode_a = self.mode_a_requests.load(Ordering::Relaxed);
+            let errors = self.error_requests.load(Ordering::Relaxed);
+            let count = self.recorded_count.load(Ordering::Relaxed);
+            let avg_latency = if count > 0 {
+                let total_us = self.total_latency_us.load(Ordering::Relaxed);
+                (total_us as f64 / 1000.0) / (count as f64)
+            } else {
+                0.0
+            };
+            (total, mode_b, mode_a, errors, avg_latency)
         };
 
         TrafficResponse {

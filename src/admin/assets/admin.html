@@ -79,6 +79,11 @@
     .pill-warning { background: rgba(210, 153, 34, 0.2); color: var(--warning); border: 1px solid rgba(210, 153, 34, 0.3); }
     .pill-danger { background: rgba(248, 81, 73, 0.2); color: var(--danger); border: 1px solid rgba(248, 81, 73, 0.3); }
     .pill-replay { background: rgba(57, 197, 207, 0.2); color: var(--accent-cyan); border: 1px solid rgba(57, 197, 207, 0.3); }
+    .pill-app-coeval { background: rgba(236, 72, 153, 0.2); color: #f472b6; border: 1px solid rgba(236, 72, 153, 0.35); }
+    .pill-app-humanbase { background: rgba(99, 102, 241, 0.2); color: #818cf8; border: 1px solid rgba(99, 102, 241, 0.35); }
+    .pill-app-default { background: rgba(100, 116, 139, 0.2); color: #94a3b8; border: 1px solid rgba(100, 116, 139, 0.35); }
+    .app-select-dropdown { background: #21262d; border: 1px solid var(--border); color: var(--text-bright); padding: 5px 12px; border-radius: 6px; font-size: 13px; cursor: pointer; outline: none; font-weight: 600; }
+    .app-select-dropdown:focus { border-color: var(--primary); }
 
     /* Buttons & Controls */
     .btn { background: #21262d; border: 1px solid var(--border); color: var(--text-bright); padding: 6px 12px; border-radius: 6px; font-size: 12px; cursor: pointer; transition: 0.2s; }
@@ -100,6 +105,12 @@
         <h1>Appliance Gateway Admin</h1>
       </div>
       <div style="display: flex; align-items: center; gap: 14px;">
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <label for="app-select" style="font-size: 13px; color: var(--text-muted); font-weight: 500;">Application:</label>
+          <select id="app-select" class="app-select-dropdown" onchange="onAppFilterChange(this.value)">
+            <option value="all">🏢 All Applications</option>
+          </select>
+        </div>
         <span id="uptime-display" style="font-size: 13px; color: var(--text-muted);">Uptime: --</span>
         <div class="status-badge status-live">
           <span class="status-dot"></span>
@@ -186,6 +197,7 @@
           <thead>
             <tr>
               <th>Consumer Name</th>
+              <th>App</th>
               <th>Filter Subject</th>
               <th>Lag (Pending)</th>
               <th>Unacknowledged</th>
@@ -196,7 +208,7 @@
             </tr>
           </thead>
           <tbody id="table-consumers">
-            <tr><td colspan="8" style="text-align: center; color: var(--text-muted);">Querying NATS JetStream consumers...</td></tr>
+            <tr><td colspan="9" style="text-align: center; color: var(--text-muted);">Querying NATS JetStream consumers...</td></tr>
           </tbody>
         </table>
       </div>
@@ -237,6 +249,7 @@
         <thead>
           <tr>
             <th>Time (UTC)</th>
+            <th>App</th>
             <th>Method</th>
             <th>Operation Name</th>
             <th>Type</th>
@@ -247,7 +260,7 @@
           </tr>
         </thead>
         <tbody id="table-traffic">
-          <tr><td colspan="8" style="text-align: center; color: var(--text-muted);">Listening for GraphQL traffic on port 8000...</td></tr>
+          <tr><td colspan="9" style="text-align: center; color: var(--text-muted);">Listening for GraphQL traffic on port 8000...</td></tr>
         </tbody>
       </table>
     </div>
@@ -324,9 +337,28 @@
   <script>
     let rawTrafficRecords = [];
     let currentFilter = 'all';
+    let selectedAppFilter = 'all';
+    let knownApps = [];
     let expandedRowId = null;
     let autoRefreshActive = true;
     let refreshTimer = null;
+
+    function getAppBadge(appId) {
+      if (!appId || appId === 'default') {
+        return '<span class="pill pill-app-default">default</span>';
+      }
+      const lower = appId.toLowerCase();
+      let pillClass = 'pill-app-default';
+      if (lower.includes('coeval')) pillClass = 'pill-app-coeval';
+      else if (lower.includes('humanbase')) pillClass = 'pill-app-humanbase';
+      return `<span class="pill ${pillClass}">🏢 ${escapeHtml(appId)}</span>`;
+    }
+
+    function onAppFilterChange(val) {
+      selectedAppFilter = val;
+      loadTraffic();
+      loadEventSink();
+    }
 
     async function fetchJSON(url, options = {}) {
       try {
@@ -355,6 +387,26 @@
         document.getElementById('kpi-broker-method').innerText = status.broker_method;
         document.getElementById('kpi-broker-addr').innerText = 'Target: ' + status.broker_addr;
         document.getElementById('gateway-status').innerText = status.broker_status.toUpperCase();
+
+        if (status.apps && Array.isArray(status.apps)) {
+          const appSelect = document.getElementById('app-select');
+          if (appSelect) {
+            const currentVal = appSelect.value;
+            const appsJson = JSON.stringify(status.apps);
+            if (appsJson !== JSON.stringify(knownApps)) {
+              knownApps = status.apps;
+              let optionsHtml = '<option value="all">🏢 All Applications</option>';
+              for (const app of status.apps) {
+                const label = app.name ? `${app.name} (${app.id})` : app.id;
+                optionsHtml += `<option value="${escapeHtml(app.id)}">${escapeHtml(label)}</option>`;
+              }
+              appSelect.innerHTML = optionsHtml;
+              if (status.apps.some(a => a.id === currentVal) || currentVal === 'all') {
+                appSelect.value = currentVal;
+              }
+            }
+          }
+        }
       }
     }
 
@@ -398,16 +450,51 @@
       // Consumers Table
       const tbody = document.getElementById('table-consumers');
       if (!data.consumers || data.consumers.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="8" style="text-align: center; color: var(--text-muted);">No durable consumers bound to this stream.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="9" style="text-align: center; color: var(--text-muted);">No durable consumers bound to this stream.</td></tr>';
         document.getElementById('kpi-stream-lag').innerText = '0 active consumers';
+        return;
+      }
+
+      // Query registered workers to correlate worker ID to app_id
+      const registeredWorkers = (await fetchJSON('/admin/api/v1/workers')) || [];
+      const workerAppMap = {};
+      for (const w of registeredWorkers) {
+        if (w.workerId && w.appId) {
+          workerAppMap[w.workerId] = w.appId;
+        }
+      }
+
+      let consumers = data.consumers;
+      if (selectedAppFilter !== 'all') {
+        consumers = consumers.filter(c => {
+          const registeredApp = workerAppMap[c.name];
+          if (registeredApp) return registeredApp === selectedAppFilter;
+          if (c.filterSubject && (c.filterSubject.includes(`.${selectedAppFilter}.`) || c.filterSubject.endsWith(`.${selectedAppFilter}`))) return true;
+          if (c.name.toLowerCase().includes(selectedAppFilter.toLowerCase())) return true;
+          return c.filterSubject === 'mutation.*' || c.filterSubject === 'mutation.>' || c.filterSubject === '*';
+        });
+      }
+
+      if (consumers.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="9" style="text-align: center; color: var(--text-muted);">No durable consumers found matching application '${escapeHtml(selectedAppFilter)}'.</td></tr>`;
         return;
       }
 
       let totalLag = 0;
       let totalUnacked = 0;
-      tbody.innerHTML = data.consumers.map(c => {
+      tbody.innerHTML = consumers.map(c => {
         totalLag += c.numPending;
         totalUnacked += c.numAckPending;
+
+        let detectedApp = workerAppMap[c.name];
+        if (!detectedApp && c.filterSubject) {
+          const parts = c.filterSubject.split('.');
+          if (parts.length >= 2 && parts[0] === 'mutation' && parts[1] !== '*' && parts[1] !== '>') {
+            detectedApp = parts[1];
+          }
+        }
+        if (!detectedApp && c.name.toLowerCase().includes('coeval')) detectedApp = 'coeval';
+        if (!detectedApp && c.name.toLowerCase().includes('humanbase')) detectedApp = 'humanbase';
 
         const lagPill = c.numPending === 0
           ? '<span class="pill pill-success">0 lag (Up to date)</span>'
@@ -424,6 +511,7 @@
         return `
           <tr>
             <td><strong><code>${c.name}</code></strong></td>
+            <td>${getAppBadge(detectedApp)}</td>
             <td><code>${c.filterSubject || '*'}</code></td>
             <td>${lagPill}</td>
             <td>${unackedPill}</td>
@@ -445,7 +533,10 @@
 
     // 2. Load Live Traffic & Activity Inspector
     async function loadTraffic() {
-      const data = await fetchJSON('/admin/api/v1/traffic');
+      const url = selectedAppFilter !== 'all'
+        ? `/admin/api/v1/traffic?app=${encodeURIComponent(selectedAppFilter)}`
+        : '/admin/api/v1/traffic';
+      const data = await fetchJSON(url);
       if (!data) return;
 
       rawTrafficRecords = data.records || [];
@@ -473,6 +564,10 @@
       const tbody = document.getElementById('table-traffic');
       let filtered = rawTrafficRecords;
 
+      if (selectedAppFilter !== 'all') {
+        filtered = filtered.filter(r => (r.appId || r.app_id || 'default') === selectedAppFilter);
+      }
+
       if (currentFilter === 'mutations') {
         filtered = filtered.filter(r => r.operationType === 'Mutation');
       } else if (currentFilter === 'queries') {
@@ -486,7 +581,7 @@
       }
 
       if (filtered.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="8" style="text-align: center; color: var(--text-muted);">No matching transactions recorded.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="9" style="text-align: center; color: var(--text-muted);">No matching transactions recorded.</td></tr>';
         return;
       }
 
@@ -502,10 +597,12 @@
           : `<span class="pill pill-danger">${r.statusCode}</span>`;
 
         const isExpanded = expandedRowId === r.id;
+        const appVal = r.appId || r.app_id || 'default';
 
         html += `
           <tr class="traffic-row" onclick="toggleRowDetails('${r.id}')">
             <td><code style="color: var(--text-muted);">${r.timestampFormatted}</code></td>
+            <td>${getAppBadge(appVal)}</td>
             <td><strong>${r.method}</strong></td>
             <td><strong>${r.operationName || '<em>anonymous</em>'}</strong></td>
             <td><span class="pill pill-monolith">${r.operationType}</span></td>
@@ -526,8 +623,9 @@
         if (isExpanded) {
           html += `
             <tr class="drawer-row">
-              <td colspan="8">
-                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin-bottom: 12px;">
+              <td colspan="9">
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-bottom: 12px;">
+                  <div><span class="meta-key">Application:</span><br><span class="meta-val">${escapeHtml(appVal)}</span></div>
                   <div><span class="meta-key">Command ID (UUIDv7):</span><br><span class="meta-val">${r.id}</span></div>
                   <div><span class="meta-key">HLC Timestamp:</span><br><span class="meta-val">${r.hlc}</span></div>
                   <div><span class="meta-key">Client IP:</span><br><span class="meta-val">${r.clientIp}</span></div>

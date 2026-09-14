@@ -1,6 +1,14 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SpectraAppSummary {
+    pub id: String,
+    pub name: String,
+    pub domains: Vec<String>,
+    pub upstream: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AdminStatusResponse {
     pub version: String,
     pub uptime_seconds: u64,
@@ -15,6 +23,8 @@ pub struct AdminStatusResponse {
     pub broker_method: String,
     pub broker_addr: String,
     pub broker_status: String,
+    #[serde(default)]
+    pub apps: Vec<SpectraAppSummary>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
