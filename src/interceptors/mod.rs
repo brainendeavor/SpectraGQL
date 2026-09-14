@@ -17,8 +17,8 @@ pub use evaluators::{
     WasmPluginConfig, WasmRequestInterceptor, WasmResponseInterceptor,
 };
 pub use request::{
-    GraphQLSyntaxInterceptor, HeaderValidationInterceptor, RequestInterceptor,
-    RequestInterceptorPipeline,
+    DeployAuthInterceptor, GraphQLSyntaxInterceptor, HeaderValidationInterceptor,
+    RequestInterceptor, RequestInterceptorPipeline,
 };
 pub use response::{
     ResponseInterceptor, ResponseInterceptorPipeline, SensitiveDataResponseInterceptor,

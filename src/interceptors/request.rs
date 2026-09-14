@@ -127,6 +127,92 @@ impl RequestInterceptor for HeaderValidationInterceptor {
     }
 }
 
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut result = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        result |= x ^ y;
+    }
+    result == 0
+}
+
+/// Enforces authentication and token verification on deployment mutation operations.
+#[derive(Debug, Clone)]
+pub struct DeployAuthInterceptor {
+    pub deploy_token: Option<String>,
+}
+
+impl DeployAuthInterceptor {
+    pub fn new(deploy_token: Option<String>) -> Self {
+        let deploy_token = deploy_token
+            .or_else(|| std::env::var("SPECTRA_DEPLOY_TOKEN").ok())
+            .or_else(|| std::env::var("SPECTRAGQL_DEPLOY_TOKEN").ok());
+        Self { deploy_token }
+    }
+}
+
+impl Default for DeployAuthInterceptor {
+    fn default() -> Self {
+        Self::new(None)
+    }
+}
+
+impl RequestInterceptor for DeployAuthInterceptor {
+    fn intercept_request(
+        &self,
+        ctx: &mut InterceptorContext,
+        parts: &mut http::request::Parts,
+        _body: &str,
+    ) -> InterceptorVerdict {
+        let op_name = ctx.operation_name.as_deref().unwrap_or("").to_ascii_lowercase();
+        let is_deploy_op = op_name.contains("deployfluxcell")
+            || op_name.contains("activatefluxcell")
+            || op_name.contains("removefluxcell");
+
+        if !is_deploy_op {
+            return InterceptorVerdict::Pass;
+        }
+
+        let expected = match &self.deploy_token {
+            Some(token) if !token.trim().is_empty() => token,
+            _ => {
+                return InterceptorVerdict::Reject(InterceptorRejection::new(
+                    http::StatusCode::UNAUTHORIZED,
+                    "DEPLOY_UNAUTHORIZED",
+                    "Deployment authorization token is not configured on the gateway (set SPECTRA_DEPLOY_TOKEN or deploy_token in spectra.toml)",
+                ));
+            }
+        };
+
+        let auth_header = parts
+            .headers
+            .get(http::header::AUTHORIZATION)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|h| h.strip_prefix("Bearer ").or_else(|| h.strip_prefix("bearer ")))
+            .or_else(|| {
+                parts
+                    .headers
+                    .get("x-spectra-deploy-key")
+                    .and_then(|v| v.to_str().ok())
+            });
+
+        match auth_header {
+            Some(provided) if constant_time_eq(provided.trim().as_bytes(), expected.trim().as_bytes()) => {}
+            _ => {
+                return InterceptorVerdict::Reject(InterceptorRejection::new(
+                    http::StatusCode::UNAUTHORIZED,
+                    "DEPLOY_UNAUTHORIZED",
+                    "Invalid or missing deployment authorization token",
+                ));
+            }
+        }
+
+        InterceptorVerdict::Pass
+    }
+}
+
 use std::sync::Arc;
 
 /// Pipeline composing multiple RequestInterceptors sequentially.

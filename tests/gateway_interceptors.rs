@@ -204,7 +204,7 @@ expr = "!body.contains('classified_secret')"
     let health_url = format!("http://127.0.0.1:{}/healthz", gateway_port);
     let mut ready = false;
     let mut last_err = String::new();
-    for _ in 0..50 {
+    for _ in 0..150 {
         tokio::time::sleep(Duration::from_millis(100)).await;
         match client.get(&health_url).send().await {
             Ok(resp) => {

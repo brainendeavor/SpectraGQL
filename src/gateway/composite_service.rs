@@ -848,6 +848,48 @@ impl ProxyHttp for CompositeServiceProxy {
 
                     // Check route overrides using StrategyRouter
                     if let Some(route) = StrategyRouter::match_route(&self.routes, &request_info) {
+                        if !route.enabled {
+                            let latency_ms = ctx.proxy_context.start_time.elapsed().as_secs_f64() * 1000.0;
+                            let client_ip = crate::admin::extract_client_ip(session).to_string();
+                            let op_name = request_info.gql.as_ref().and_then(|g| g.operation_name.clone());
+                            let err_msg = format!("Operation '{}' is disabled by gateway policy", route.operation);
+                            let err_json = serde_json::json!({
+                                "errors": [{
+                                    "message": err_msg,
+                                    "extensions": {
+                                        "code": "ROUTE_DISABLED",
+                                        "operation": route.operation,
+                                    }
+                                }]
+                            });
+                            let mut header = pingora::http::ResponseHeader::build(403, None)?;
+                            let _ = header.insert_header("content-type", "application/json");
+                            let _ = header.insert_header("content-length", err_json.to_string().len().to_string());
+                            session.write_response_header(Box::new(header), false).await?;
+                            session.write_response_body(Some(bytes::Bytes::from(err_json.to_string())), true).await?;
+
+                            self.traffic_recorder.record(crate::admin::TrafficRecord {
+                                id: ctx.proxy_context.request_id.to_string(),
+                                hlc: ctx.proxy_context.hlc.to_compact_string(),
+                                timestamp_epoch_ms: crate::admin::now_epoch_ms(),
+                                timestamp_formatted: crate::admin::format_timestamp(crate::admin::now_epoch_ms()),
+                                client_ip,
+                                method: session.req_header().method.to_string(),
+                                path: session.req_header().uri.path().to_string(),
+                                app_id: ctx.proxy_context.app_id.clone(),
+                                operation_name: op_name,
+                                operation_type: "Mutation".to_string(),
+                                mode: "Rejected (Disabled Route)".to_string(),
+                                status_code: 403,
+                                receipt_status: Some("DISABLED".to_string()),
+                                latency_ms,
+                                target: "Route Policy".to_string(),
+                                query_preview: ctx.proxy_context.query_preview.clone(),
+                                variables_preview: ctx.proxy_context.variables_preview.clone(),
+                            });
+                            return Ok(true);
+                        }
+
                         if route.mode.is_async_edge_command() {
                             let res = StrategyRouter::handle_mode_b_edge(
                                 session,
@@ -1194,6 +1236,7 @@ mod tests {
             SpectraRouteConfig {
                 operation: "adjustInventory".to_string(),
                 mode: ExecutionStrategy::SyncUpstreamExecution,
+                enabled: true,
                 upstream: Some("inventory".to_string()),
                 receipt_status: "ACCEPTED".to_string(),
                 interceptors: vec![],
@@ -1204,6 +1247,7 @@ mod tests {
             SpectraRouteConfig {
                 operation: "updateCustomerAddress".to_string(),
                 mode: ExecutionStrategy::SyncUpstreamExecution,
+                enabled: true,
                 upstream: Some("crm".to_string()),
                 receipt_status: "ACCEPTED".to_string(),
                 interceptors: vec![],
@@ -1214,6 +1258,7 @@ mod tests {
             SpectraRouteConfig {
                 operation: "importCatalog".to_string(),
                 mode: ExecutionStrategy::AsyncCommandReceipt,
+                enabled: true,
                 upstream: None,
                 receipt_status: "ACCEPTED".to_string(),
                 interceptors: vec![],

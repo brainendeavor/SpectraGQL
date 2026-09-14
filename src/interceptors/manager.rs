@@ -11,8 +11,8 @@ use crate::interceptors::evaluators::wasm::{
     WasmRequestInterceptor, WasmResponseInterceptor,
 };
 use crate::interceptors::request::{
-    GraphQLSyntaxInterceptor, HeaderValidationInterceptor, RequestInterceptor,
-    RequestInterceptorPipeline,
+    DeployAuthInterceptor, GraphQLSyntaxInterceptor, HeaderValidationInterceptor,
+    RequestInterceptor, RequestInterceptorPipeline,
 };
 use crate::interceptors::response::{
     ResponseInterceptor, ResponseInterceptorPipeline, SensitiveDataResponseInterceptor,
@@ -189,6 +189,13 @@ impl InterceptorManager {
                         }
                         (InterceptorStage::Request, "header_validation") => {
                             request_interceptors.insert(name.clone(), Arc::new(HeaderValidationInterceptor::default()));
+                        }
+                        (InterceptorStage::Request, "deploy_auth") => {
+                            let token = ic.token.clone()
+                                .or_else(|| config.admin.deploy_token.clone())
+                                .or_else(|| std::env::var("SPECTRA_DEPLOY_TOKEN").ok())
+                                .or_else(|| std::env::var("SPECTRAGQL_DEPLOY_TOKEN").ok());
+                            request_interceptors.insert(name.clone(), Arc::new(DeployAuthInterceptor::new(token)));
                         }
                         (InterceptorStage::Response, "sensitive_data") => {
                             response_interceptors.insert(name.clone(), Arc::new(SensitiveDataResponseInterceptor::new()));

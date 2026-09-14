@@ -57,7 +57,7 @@ async fn start_spectral_flux_server() -> (SocketAddr, Arc<dyn spectral_flux::sto
     router.register_fluxcell_routes("magic_link", "/auth", &magic_routes).unwrap();
     router.register_fluxcell_routes("webhook", "/webhooks", &webhook_routes).unwrap();
 
-    let router_arc = Arc::new(router);
+    let router_arc = Arc::new(std::sync::RwLock::new(router));
     let telemetry_arc = Arc::new(TelemetryClient::new(
         "test-worker-1".to_string(),
         "nats".to_string(),
@@ -81,7 +81,7 @@ async fn start_spectral_flux_server() -> (SocketAddr, Arc<dyn spectral_flux::sto
 
             tokio::spawn(async move {
                 let service = hyper::service::service_fn(move |req| {
-                    handle_request(req, r_clone.clone(), t_clone.clone(), d_clone.clone())
+                    handle_request(req, r_clone.clone(), t_clone.clone(), d_clone.clone(), None)
                 });
 
                 let _ = ServerBuilder::new(hyper_util::rt::TokioExecutor::new())

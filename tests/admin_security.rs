@@ -81,6 +81,7 @@ fn test_schema_inspector_strangler_fig_classification() {
     routes.insert(
         "create_order".to_string(),
         SpectraRouteConfig {
+            enabled: true,
             operation: "createOrder".to_string(),
             mode: OperationMode::B,
             upstream: None,
@@ -91,6 +92,7 @@ fn test_schema_inspector_strangler_fig_classification() {
     routes.insert(
         "update_customer".to_string(),
         SpectraRouteConfig {
+            enabled: true,
             operation: "updateCustomer".to_string(),
             mode: OperationMode::A,
             upstream: Some("crm-service".to_string()),

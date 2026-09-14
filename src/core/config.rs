@@ -48,6 +48,8 @@ pub struct SpectraRouteConfig {
     pub operation: String,
     #[serde(default, alias = "strategy")]
     pub mode: ExecutionStrategy,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
     pub upstream: Option<String>,
     #[serde(default = "default_receipt_status")]
     pub receipt_status: String,
@@ -98,6 +100,7 @@ pub struct InterceptorConfig {
     pub cooloff_duration_secs: Option<u64>,
     // Native configuration
     pub kind: Option<String>,
+    pub token: Option<String>,
 }
 
 fn default_epoch_tick_interval_ms() -> u64 {
@@ -276,6 +279,8 @@ pub struct SpectraAdminConfig {
     pub allowed_ips: Vec<String>,
     #[serde(default = "default_true")]
     pub enable_ui: bool,
+    #[serde(default)]
+    pub deploy_token: Option<String>,
 }
 
 impl Default for SpectraAdminConfig {
@@ -286,6 +291,7 @@ impl Default for SpectraAdminConfig {
             path_prefix: default_admin_path_prefix(),
             allowed_ips: default_allowed_ips(),
             enable_ui: true,
+            deploy_token: None,
         }
     }
 }
