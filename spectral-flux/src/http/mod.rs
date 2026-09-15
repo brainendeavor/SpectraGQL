@@ -9,6 +9,37 @@ pub struct RouteDefinition {
     pub method: String,
     pub relative_path: String,
     pub description: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<u64>,
+}
+
+impl RouteDefinition {
+    pub fn new<S1: Into<String>, S2: Into<String>, S3: Into<String>>(
+        method: S1,
+        relative_path: S2,
+        description: S3,
+    ) -> Self {
+        Self {
+            method: method.into(),
+            relative_path: relative_path.into(),
+            description: description.into(),
+            timeout_ms: None,
+        }
+    }
+
+    pub fn with_timeout<S1: Into<String>, S2: Into<String>, S3: Into<String>>(
+        method: S1,
+        relative_path: S2,
+        description: S3,
+        timeout_ms: u64,
+    ) -> Self {
+        Self {
+            method: method.into(),
+            relative_path: relative_path.into(),
+            description: description.into(),
+            timeout_ms: Some(timeout_ms),
+        }
+    }
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -735,34 +766,14 @@ mod tests {
         let mut router = FluxRouter::new();
 
         let magic_link_routes = vec![
-            RouteDefinition {
-                method: "GET".to_string(),
-                relative_path: "/verify".to_string(),
-                description: "Verify token".to_string(),
-            },
-            RouteDefinition {
-                method: "POST".to_string(),
-                relative_path: "/verify".to_string(),
-                description: "Redeem token".to_string(),
-            },
-            RouteDefinition {
-                method: "GET".to_string(),
-                relative_path: "/status".to_string(),
-                description: "Status".to_string(),
-            },
+            RouteDefinition::new("GET", "/verify", "Verify token"),
+            RouteDefinition::new("POST", "/verify", "Redeem token"),
+            RouteDefinition::new("GET", "/status", "Status"),
         ];
 
         let webhook_routes = vec![
-            RouteDefinition {
-                method: "GET".to_string(),
-                relative_path: "/health".to_string(),
-                description: "Health".to_string(),
-            },
-            RouteDefinition {
-                method: "GET".to_string(),
-                relative_path: "/dlq".to_string(),
-                description: "DLQ status".to_string(),
-            },
+            RouteDefinition::new("GET", "/health", "Health"),
+            RouteDefinition::new("GET", "/dlq", "DLQ status"),
         ];
 
         router.register_fluxcell_routes("magic-link", "/auth", &magic_link_routes).unwrap();
@@ -784,17 +795,8 @@ mod tests {
     fn test_router_collision_detection() {
         let mut router = FluxRouter::new();
 
-        let fluxcell1_routes = vec![RouteDefinition {
-            method: "GET".to_string(),
-            relative_path: "/verify".to_string(),
-            description: "First".to_string(),
-        }];
-
-        let fluxcell2_routes = vec![RouteDefinition {
-            method: "GET".to_string(),
-            relative_path: "/verify".to_string(),
-            description: "Conflicting".to_string(),
-        }];
+        let fluxcell1_routes = vec![RouteDefinition::new("GET", "/verify", "First")];
+        let fluxcell2_routes = vec![RouteDefinition::new("GET", "/verify", "Conflicting")];
 
         // Mount first to /auth
         router.register_fluxcell_routes("auth-v1", "/auth", &fluxcell1_routes).unwrap();
@@ -817,16 +819,8 @@ mod tests {
         let mut router = FluxRouter::new();
 
         let routes = vec![
-            RouteDefinition {
-                method: "GET".to_string(),
-                relative_path: "/verify".to_string(),
-                description: "Check token".to_string(),
-            },
-            RouteDefinition {
-                method: "POST".to_string(),
-                relative_path: "/verify".to_string(),
-                description: "Redeem token".to_string(),
-            },
+            RouteDefinition::new("GET", "/verify", "Check token"),
+            RouteDefinition::new("POST", "/verify", "Redeem token"),
         ];
 
         router.register_fluxcell_routes("auth", "/auth", &routes).unwrap();
@@ -851,11 +845,7 @@ mod tests {
     fn test_router_trailing_slash_normalization() {
         let mut router = FluxRouter::new();
 
-        let routes = vec![RouteDefinition {
-            method: "GET".to_string(),
-            relative_path: "/verify".to_string(),
-            description: "Verify".to_string(),
-        }];
+        let routes = vec![RouteDefinition::new("GET", "/verify", "Verify")];
 
         router.register_fluxcell_routes("auth", "/auth", &routes).unwrap();
 
@@ -870,11 +860,7 @@ mod tests {
     fn test_router_root_mount_path_cleaning() {
         let mut router = FluxRouter::new();
 
-        let routes = vec![RouteDefinition {
-            method: "GET".to_string(),
-            relative_path: "/health".to_string(),
-            description: "Health".to_string(),
-        }];
+        let routes = vec![RouteDefinition::new("GET", "/health", "Health")];
 
         // Mount at root "" or "/"
         router.register_fluxcell_routes("root_cell", "", &routes).unwrap();
@@ -941,11 +927,11 @@ mod tests {
     #[tokio::test]
     async fn test_handle_request_route_dispatch_success_with_custom_headers() {
         let mut router = FluxRouter::new();
-        router.register_fluxcell_routes("auth", "/auth", &[RouteDefinition {
-            method: "POST".to_string(),
-            relative_path: "/login".to_string(),
-            description: "Login redirect".to_string(),
-        }]).unwrap();
+        router.register_fluxcell_routes("auth", "/auth", &[RouteDefinition::new(
+            "POST",
+            "/login",
+            "Login redirect",
+        )]).unwrap();
 
         let router = Arc::new(std::sync::RwLock::new(router));
         let telemetry = Arc::new(crate::telemetry::TelemetryClient::new(
@@ -983,11 +969,11 @@ mod tests {
     #[tokio::test]
     async fn test_handle_request_method_not_allowed_header() {
         let mut router = FluxRouter::new();
-        router.register_fluxcell_routes("auth", "/auth", &[RouteDefinition {
-            method: "GET".to_string(),
-            relative_path: "/verify".to_string(),
-            description: "Verify".to_string(),
-        }]).unwrap();
+        router.register_fluxcell_routes("auth", "/auth", &[RouteDefinition::new(
+            "GET",
+            "/verify",
+            "Verify",
+        )]).unwrap();
 
         let router = Arc::new(std::sync::RwLock::new(router));
         let telemetry = Arc::new(crate::telemetry::TelemetryClient::new(
@@ -1017,11 +1003,11 @@ mod tests {
     #[tokio::test]
     async fn test_handle_request_dispatcher_error_increments_telemetry() {
         let mut router = FluxRouter::new();
-        router.register_fluxcell_routes("flaky", "/flaky", &[RouteDefinition {
-            method: "GET".to_string(),
-            relative_path: "/fail".to_string(),
-            description: "Failing route".to_string(),
-        }]).unwrap();
+        router.register_fluxcell_routes("flaky", "/flaky", &[RouteDefinition::new(
+            "GET",
+            "/fail",
+            "Failing route",
+        )]).unwrap();
 
         let router = Arc::new(std::sync::RwLock::new(router));
         let telemetry = Arc::new(crate::telemetry::TelemetryClient::new(
@@ -1051,11 +1037,11 @@ mod tests {
     #[tokio::test]
     async fn test_http_adversarial_oversized_body() {
         let mut router = FluxRouter::new();
-        router.register_fluxcell_routes("echo", "/echo", &[RouteDefinition {
-            method: "POST".to_string(),
-            relative_path: "/data".to_string(),
-            description: "Echo data".to_string(),
-        }]).unwrap();
+        router.register_fluxcell_routes("echo", "/echo", &[RouteDefinition::new(
+            "POST",
+            "/data",
+            "Echo data",
+        )]).unwrap();
 
         let router = Arc::new(std::sync::RwLock::new(router));
         let telemetry = Arc::new(crate::telemetry::TelemetryClient::new(
@@ -1099,11 +1085,11 @@ mod tests {
     #[tokio::test]
     async fn test_http_adversarial_path_traversal_attempts() {
         let mut router = FluxRouter::new();
-        router.register_fluxcell_routes("auth", "/auth", &[RouteDefinition {
-            method: "GET".to_string(),
-            relative_path: "/verify".to_string(),
-            description: "Verify".to_string(),
-        }]).unwrap();
+        router.register_fluxcell_routes("auth", "/auth", &[RouteDefinition::new(
+            "GET",
+            "/verify",
+            "Verify",
+        )]).unwrap();
 
         let router = Arc::new(std::sync::RwLock::new(router));
         let telemetry = Arc::new(crate::telemetry::TelemetryClient::new(

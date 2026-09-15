@@ -212,28 +212,64 @@ impl FluxcellDeployer {
         }
 
         // 3. Pre-compile with Wasmtime to validate bytecode and extract metadata
-        let timeout = timeout_ms.unwrap_or(25);
-        let max_memory_bytes = max_memory_mb.unwrap_or(16) * 1024 * 1024;
-
-        let wasm_cfg = crate::wasm::FluxcellWasmConfig {
-            timeout_ms: timeout,
-            max_memory_bytes,
-            circuit_breaker: crate::wasm::CircuitBreakerConfig::default(),
-        };
-
-        // Test compilation
+        let initial_cfg = crate::wasm::FluxcellWasmConfig::default();
         let module = wasmtime::Module::new(self.wasm_host.engine(), &bytes)
             .map_err(|e| anyhow!("WASM compilation failed: {:#}", e))?;
 
         // Query guest exports
-        let (subscriptions, routes, version, git_hash, build_time) =
-            self.inspect_guest_metadata(&module, &wasm_cfg)?;
+        let meta = self.inspect_guest_metadata(&module, &initial_cfg)?;
+
+        // 3.5. Explicit Execution Configuration Resolution (Fail-Fast)
+        if timeout_ms.is_none() && meta.profile.is_none() && meta.timeout_ms.is_none() {
+            let err_msg = format!(
+                "Fluxcell '{}' rejected: execution profile must be explicitly configured (e.g. profile = 'standard', 'extended', 'batch') or explicit timeout_ms provided",
+                name
+            );
+            self.registry.record_audit("REJECT", name, sha256, &err_msg);
+            return Err(anyhow!(err_msg));
+        }
+
+        let profile_name = meta.profile.as_deref().unwrap_or("standard");
+        let (prof_timeout, prof_instances, prof_offload, prof_mem) = match profile_name {
+            "extended" => (120_000, 4, crate::config::OffloadStrategy::BlockingPool, 32),
+            "batch" => (300_000, 2, crate::config::OffloadStrategy::DedicatedWorker, 64),
+            "standard" => (10_000, 16, crate::config::OffloadStrategy::BlockingPool, 16),
+            other => {
+                let err_msg = format!("Fluxcell '{}' specifies unknown profile '{}'", name, other);
+                self.registry.record_audit("REJECT", name, sha256, &err_msg);
+                return Err(anyhow!(err_msg));
+            }
+        };
+
+        let timeout = timeout_ms.or(meta.timeout_ms).unwrap_or(prof_timeout);
+        if timeout < crate::config::MIN_TIMEOUT_MS || timeout > crate::config::MAX_TIMEOUT_MS {
+            let err_msg = format!(
+                "Fluxcell '{}' timeout_ms ({}) out of bounds: must be between {}ms and {}ms",
+                name, timeout, crate::config::MIN_TIMEOUT_MS, crate::config::MAX_TIMEOUT_MS
+            );
+            self.registry.record_audit("REJECT", name, sha256, &err_msg);
+            return Err(anyhow!(err_msg));
+        }
+
+        let max_instances = prof_instances;
+        let offload = prof_offload;
+        let final_mem_mb = max_memory_mb.or(meta.max_memory_mb).unwrap_or(prof_mem);
+        let max_memory_bytes = final_mem_mb * 1024 * 1024;
+
+        let wasm_cfg = crate::wasm::FluxcellWasmConfig {
+            profile: profile_name.to_string(),
+            timeout_ms: timeout,
+            max_memory_bytes,
+            max_instances,
+            offload,
+            circuit_breaker: crate::wasm::CircuitBreakerConfig::default(),
+        };
 
         // 4. Check for route collisions in active router
         {
             let router_lock = self.router.read().unwrap();
             let clean_mount = crate::http::clean_path_prefix(mount_path);
-            for r in &routes {
+            for r in &meta.routes {
                 let clean_rel = crate::http::clean_path_suffix(&r.relative_path);
                 let full_path = if clean_mount.is_empty() && clean_rel.is_empty() {
                     "/".to_string()
@@ -270,17 +306,20 @@ impl FluxcellDeployer {
 
         let mut record = FluxcellRecord {
             name: name.to_string(),
-            version: version.unwrap_or_else(|| "0.1.0".to_string()),
-            git_hash,
-            build_time,
+            version: meta.version.unwrap_or_else(|| "0.1.0".to_string()),
+            git_hash: meta.git_hash,
+            build_time: meta.build_time,
             sha256: sha256.to_string(),
             artifact_url,
             mount_path: mount_path.to_string(),
             status: FluxcellStatus::Staged,
-            routes: routes.clone(),
-            subscriptions: subscriptions.clone(),
+            routes: meta.routes.clone(),
+            subscriptions: meta.subscriptions.clone(),
+            profile: profile_name.to_string(),
             timeout_ms: timeout,
             max_memory_bytes,
+            max_instances,
+            offload,
             installed_at: now,
             activated_at: None,
             wasm_file: filename,
@@ -320,8 +359,11 @@ impl FluxcellDeployer {
             .with_context(|| format!("Failed to read WASM artifact '{:?}'", wasm_path))?;
 
         let wasm_cfg = crate::wasm::FluxcellWasmConfig {
+            profile: record.profile.clone(),
             timeout_ms: record.timeout_ms,
             max_memory_bytes: record.max_memory_bytes,
+            max_instances: record.max_instances,
+            offload: record.offload,
             circuit_breaker: crate::wasm::CircuitBreakerConfig::default(),
         };
 
@@ -378,18 +420,15 @@ impl FluxcellDeployer {
         &self,
         module: &wasmtime::Module,
         config: &crate::wasm::FluxcellWasmConfig,
-    ) -> Result<(
-        Vec<String>,
-        Vec<crate::http::RouteDefinition>,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-    )> {
+    ) -> Result<GuestMetadata> {
         let mut subscriptions = Vec::new();
         let mut routes = Vec::new();
         let mut version = None;
         let mut git_hash = None;
         let mut build_time = None;
+        let mut profile = None;
+        let mut timeout_ms = None;
+        let mut max_memory_mb = None;
 
         let limits = wasmtime::StoreLimitsBuilder::new()
             .memory_size(config.max_memory_bytes)
@@ -420,6 +459,8 @@ impl FluxcellDeployer {
                             method: String,
                             path: String,
                             description: String,
+                            #[serde(default)]
+                            timeout_ms: Option<u64>,
                         }
                         if let Ok(r_list) = serde_json::from_str::<Vec<RouteMeta>>(&s) {
                             routes = r_list
@@ -428,8 +469,28 @@ impl FluxcellDeployer {
                                     method: r.method,
                                     relative_path: r.path,
                                     description: r.description,
+                                    timeout_ms: r.timeout_ms,
                                 })
                                 .collect();
+                        }
+                    }
+                }
+            }
+
+            // Query get_config
+            if let Ok(func) = instance.get_typed_func::<(), u64>(&mut store, "get_config") {
+                if let Ok(packed) = func.call(&mut store, ()) {
+                    if let Ok(s) = read_guest_string(&mut store, &instance, packed) {
+                        if let Ok(val) = serde_json::from_str::<serde_json::Value>(&s) {
+                            if let Some(p) = val.get("profile").and_then(|v| v.as_str()) {
+                                profile = Some(p.to_string());
+                            }
+                            if let Some(t) = val.get("timeout_ms").and_then(|v| v.as_u64()) {
+                                timeout_ms = Some(t);
+                            }
+                            if let Some(m) = val.get("max_memory_mb").and_then(|v| v.as_u64()) {
+                                max_memory_mb = Some(m as usize);
+                            }
                         }
                     }
                 }
@@ -443,14 +504,44 @@ impl FluxcellDeployer {
                             version = val.get("version").and_then(|v| v.as_str()).map(|s| s.to_string());
                             git_hash = val.get("git_hash").and_then(|v| v.as_str()).map(|s| s.to_string());
                             build_time = val.get("build_time").and_then(|v| v.as_str()).map(|s| s.to_string());
+                            if profile.is_none() {
+                                profile = val.get("profile").and_then(|v| v.as_str()).map(|s| s.to_string());
+                            }
+                            if timeout_ms.is_none() {
+                                timeout_ms = val.get("timeout_ms").and_then(|v| v.as_u64());
+                            }
+                            if max_memory_mb.is_none() {
+                                max_memory_mb = val.get("max_memory_mb").and_then(|v| v.as_u64()).map(|m| m as usize);
+                            }
                         }
                     }
                 }
             }
         }
 
-        Ok((subscriptions, routes, version, git_hash, build_time))
+        Ok(GuestMetadata {
+            subscriptions,
+            routes,
+            version,
+            git_hash,
+            build_time,
+            profile,
+            timeout_ms,
+            max_memory_mb,
+        })
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct GuestMetadata {
+    pub subscriptions: Vec<String>,
+    pub routes: Vec<crate::http::RouteDefinition>,
+    pub version: Option<String>,
+    pub git_hash: Option<String>,
+    pub build_time: Option<String>,
+    pub profile: Option<String>,
+    pub timeout_ms: Option<u64>,
+    pub max_memory_mb: Option<usize>,
 }
 
 fn read_guest_string(

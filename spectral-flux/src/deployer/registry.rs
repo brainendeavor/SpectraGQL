@@ -24,11 +24,25 @@ pub struct FluxcellRecord {
     pub status: FluxcellStatus,
     pub routes: Vec<crate::http::RouteDefinition>,
     pub subscriptions: Vec<String>,
+    #[serde(default = "default_profile_name")]
+    pub profile: String,
     pub timeout_ms: u64,
     pub max_memory_bytes: usize,
+    #[serde(default = "default_record_instances")]
+    pub max_instances: usize,
+    #[serde(default)]
+    pub offload: crate::config::OffloadStrategy,
     pub installed_at: u64,
     pub activated_at: Option<u64>,
     pub wasm_file: String,
+}
+
+fn default_profile_name() -> String {
+    "standard".to_string()
+}
+
+fn default_record_instances() -> usize {
+    16
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -188,8 +202,11 @@ mod tests {
             status: FluxcellStatus::Staged,
             routes: Vec::new(),
             subscriptions: vec!["order.completed".to_string()],
-            timeout_ms: 25,
+            profile: "standard".to_string(),
+            timeout_ms: 10_000,
             max_memory_bytes: 16 * 1024 * 1024,
+            max_instances: 16,
+            offload: crate::config::OffloadStrategy::BlockingPool,
             installed_at: 1000,
             activated_at: None,
             wasm_file: "cell.wasm".to_string(),

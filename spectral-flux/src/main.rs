@@ -3,6 +3,7 @@ use hyper_util::rt::TokioIo;
 use hyper_util::server::conn::auto::Builder as ServerBuilder;
 use spectral_flux::broker::create_broker;
 use spectral_flux::config::FluxConfig;
+use spectral_flux::db::{DatabaseRegistry, PostgresDb};
 use spectral_flux::deployer::{DeployerGuard, DeployerRegistry, FluxcellDeployer, FluxcellStatus};
 use spectral_flux::http::{handle_request, FluxRouter, RouteDefinition};
 use spectral_flux::storage::create_storage;
@@ -63,10 +64,39 @@ async fn main() -> Result<()> {
         .context("Failed to initialize storage engine")?;
     telemetry.record_log("INFO", &format!("Storage backend '{}' ready", config.storage.backend), None);
 
+    // 3.5. Initialize Database Registry
+    let mut db_registry = DatabaseRegistry::new();
+    for (name, db_cfg) in &config.databases {
+        log::info!("Connecting to database '{}'...", name);
+        match PostgresDb::new(&db_cfg.url, db_cfg.max_connections) {
+            Ok(db) => {
+                let is_default = name == "default";
+                db_registry.register(name, Arc::new(db), is_default);
+                log::info!("Database '{}' registered", name);
+            }
+            Err(e) => {
+                log::warn!("Failed to initialize database '{}': {:#}", name, e);
+            }
+        }
+    }
+    if db_registry.is_empty() {
+        if let Some(db_url) = &config.database.url {
+            match PostgresDb::new(db_url, config.database.max_connections) {
+                Ok(db) => {
+                    db_registry.register("default", Arc::new(db), true);
+                    log::info!("Registered default database from config.database");
+                }
+                Err(e) => {
+                    log::warn!("Failed to initialize default database: {:#}", e);
+                }
+            }
+        }
+    }
+
     // 4. Initialize WASM Host
     log::info!("Initializing Wasmtime Host Engine with epoch interruption...");
     let wasm_host = Arc::new(
-        WasmHost::new(5, Some(storage.clone()))
+        WasmHost::with_db(5, Some(storage.clone()), Some(Arc::new(db_registry)))
             .context("Failed to initialize WASM host engine")?,
     );
 
@@ -84,8 +114,24 @@ async fn main() -> Result<()> {
         if std::path::Path::new(&cell_cfg.wasm_module).exists() {
             let bytes = std::fs::read(&cell_cfg.wasm_module)
                 .with_context(|| format!("Failed to read WASM module '{}'", cell_cfg.wasm_module))?;
+
+            let resolved = config.resolve_cell_execution(name, cell_cfg, None, None, None)?;
+            let wasm_cfg = FluxcellWasmConfig {
+                profile: resolved.profile,
+                timeout_ms: resolved.timeout_ms,
+                max_memory_bytes: resolved.max_memory_bytes,
+                max_instances: resolved.max_instances,
+                offload: resolved.offload,
+                circuit_breaker: CircuitBreakerConfig::default(),
+            };
+
             wasm_host
-                .register_wasm_bytes(name, &bytes, FluxcellWasmConfig::default())
+                .register_wasm_bytes_with_subs(
+                    name,
+                    &bytes,
+                    wasm_cfg,
+                    cell_cfg.subscriptions.clone(),
+                )
                 .with_context(|| format!("Failed to register WASM module '{}'", cell_cfg.wasm_module))?;
 
             if let Some(routes) = wasm_host.get_fluxcell_routes(name) {
@@ -97,38 +143,14 @@ async fn main() -> Result<()> {
             // Built-in fallback routes for out-of-the-box fluxcells
             let routes = match name.as_str() {
                 "magic_link" | "magic-link" => vec![
-                    RouteDefinition {
-                        method: "GET".to_string(),
-                        relative_path: "/verify".to_string(),
-                        description: "Verify magic link token".to_string(),
-                    },
-                    RouteDefinition {
-                        method: "POST".to_string(),
-                        relative_path: "/verify".to_string(),
-                        description: "Redeem magic link token".to_string(),
-                    },
-                    RouteDefinition {
-                        method: "GET".to_string(),
-                        relative_path: "/status".to_string(),
-                        description: "Auth service status".to_string(),
-                    },
+                    RouteDefinition::new("GET", "/verify", "Verify magic link token"),
+                    RouteDefinition::new("POST", "/verify", "Redeem magic link token"),
+                    RouteDefinition::new("GET", "/status", "Auth service status"),
                 ],
                 "webhook" => vec![
-                    RouteDefinition {
-                        method: "GET".to_string(),
-                        relative_path: "/health".to_string(),
-                        description: "Webhook service health".to_string(),
-                    },
-                    RouteDefinition {
-                        method: "GET".to_string(),
-                        relative_path: "/dlq".to_string(),
-                        description: "Dead-letter queue status".to_string(),
-                    },
-                    RouteDefinition {
-                        method: "POST".to_string(),
-                        relative_path: "/test".to_string(),
-                        description: "Test webhook delivery".to_string(),
-                    },
+                    RouteDefinition::new("GET", "/health", "Webhook service health"),
+                    RouteDefinition::new("GET", "/dlq", "Dead-letter queue status"),
+                    RouteDefinition::new("POST", "/test", "Test webhook delivery"),
                 ],
                 _ => Vec::new(),
             };
@@ -169,8 +191,11 @@ async fn main() -> Result<()> {
                     match std::fs::read(&wasm_file) {
                         Ok(bytes) => {
                             let wasm_cfg = FluxcellWasmConfig {
+                                profile: record.profile.clone(),
                                 timeout_ms: record.timeout_ms,
                                 max_memory_bytes: record.max_memory_bytes,
+                                max_instances: record.max_instances,
+                                offload: record.offload,
                                 circuit_breaker: CircuitBreakerConfig::default(),
                             };
                             if let Err(e) = wasm_host.register_wasm_bytes(&record.name, &bytes, wasm_cfg) {
@@ -203,6 +228,7 @@ async fn main() -> Result<()> {
             let tele_clone = telemetry.clone();
             let storage_clone = storage.clone();
             let dep_broker = deployer.clone();
+            let wasm_clone = wasm_host.clone();
             let subjects = vec![
                 "mutation.>".to_string(),
                 "webhook.>".to_string(),
@@ -311,6 +337,54 @@ async fn main() -> Result<()> {
                                     &format!("Minted magic link token for {} in storage (token: {})", email, token),
                                     None,
                                 );
+                            }
+
+                            // Dispatch event to matching WASM fluxcells
+                            let subscribed_cells = wasm_clone.find_subscribed_fluxcells(&msg.topic);
+                            for cell_name in subscribed_cells {
+                                if let Ok(payload_val) = serde_json::from_slice::<serde_json::Value>(&msg.payload) {
+                                    let wasm_exec = wasm_clone.clone();
+                                    let tele_exec = tele_clone.clone();
+                                    let topic = msg.topic.clone();
+                                    let cell = cell_name.clone();
+
+                                    let offload = wasm_exec
+                                        .get_fluxcell_offload_strategy(&cell)
+                                        .unwrap_or_default();
+
+                                    let res = match offload {
+                                        spectral_flux::config::OffloadStrategy::BlockingPool
+                                        | spectral_flux::config::OffloadStrategy::DedicatedWorker => {
+                                            tokio::task::spawn_blocking(move || {
+                                                wasm_exec.invoke_event(&cell, &payload_val)
+                                            })
+                                            .await
+                                            .unwrap_or_else(|e| Err(anyhow::anyhow!("Join error: {}", e)))
+                                        }
+                                        spectral_flux::config::OffloadStrategy::Inline => {
+                                            wasm_exec.invoke_event(&cell, &payload_val)
+                                        }
+                                    };
+
+                                    match res {
+                                        Ok(r) => {
+                                            let status_str = r.get("status").and_then(|s| s.as_str()).unwrap_or("ok");
+                                            tele_exec.record_log(
+                                                "INFO",
+                                                &format!("Fluxcell '{}' processed event topic='{}': status={}", cell_name, topic, status_str),
+                                                None,
+                                            );
+                                        }
+                                        Err(e) => {
+                                            tele_exec.increment_error();
+                                            tele_exec.record_log(
+                                                "ERROR",
+                                                &format!("Fluxcell '{}' failed to process event topic='{}': {}", cell_name, topic, e),
+                                                None,
+                                            );
+                                        }
+                                    }
+                                }
                             }
 
                             let _ = broker.ack(&msg).await;

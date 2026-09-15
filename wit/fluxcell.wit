@@ -13,6 +13,7 @@ interface types {
         method: http-method,
         path: string,          /// Relative path, e.g. "/verify", "/status", "/dlq"
         description: string,
+        timeout-ms: option<u64>,
     }
 
     record http-request {
@@ -60,6 +61,7 @@ world fluxcell-guest {
     /// Guest declarations exported to host
     export get-subscriptions: func() -> list<string>;
     export get-routes: func() -> list<types.http-route>;
+    export get-config: func() -> string;
 
     /// Runtime execution handlers
     export handle-event: func(event: types.event-context) -> types.event-verdict;

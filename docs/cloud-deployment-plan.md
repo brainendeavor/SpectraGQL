@@ -43,10 +43,11 @@ Rather than splitting the frontend onto Cloudflare Workers (which introduces cro
 │   └───────────────────────────────────┬────────────────────────────────────────────┘   │
 │                                       │                                                │
 │   ┌───────────────────────────────────┴────────────────────────────────────────────┐   │
-│   │ CoEval Projection Worker (scripts/projection_worker.ts)                        │   │
-│   │  • Durable consumer: coeval-projection-worker                                  │   │
-│   │  • Processes votes/observations, updates coeval_votes, recalculates scores     │   │
-│   │  • Reports heartbeat & logs to SpectraHub Admin API                            │   │
+│   │ Spectral Flux Chassis / Fluxcell (coeval_vote.wasm)                            │   │
+│   │  • Subscribes to mutation.coeval.recordvote on stream SPECTRA                  │   │
+│   │  • Monotonic HLC causal resolution & poison pill rejection                     │   │
+│   │  • Serves /votes/stats & /votes/user-vote directly with sub-millisecond p99    │   │
+│   │  • (Legacy fallback: scripts/projection_worker.ts)                             │   │
 │   └───────────────────────────────────┬────────────────────────────────────────────┘   │
 └───────────────────────────────────────┼────────────────────────────────────────────────┘
                                         ▼ (TLS Connection Pool)
@@ -111,7 +112,7 @@ Rather than splitting the frontend onto Cloudflare Workers (which introduces cro
 * **Networking:** Private only (no public IP; reachable exclusively via Fly 6PN private network from Container 1).
 * **Processes Supervised:**
   1. `bun src/index.ts` (listening on `0.0.0.0:3000`).
-  2. `bun scripts/projection_worker.ts`.
+  2. `spectral-flux` with `coeval_vote.wasm` mounted (or `bun scripts/projection_worker.ts` legacy worker).
 * **Environment Variables:**
   * `PORT=3000`
   * `DATABASE_URL=postgres://<user>:<password>@<ep-pooler>.neon.tech/coeval?sslmode=require`

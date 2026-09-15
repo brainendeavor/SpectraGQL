@@ -68,16 +68,32 @@ kevy-embedded = { version = "6.3.0", optional = true, default-features = false, 
 fluxcell-magic-link = { path = "fluxcells/magic-link" }
 fluxcell-webhook = { path = "fluxcells/webhook" }
 
+# PostgreSQL Connection Pooling & Host SQL
+deadpool-postgres = { version = "0.14", optional = true }
+tokio-postgres = { version = "0.7", optional = true, features = ["with-serde_json-1", "with-uuid-1", "with-chrono-0_4"] }
+tokio-postgres-rustls = { version = "0.13", optional = true }
+rustls = { version = "0.23", optional = true, default-features = false, features = ["ring", "std"] }
+webpki-roots = { version = "0.26", optional = true }
+
 # Message Broker Drivers (Optional / Feature-Gated)
 async-nats = { version = "0.40.0", optional = true }
 rskafka = { version = "0.6", optional = true }
 
 [features]
-# Default build targets universal deployment with all primary streaming backends
-default = ["all-brokers", "kevy"]
+# Default build targets universal deployment with all primary streaming backends and postgres pooling
+default = ["all-brokers", "postgres"]
 
 # Meta-feature bundling all tier-1 brokers
 all-brokers = ["nats", "redis-streams", "kafka"]
+
+# PostgreSQL Connection Pooling & Host SQL
+postgres = [
+    "dep:deadpool-postgres",
+    "dep:tokio-postgres",
+    "dep:tokio-postgres-rustls",
+    "dep:rustls",
+    "dep:webpki-roots",
+]
 
 # Individual broker drivers
 nats = ["dep:async-nats"]
