@@ -6050,6 +6050,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "apollo-parser",
+ "arc-swap",
  "async-nats",
  "async-trait",
  "bytes",
@@ -6066,6 +6067,7 @@ dependencies = [
  "hyper-util",
  "iggy",
  "lapin",
+ "libc",
  "log",
  "matchit",
  "mlua",

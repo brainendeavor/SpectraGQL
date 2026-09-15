@@ -87,6 +87,13 @@ interceptors = ["deploy_guard"]
 method = "NATS"
 addr = "127.0.0.1:4222"
 name = "default"
+# Adaptive Reconnection Profile: "auto" (default: dev profile if TTY attached, prod profile in daemon/k8s),
+# "production" (aggressive recovery: 10ms initial, 2s max), or "development" (gentle: 250ms initial, 5s max)
+reconnect_profile = "auto"
+# Optional overrides:
+# reconnect_initial_ms = 10
+# reconnect_max_ms = 2000
+
 # Examples for other streaming backends:
 # method = "KAFKA"
 # addr = "127.0.0.1:9092"

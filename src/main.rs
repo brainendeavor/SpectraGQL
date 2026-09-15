@@ -13,6 +13,26 @@ fn main() -> Result<()> {
     let mut server = Server::new(Some(opt))?;
     server.bootstrap();
 
+    // When running in an interactive terminal, register a SIGHUP guard so that closing
+    // the terminal window cleanly shuts down the process instead of leaving an orphaned zombie.
+    #[cfg(unix)]
+    {
+        let is_interactive = unsafe {
+            libc::isatty(libc::STDIN_FILENO) != 0 || libc::isatty(libc::STDOUT_FILENO) != 0
+        };
+        if is_interactive {
+            unsafe {
+                extern "C" fn handle_interactive_sighup(_: libc::c_int) {
+                    unsafe {
+                        libc::_exit(0);
+                    }
+                }
+                libc::signal(libc::SIGHUP, handle_interactive_sighup as *const () as libc::sighandler_t);
+            }
+            log::info!("Interactive terminal detected: SIGHUP exit guard registered");
+        }
+    }
+
     let spectra_configuration = match SpectraConfig::new() {
         Ok(c) => c,
         Err(e) => {

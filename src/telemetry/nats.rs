@@ -1,5 +1,7 @@
 use std::sync::Arc;
-use tokio::sync::OnceCell;
+use std::time::Duration;
+use arc_swap::ArcSwapOption;
+use tokio::sync::Mutex;
 
 use crate::telemetry::DispatchHandler;
 use crate::telemetry::sink::EventSink;
@@ -8,14 +10,26 @@ use crate::protocol::{RequestInfo, ResponseInfo};
 #[derive(Clone)]
 pub struct NatsDispatch {
     addr: String,
-    jetstream: Arc<OnceCell<async_nats::jetstream::Context>>,
+    jetstream: Arc<ArcSwapOption<async_nats::jetstream::Context>>,
+    connect_lock: Arc<Mutex<()>>,
+    initial_reconnect_ms: u64,
+    max_reconnect_ms: u64,
 }
 
 impl NatsDispatch {
     pub fn new(addr: &str) -> Self {
+        let is_tty = crate::core::config::SpectraDispatchConfig::is_interactive();
+        let (initial_ms, max_ms): (u64, u64) = if is_tty { (250, 5000) } else { (10, 2000) };
+        Self::new_with_options(addr, initial_ms, max_ms)
+    }
+
+    pub fn new_with_options(addr: &str, initial_reconnect_ms: u64, max_reconnect_ms: u64) -> Self {
         NatsDispatch {
             addr: addr.to_string(),
-            jetstream: Arc::new(OnceCell::new()),
+            jetstream: Arc::new(ArcSwapOption::empty()),
+            connect_lock: Arc::new(Mutex::new(())),
+            initial_reconnect_ms,
+            max_reconnect_ms,
         }
     }
 
@@ -23,44 +37,92 @@ impl NatsDispatch {
         method.to_ascii_lowercase().contains("nats")
     }
 
-    async fn get_jetstream(&self) -> Result<&async_nats::jetstream::Context, async_nats::Error> {
-        self.jetstream
-            .get_or_try_init(|| async {
-                log::info!("Connecting to NATS at {}...", self.addr);
-                let client = async_nats::connect(&self.addr).await?;
-                log::info!("Connected to NATS at {} successfully", self.addr);
-                Ok(async_nats::jetstream::new(client))
+    /// Atomically retrieves the active JetStream context without locks on the hot path.
+    /// If disconnected or uninitialized, lazily connects under single-flight mutex.
+    async fn get_jetstream(&self) -> Result<Arc<async_nats::jetstream::Context>, async_nats::Error> {
+        if let Some(js) = self.jetstream.load_full() {
+            return Ok(js);
+        }
+
+        let _guard = self.connect_lock.lock().await;
+        if let Some(js) = self.jetstream.load_full() {
+            return Ok(js);
+        }
+
+        log::info!("Connecting to NATS at {}...", self.addr);
+        let initial_ms = self.initial_reconnect_ms;
+        let max_ms = self.max_reconnect_ms;
+
+        let options = async_nats::ConnectOptions::new()
+            .reconnect_delay_callback(move |attempts| {
+                let factor = 1u64.checked_shl(attempts.min(6) as u32).unwrap_or(64);
+                let delay = std::cmp::min(initial_ms.saturating_mul(factor), max_ms);
+                Duration::from_millis(delay)
             })
-            .await
+            .event_callback(|event| async move {
+                match event {
+                    async_nats::Event::Disconnected => {
+                        log::warn!("NATS event: broker disconnected");
+                    }
+                    async_nats::Event::Connected => {
+                        log::info!("NATS event: broker connected");
+                    }
+                    async_nats::Event::SlowConsumer(cid) => {
+                        log::warn!("NATS event: slow consumer on client id {}", cid);
+                    }
+                    _ => {}
+                }
+            });
+
+        let client = async_nats::connect_with_options(&self.addr, options).await?;
+        log::info!("Connected to NATS at {} successfully", self.addr);
+        let js = Arc::new(async_nats::jetstream::new(client));
+        self.jetstream.store(Some(js.clone()));
+        Ok(js)
+    }
+
+    /// Atomically evicts the disconnected context to release socket from kqueue.
+    fn evict_client(&self) {
+        if self.jetstream.swap(None).is_some() {
+            log::warn!("Evicted disconnected NATS client from cache to drop stale socket");
+        }
     }
 
     async fn write_to_nats(&self, subject: &str, data: &str) -> pingora::Result<()> {
-        let jetstream = self.get_jetstream().await.map_err(|e| {
-            log::error!("write_to_nats connect/init error: {}", e);
-            pingora::Error::explain(
-                pingora::ErrorType::ConnectError,
-                format!("NATS connect error: {}", e),
-            )
-        })?;
+        let jetstream = match self.get_jetstream().await {
+            Ok(js) => js,
+            Err(e) => {
+                log::error!("write_to_nats connect/init error: {}", e);
+                return Err(pingora::Error::explain(
+                    pingora::ErrorType::ConnectError,
+                    format!("NATS connect error: {}", e),
+                ));
+            }
+        };
 
-        let ack = jetstream
+        let ack = match jetstream
             .publish(subject.to_string(), data.to_string().into())
             .await
-            .map_err(|e| {
-                log::error!("write_to_nats publish: {}", e);
-                pingora::Error::explain(
+        {
+            Ok(ack) => ack,
+            Err(e) => {
+                log::error!("write_to_nats publish error: {}", e);
+                self.evict_client();
+                return Err(pingora::Error::explain(
                     pingora::ErrorType::WriteError,
                     format!("NATS publish error: {}", e),
-                )
-            })?;
+                ));
+            }
+        };
 
-        ack.await.map_err(|e| {
-            log::error!("write_to_nats ack: {}\nsubject: {}\n{}", e, subject, data);
-            pingora::Error::explain(
+        if let Err(e) = ack.await {
+            log::error!("write_to_nats ack error: {}\nsubject: {}\n{}", e, subject, data);
+            self.evict_client();
+            return Err(pingora::Error::explain(
                 pingora::ErrorType::WriteError,
                 format!("NATS ack error: {}", e),
-            )
-        })?;
+            ));
+        }
 
         log::info!("write_to_nats done.\n{}", data);
         Ok(())
@@ -159,5 +221,30 @@ impl DispatchHandler for NatsDispatch {
 
     async fn dispatch_payload(&self, topic: &str, payload: &str) -> pingora::Result<()> {
         self.publish(topic, payload.as_bytes()).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_nats_dispatch_lifecycle_and_eviction() {
+        let dispatch = NatsDispatch::new_with_options("127.0.0.1:4222", 50, 1000);
+        assert_eq!(dispatch.initial_reconnect_ms, 50);
+        assert_eq!(dispatch.max_reconnect_ms, 1000);
+        assert!(dispatch.jetstream.load().is_none());
+
+        // Evict on empty cell is a safe no-op
+        dispatch.evict_client();
+        assert!(dispatch.jetstream.load().is_none());
+    }
+
+    #[test]
+    fn test_nats_supports_dispatch_method() {
+        assert!(NatsDispatch::supports_dispatch_method("nats"));
+        assert!(NatsDispatch::supports_dispatch_method("NATS"));
+        assert!(NatsDispatch::supports_dispatch_method("nats-jetstream"));
+        assert!(!NatsDispatch::supports_dispatch_method("kafka"));
     }
 }

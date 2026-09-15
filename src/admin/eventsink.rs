@@ -1,7 +1,8 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use futures_util::StreamExt;
-use tokio::sync::OnceCell;
+use arc_swap::ArcSwapOption;
+use tokio::sync::Mutex;
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -51,8 +52,9 @@ pub struct EventSinkResponse {
 pub struct EventSinkInspector {
     broker_method: String,
     broker_addr: String,
-    nats_client: Arc<OnceCell<async_nats::Client>>,
-    nats_jetstream: Arc<OnceCell<async_nats::jetstream::Context>>,
+    nats_client: Arc<ArcSwapOption<async_nats::Client>>,
+    nats_jetstream: Arc<ArcSwapOption<async_nats::jetstream::Context>>,
+    connect_lock: Arc<Mutex<()>>,
 }
 
 impl EventSinkInspector {
@@ -60,8 +62,9 @@ impl EventSinkInspector {
         Self {
             broker_method: broker_method.to_string(),
             broker_addr: broker_addr.to_string(),
-            nats_client: Arc::new(OnceCell::new()),
-            nats_jetstream: Arc::new(OnceCell::new()),
+            nats_client: Arc::new(ArcSwapOption::empty()),
+            nats_jetstream: Arc::new(ArcSwapOption::empty()),
+            connect_lock: Arc::new(Mutex::new(())),
         }
     }
 
@@ -92,6 +95,7 @@ impl EventSinkInspector {
         let js = match self.get_nats_jetstream().await {
             Ok(js) => js,
             Err(err) => {
+                self.evict_nats();
                 return EventSinkResponse {
                     broker_type: "NATS JetStream".to_string(),
                     broker_addr: self.broker_addr.clone(),
@@ -108,6 +112,10 @@ impl EventSinkInspector {
         let stream = match js.get_stream("SPECTRA").await {
             Ok(s) => s,
             Err(e) => {
+                let err_str = e.to_string();
+                if err_str.contains("connection") || err_str.contains("closed") || err_str.contains("broken") {
+                    self.evict_nats();
+                }
                 return EventSinkResponse {
                     broker_type: "NATS JetStream".to_string(),
                     broker_addr: self.broker_addr.clone(),
@@ -124,6 +132,10 @@ impl EventSinkInspector {
         let stream_info = match stream.get_info().await {
             Ok(info) => info,
             Err(e) => {
+                let err_str = e.to_string();
+                if err_str.contains("connection") || err_str.contains("closed") || err_str.contains("broken") {
+                    self.evict_nats();
+                }
                 return EventSinkResponse {
                     broker_type: "NATS JetStream".to_string(),
                     broker_addr: self.broker_addr.clone(),
@@ -198,23 +210,57 @@ impl EventSinkInspector {
         }
     }
 
-    async fn get_nats_client(&self) -> Result<&async_nats::Client, String> {
-        self.nats_client
-            .get_or_try_init(|| async {
-                async_nats::connect(&self.broker_addr)
-                    .await
-                    .map_err(|e| format!("Failed to connect to NATS at {}: {}", self.broker_addr, e))
-            })
-            .await
+    pub fn evict_nats(&self) {
+        let mut evicted = false;
+        if self.nats_client.swap(None).is_some() {
+            evicted = true;
+        }
+        if self.nats_jetstream.swap(None).is_some() {
+            evicted = true;
+        }
+        if evicted {
+            log::warn!("Evicted disconnected NATS client from admin inspector cache to release socket");
+        }
     }
 
-    async fn get_nats_jetstream(&self) -> Result<&async_nats::jetstream::Context, String> {
-        let client = self.get_nats_client().await?;
-        self.nats_jetstream
-            .get_or_try_init(|| async {
-                Ok(async_nats::jetstream::new(client.clone()))
-            })
+    async fn get_nats_client(&self) -> Result<Arc<async_nats::Client>, String> {
+        if let Some(client) = self.nats_client.load_full() {
+            return Ok(client);
+        }
+
+        let _guard = self.connect_lock.lock().await;
+        if let Some(client) = self.nats_client.load_full() {
+            return Ok(client);
+        }
+
+        let is_tty = crate::core::config::SpectraDispatchConfig::is_interactive();
+        let (initial_ms, max_ms): (u64, u64) = if is_tty { (250, 5000) } else { (10, 2000) };
+
+        let options = async_nats::ConnectOptions::new()
+            .reconnect_delay_callback(move |attempts| {
+                let factor = 1u64.checked_shl(attempts.min(6) as u32).unwrap_or(64);
+                let delay = std::cmp::min(initial_ms.saturating_mul(factor), max_ms);
+                Duration::from_millis(delay)
+            });
+
+        let client = async_nats::connect_with_options(&self.broker_addr, options)
             .await
+            .map_err(|e| format!("Failed to connect to NATS at {}: {}", self.broker_addr, e))?;
+
+        let arc_client = Arc::new(client);
+        self.nats_client.store(Some(arc_client.clone()));
+        Ok(arc_client)
+    }
+
+    async fn get_nats_jetstream(&self) -> Result<Arc<async_nats::jetstream::Context>, String> {
+        if let Some(js) = self.nats_jetstream.load_full() {
+            return Ok(js);
+        }
+
+        let client = self.get_nats_client().await?;
+        let js = Arc::new(async_nats::jetstream::new((*client).clone()));
+        self.nats_jetstream.store(Some(js.clone()));
+        Ok(js)
     }
 
     /// Queries a consumer worker's recent execution logs via NATS Request-Reply (SWTP v1).
@@ -228,18 +274,24 @@ impl EventSinkInspector {
             });
             let payload_bytes = bytes::Bytes::from(req_payload.to_string());
 
-            let request = tokio::time::timeout(
+            let request = match tokio::time::timeout(
                 Duration::from_millis(2000),
                 client.request(subject.clone(), payload_bytes),
             )
             .await
-            .map_err(|_| {
-                format!(
-                    "Timed out waiting for worker '{}' response on subject '{}' (worker is offline or has not implemented SWTP)",
-                    worker_id, subject
-                )
-            })?
-            .map_err(|e| format!("Failed to query logs from worker '{}': {}", worker_id, e))?;
+            {
+                Ok(Ok(resp)) => resp,
+                Ok(Err(e)) => {
+                    self.evict_nats();
+                    return Err(format!("Failed to query logs from worker '{}': {}", worker_id, e));
+                }
+                Err(_) => {
+                    return Err(format!(
+                        "Timed out waiting for worker '{}' response on subject '{}' (worker is offline or has not implemented SWTP)",
+                        worker_id, subject
+                    ));
+                }
+            };
 
             let resp_str = std::str::from_utf8(&request.payload)
                 .map_err(|e| format!("Worker returned invalid UTF-8: {}", e))?;

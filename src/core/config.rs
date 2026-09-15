@@ -221,6 +221,61 @@ pub struct SpectraDispatchConfig {
     pub description: Option<String>,
     pub method: String,
     pub addr: String,
+    #[serde(default)]
+    pub reconnect_profile: Option<String>,
+    #[serde(default)]
+    pub reconnect_initial_ms: Option<u64>,
+    #[serde(default)]
+    pub reconnect_max_ms: Option<u64>,
+}
+
+impl SpectraDispatchConfig {
+    pub fn is_interactive() -> bool {
+        #[cfg(unix)]
+        {
+            unsafe {
+                libc::isatty(libc::STDIN_FILENO) != 0 || libc::isatty(libc::STDOUT_FILENO) != 0
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            false
+        }
+    }
+
+    pub fn initial_reconnect_ms(&self) -> u64 {
+        if let Some(ms) = self.reconnect_initial_ms {
+            return ms;
+        }
+        match self.reconnect_profile.as_deref() {
+            Some("dev") | Some("development") => 250,
+            Some("prod") | Some("production") => 10,
+            _ => {
+                if Self::is_interactive() {
+                    250
+                } else {
+                    10
+                }
+            }
+        }
+    }
+
+    pub fn max_reconnect_ms(&self) -> u64 {
+        if let Some(ms) = self.reconnect_max_ms {
+            return ms;
+        }
+        match self.reconnect_profile.as_deref() {
+            Some("dev") | Some("development") => 5000,
+            Some("prod") | Some("production") => 2000,
+            _ => {
+                if Self::is_interactive() {
+                    5000
+                } else {
+                    2000
+                }
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -817,5 +872,29 @@ mod tests {
         // Fallback to default_app
         let app5 = cfg.resolve_app(Some("unknown.com"), None, "/graphql").unwrap();
         assert_eq!(app5.id, "coeval");
+    }
+
+    #[test]
+    fn test_dispatch_config_reconnect_profiles() {
+        let mut cfg = SpectraDispatchConfig {
+            name: "default".into(),
+            description: None,
+            method: "NATS".into(),
+            addr: "127.0.0.1:4222".into(),
+            reconnect_profile: Some("production".into()),
+            reconnect_initial_ms: None,
+            reconnect_max_ms: None,
+        };
+        assert_eq!(cfg.initial_reconnect_ms(), 10);
+        assert_eq!(cfg.max_reconnect_ms(), 2000);
+
+        cfg.reconnect_profile = Some("development".into());
+        assert_eq!(cfg.initial_reconnect_ms(), 250);
+        assert_eq!(cfg.max_reconnect_ms(), 5000);
+
+        cfg.reconnect_initial_ms = Some(50);
+        cfg.reconnect_max_ms = Some(1500);
+        assert_eq!(cfg.initial_reconnect_ms(), 50);
+        assert_eq!(cfg.max_reconnect_ms(), 1500);
     }
 }
