@@ -1,5 +1,6 @@
 use anyhow::{anyhow, Result};
 use std::sync::Arc;
+#[cfg(feature = "kevy")]
 use std::time::Duration;
 
 #[async_trait::async_trait]
@@ -140,7 +141,7 @@ pub async fn create_storage(backend: &str, addr: Option<&str>) -> Result<Arc<dyn
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "kevy"))]
 mod tests {
     use super::*;
 
