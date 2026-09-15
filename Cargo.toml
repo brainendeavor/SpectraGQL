@@ -1,9 +1,6 @@
 [workspace]
 members = [
     ".",
-    "spectral-flux",
-    "spectral-flux/fluxcells/webhook",
-    "spectral-flux/fluxcells/magic-link",
 ]
 resolver = "2"
 
@@ -66,8 +63,8 @@ wasmtime = { version = "48.0.2", default-features = false, features = ["cranelif
 wat = "1.259.0"
 
 [dev-dependencies]
-spectral-flux = { path = "spectral-flux" }
-fluxcell-magic-link = { path = "spectral-flux/fluxcells/magic-link" }
-fluxcell-webhook = { path = "spectral-flux/fluxcells/webhook" }
+spectra-flux = { path = "../SpectraFlux/chassis" }
+fluxcell-magic-link = { path = "../SpectraFlux/fluxcells/magic-link" }
+fluxcell-webhook = { path = "../SpectraFlux/fluxcells/webhook" }
 hyper = { version = "1", features = ["http1", "server"] }
 hyper-util = { version = "0.1", features = ["tokio", "server-auto"] }

@@ -1,11 +1,11 @@
 use async_trait::async_trait;
 use hyper_util::rt::TokioIo;
 use hyper_util::server::conn::auto::Builder as ServerBuilder;
-use spectral_flux::db::traits::{FluxDb, FluxTx};
-use spectral_flux::db::DatabaseRegistry;
-use spectral_flux::http::{handle_request, FluxRouter};
-use spectral_flux::telemetry::TelemetryClient;
-use spectral_flux::wasm::{FluxcellWasmConfig, WasmHost};
+use spectra_flux::db::traits::{FluxDb, FluxTx};
+use spectra_flux::db::DatabaseRegistry;
+use spectra_flux::http::{handle_request, FluxRouter};
+use spectra_flux::telemetry::TelemetryClient;
+use spectra_flux::wasm::{FluxcellWasmConfig, WasmHost};
 use spectragql::gateway::generate_command_receipt;
 use spectragql::HlcClock;
 use std::collections::HashMap;

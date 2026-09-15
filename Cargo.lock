@@ -3521,131 +3521,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "kevy-bytes"
-version = "6.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "938c008d4d9fd91a34bf44544616ec5ec04d49d4cd620f1afe6244e8d65b6eb3"
-dependencies = [
- "kevy-hash",
-]
-
-[[package]]
-name = "kevy-compress"
-version = "6.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e68c0940fb819dde92039225b1409cfa0a65a45755c8af8b8f93192ed5d39ead"
-
-[[package]]
-name = "kevy-embedded"
-version = "6.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "27c571d79a7e5f72007ebbf86ac36285d9f9082575cfa8794a23e9d86ee0bbc6"
-dependencies = [
- "kevy-hash",
- "kevy-persist",
- "kevy-replicate",
- "kevy-resp",
- "kevy-store",
- "kevy-sys",
-]
-
-[[package]]
-name = "kevy-hash"
-version = "6.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2be78d3e12792730459627c9ba6b898a9cca0d4a935a466adc5d4df46d7d3a1e"
-
-[[package]]
-name = "kevy-madvise"
-version = "6.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ae986277b9d6da2de857053cb6c13a86024cfdae2884ebd67345ec342dbfce72"
-
-[[package]]
-name = "kevy-map"
-version = "6.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "81e576968c6d75e30a9a0f163ceba897fde0b5960d80c4491c8f71f7f615db16"
-dependencies = [
- "kevy-hash",
- "kevy-madvise",
-]
-
-[[package]]
-name = "kevy-persist"
-version = "6.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f854b23a6a0668ff67aac1cbefda4ac4d82db8c8cc1f65eeb67171023d04e525"
-dependencies = [
- "kevy-resp",
- "kevy-store",
- "kevy-sys",
-]
-
-[[package]]
-name = "kevy-ranktree"
-version = "6.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "db9e089fe540ce5c4fb784948ff8d10fad6dfe2e01ffc8f72fa4a78d1fbbcb93"
-
-[[package]]
-name = "kevy-replicate"
-version = "6.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8835ee355fcbf68ebf4379101861da822f60abc6be62c5fbeafd70566e61966f"
-dependencies = [
- "kevy-resp",
-]
-
-[[package]]
-name = "kevy-resp"
-version = "6.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "731ade53ab3dd0a7c89850164f48ed8949340e1e613d17b78497284b8082a693"
-dependencies = [
- "kevy-bytes",
-]
-
-[[package]]
-name = "kevy-seg"
-version = "6.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6e7494433941bf6630f8aabf8dd13c75edd2f41ec772aab5366c34a1be8033a7"
-dependencies = [
- "kevy-sys",
-]
-
-[[package]]
-name = "kevy-store"
-version = "6.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f72ee2e7b657ae49ef7966ed379f32ff805e5747c00d2eede98953989b42d722"
-dependencies = [
- "kevy-bytes",
- "kevy-hash",
- "kevy-map",
- "kevy-ranktree",
- "kevy-seg",
- "kevy-vlog",
-]
-
-[[package]]
-name = "kevy-sys"
-version = "6.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "29a9ae83c715fef45a2e28309adacf52ba7870f81bea9d1d0e81f74bc3f9042e"
-
-[[package]]
-name = "kevy-vlog"
-version = "6.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "000e076ce81a46e04f2cf2db4ab7cf1eac03294fcebf4270500ac03b9ff603be"
-dependencies = [
- "kevy-compress",
- "kevy-sys",
-]
-
-[[package]]
 name = "lapin"
 version = "4.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6254,6 +6129,44 @@ dependencies = [
 ]
 
 [[package]]
+name = "spectra-flux"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-nats",
+ "async-trait",
+ "bytes",
+ "chrono",
+ "config",
+ "deadpool-postgres",
+ "env_logger",
+ "fluxcell-magic-link",
+ "fluxcell-webhook",
+ "futures-util",
+ "http",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "log",
+ "matchit",
+ "redis",
+ "reqwest 0.12.28",
+ "rskafka",
+ "rustls",
+ "serde",
+ "serde_json",
+ "sha2 0.10.8",
+ "thiserror 2.0.20",
+ "tokio",
+ "tokio-postgres",
+ "tokio-postgres-rustls",
+ "uuid",
+ "wasmtime",
+ "wat",
+ "webpki-roots 0.26.8",
+]
+
+[[package]]
 name = "spectragql"
 version = "0.1.0"
 dependencies = [
@@ -6288,7 +6201,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.8",
- "spectral-flux",
+ "spectra-flux",
  "strum 0.27.1",
  "strum_macros 0.27.1",
  "tokio",
@@ -6296,45 +6209,6 @@ dependencies = [
  "uuid",
  "wasmtime",
  "wat",
-]
-
-[[package]]
-name = "spectral-flux"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-nats",
- "async-trait",
- "bytes",
- "chrono",
- "config",
- "deadpool-postgres",
- "env_logger",
- "fluxcell-magic-link",
- "fluxcell-webhook",
- "futures-util",
- "http",
- "http-body-util",
- "hyper",
- "hyper-util",
- "kevy-embedded",
- "log",
- "matchit",
- "redis",
- "reqwest 0.12.28",
- "rskafka",
- "rustls",
- "serde",
- "serde_json",
- "sha2 0.10.8",
- "thiserror 2.0.20",
- "tokio",
- "tokio-postgres",
- "tokio-postgres-rustls",
- "uuid",
- "wasmtime",
- "wat",
- "webpki-roots 0.26.8",
 ]
 
 [[package]]
