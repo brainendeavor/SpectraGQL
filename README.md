@@ -70,8 +70,10 @@ GraphQL gives frontend teams expressive control over data retrieval. However, in
                                                               │
                                                               ▼
                                                     ┌───────────────────┐
-                                                    │ Event Consumers   │
-                                                    │ (Async Resolvers) │
+                                                    │ Bring Your Own    │
+                                                    │ Worker (BYOW)     │
+                                                    │ Go / Node / Rust  │
+                                                    │ Temporal / Python │
                                                     └───────────────────┘
 ```
 
@@ -84,7 +86,7 @@ SpectraGQL bridges existing microservices and event-driven backends through two 
 | Strategy | Upstream Hop | Event Role | Client Requirement | Primary Role |
 | :--- | :---: | :--- | :--- | :--- |
 | **`SyncUpstreamExecution`**<br>*(Mode A: The Workhorse)* | **Yes**<br>(Forward to backend) | Event Choreography Stream (`CompletionEvent`) | Standard GraphQL Client (Sync)<br>Full Apollo/Relay cache normalization | **Flagship (90% of workloads)**<br>Zero frontend changes; reliable post-response audit events; decouples secondary downstream services. |
-| **`AsyncEdgeCommand`**<br>*(Mode B: Edge Command)* | **No**<br>(Edge broker commit) | Primary Command Bus | Async-Aware Client<br>Expects deterministic Command Receipt (`ACCEPTED`) | **Specialized / High-Scale**<br>Pure CQRS for bulk ingestion, IoT, mobile offline mutations, and long-running saga workflows. |
+| **`AsyncEdgeCommand`**<br>*(Mode B: Edge Command)* | **No**<br>(Edge broker commit) | Primary Command Bus | Async-Aware Client<br>Expects deterministic Command Receipt (`ACCEPTED`) | **Specialized / High-Scale (BYOW)**<br>Pure CQRS for bulk ingestion, IoT, mobile mutations, and sagas. **Bring Your Own Worker**: feed existing Go, Node.js, Python, or Temporal workers with zero gateway plugins required. |
 | *`Mode C: The Mirage`* | *Retired* | *Coordinated Request-Reply* | *Standard Client* | *Evaluated and archived in favor of Mode A simplicity and stability.* |
 
 ---

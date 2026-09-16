@@ -77,16 +77,22 @@ SpectraGQL supports multiple event sinks. When designing cross-sink features (su
 
 ---
 
-## 4. Consumer Worker Telemetry Design Guidelines
+## 4. Consumer Worker Telemetry & BYOW Discovery Guidelines
 
-SpectraGQL employs a hybrid, zero-broker-bloat architecture for downstream worker telemetry:
+SpectraGQL is **broker-first and framework-agnostic**. Downstream mutation write handlers follow the "Bring-Your-Own-Worker" (BYOW) paradigm:
 
-### Option C: Universal Direct Telemetry API with In-Memory Registry (Active Standard)
+### Option A: Zero-Touch Broker-Native Discovery (Active Primary Standard)
+* **Zero Worker Code:** Downstream workers (written in Go, Node.js, Python, Rust, or Temporal workflows) do **not** need custom telemetry SDKs, open HTTP ports, or reverse network connectivity to the gateway's admin port.
+* **Broker Ground Truth:** SpectraGQL's `EventSinkInspector` queries broker consumer groups directly out-of-band:
+  * **NATS JetStream:** Inspects consumer lag (`num_pending`), unacked messages (`num_ack_pending`), and redeliveries (`num_redelivered`) via `js.consumer_info()`.
+  * **Kafka / Redpanda:** Inspects high-watermarks, partition offsets, and active consumer group members.
+  * **Redis / Valkey Streams:** Inspects consumer groups via `XINFO GROUPS` and pending messages via `XPENDING`.
+* **Automatic Admin UI Resolution:** When no workers explicitly register via direct API, `/admin/api/v1/workers` synthesizes worker summaries from active broker consumer metrics.
+
+### Option B: Universal Direct Telemetry API (Optional Embedded / Legacy Fallback)
 * **API Endpoint:** `POST /admin/api/v1/telemetry/report`
-* **Zero Broker Bloat:** Workers never publish raw, verbose `DEBUG`/`INFO` lines to the event sink. Instead, workers maintain a small in-memory ring buffer and POST a throttled heartbeat with recent log rollups every 3–5 seconds (or immediately upon unhandled exceptions).
-* **Bounded In-Memory Worker Registry:** `WorkerRegistry` (`src/admin/registry.rs`) caps log history to 200 entries per worker and monitors heartbeat freshness with a 15-second liveness timeout.
-* **Universal Cross-Sink UI:** The Admin UI's `[📄 Logs]` modal queries `/admin/api/v1/workers/:id/logs`, which resolves instantly from `WorkerRegistry` regardless of whether the cluster runs on NATS, Kafka, Redis Streams, SierraDB, or Iggy.
-* **Backward-Compatible NATS RPC Fallback:** If a worker is not yet registered via the direct API, the gateway gracefully falls back to NATS Request-Reply SWTP if the active sink is NATS.
+* **Use Case:** Opt-in for embedded edge appliances (e.g. SpectraFlux instances) or local development when in-memory log rollups inside the gateway drawer are desired.
+* **Bounded Registry:** `WorkerRegistry` (`src/admin/registry.rs`) caps history to 200 log entries per worker with a 15-second liveness timeout.
 
 ---
 

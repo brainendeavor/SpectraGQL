@@ -33,6 +33,22 @@ pub struct ConsumerMetrics {
     pub ack_floor_seq: u64,
     pub last_delivered_seq: u64,
     pub push_bound: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+}
+
+impl ConsumerMetrics {
+    pub fn compute_status(&self) -> String {
+        if self.num_redelivered > 0 {
+            "degraded".to_string()
+        } else if self.num_pending > 1000 {
+            "stalled".to_string()
+        } else if self.num_ack_pending > 0 || self.num_pending > 0 {
+            "active".to_string()
+        } else {
+            "healthy".to_string()
+        }
+    }
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -186,6 +202,15 @@ impl EventSinkInspector {
                     ack_floor_seq: c.ack_floor.stream_sequence,
                     last_delivered_seq: c.delivered.stream_sequence,
                     push_bound: c.push_bound,
+                    status: Some(if c.num_redelivered > 0 {
+                        "degraded".to_string()
+                    } else if c.num_pending > 1000 {
+                        "stalled".to_string()
+                    } else if c.num_ack_pending > 0 || c.num_pending > 0 {
+                        "active".to_string()
+                    } else {
+                        "healthy".to_string()
+                    }),
                 });
             }
         }
@@ -385,6 +410,7 @@ impl EventSinkInspector {
                     ack_floor_seq: xlen,
                     last_delivered_seq: xlen,
                     push_bound: true,
+                    status: Some("healthy".to_string()),
                 }
             ],
             details: Some(serde_json::json!({ "streamKey": stream_key, "totalEntries": xlen })),
@@ -468,6 +494,7 @@ impl EventSinkInspector {
                             ack_floor_seq: info.messages_count,
                             last_delivered_seq: info.messages_count,
                             push_bound: true,
+                            status: Some("healthy".to_string()),
                         }
                     ],
                     details: Some(serde_json::json!({
@@ -595,6 +622,7 @@ impl EventSinkInspector {
                             ack_floor_seq: msgs,
                             last_delivered_seq: msgs,
                             push_bound: consumers_count > 0,
+                            status: Some(if msgs > 1000 { "stalled".to_string() } else { "healthy".to_string() }),
                         }
                     ],
                     details: Some(serde_json::json!({
@@ -686,6 +714,7 @@ impl EventSinkInspector {
                             ack_floor_seq: high_watermark as u64,
                             last_delivered_seq: high_watermark as u64,
                             push_bound: true,
+                            status: Some("healthy".to_string()),
                         }
                     ],
                     details: Some(serde_json::json!({
@@ -820,6 +849,7 @@ impl EventSinkInspector {
                             ack_floor_seq: 0,
                             last_delivered_seq: 0,
                             push_bound: is_healthy,
+                            status: Some(if is_healthy { "healthy".to_string() } else { "degraded".to_string() }),
                         }
                     ],
                     details: Some(serde_json::json!({

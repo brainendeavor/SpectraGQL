@@ -3521,6 +3521,131 @@ dependencies = [
 ]
 
 [[package]]
+name = "kevy-bytes"
+version = "6.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a326ae09d05cbd5096bad67944fb4f993ae400c5caecbce737209cd7abced953"
+dependencies = [
+ "kevy-hash",
+]
+
+[[package]]
+name = "kevy-compress"
+version = "6.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4bb7f162f1bae6aadc172ced71a94309dfbee6781cfa3beb52b308a2bfaf5e3d"
+
+[[package]]
+name = "kevy-embedded"
+version = "6.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8d16d85e8c765fb2187f397f0cdadb8e72f0e1c63c2a07b5dfb1bd53f21d0599"
+dependencies = [
+ "kevy-hash",
+ "kevy-persist",
+ "kevy-replicate",
+ "kevy-resp",
+ "kevy-store",
+ "kevy-sys",
+]
+
+[[package]]
+name = "kevy-hash"
+version = "6.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a2d3b968af4c55816ff1eee7cac4d608922dcb7e7111ff1214b057266bcf2a36"
+
+[[package]]
+name = "kevy-madvise"
+version = "6.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "106fe20db0dd70e8f7b0f48e6075f3c4f66f3e844e5a8c328cc521c6866e5dc6"
+
+[[package]]
+name = "kevy-map"
+version = "6.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ebe2126d36846ea5ac37f5f395ff7aff03df35ffb945f0f03d0f1004a99c6e20"
+dependencies = [
+ "kevy-hash",
+ "kevy-madvise",
+]
+
+[[package]]
+name = "kevy-persist"
+version = "6.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9e9450c165a684e3cac229ba80fc7e9426dc9c777a61b35b9fc5ab322b89c7dd"
+dependencies = [
+ "kevy-resp",
+ "kevy-store",
+ "kevy-sys",
+]
+
+[[package]]
+name = "kevy-ranktree"
+version = "6.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "594b89769842c3dc1c0aa6df875218b0645cb939a7f4e62ef578d998e830b83a"
+
+[[package]]
+name = "kevy-replicate"
+version = "6.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32c9ceaabfa9ae825b533b804d1298a08f1bf04b6689c4b62c2be4c0392b2d5f"
+dependencies = [
+ "kevy-resp",
+]
+
+[[package]]
+name = "kevy-resp"
+version = "6.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "467dcf21180fe7ebc3f970218b9995e614c68614fb2a4ea23f6b2ea84994d8bd"
+dependencies = [
+ "kevy-bytes",
+]
+
+[[package]]
+name = "kevy-seg"
+version = "6.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0bde53caa69d23b4ddb0ec05bb2a96e6ee43eda277b99e96c085631222d24153"
+dependencies = [
+ "kevy-sys",
+]
+
+[[package]]
+name = "kevy-store"
+version = "6.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7a3561fd948838bbad538633798c890c6661b4ec9079e0f5606d45656354d2c2"
+dependencies = [
+ "kevy-bytes",
+ "kevy-hash",
+ "kevy-map",
+ "kevy-ranktree",
+ "kevy-seg",
+ "kevy-vlog",
+]
+
+[[package]]
+name = "kevy-sys"
+version = "6.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4eea42b47c2e10bf9aab194ce4481190e5b26d1f0cbe531809a5ec8ac3dd77c0"
+
+[[package]]
+name = "kevy-vlog"
+version = "6.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6101d3f9e66436a59b7b25542009e0c2c21fd695ea4694489183bff3c4d66f3f"
+dependencies = [
+ "kevy-compress",
+ "kevy-sys",
+]
+
+[[package]]
 name = "lapin"
 version = "4.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6147,6 +6272,7 @@ dependencies = [
  "http-body-util",
  "hyper",
  "hyper-util",
+ "kevy-embedded",
  "log",
  "matchit",
  "redis",

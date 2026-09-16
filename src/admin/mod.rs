@@ -402,6 +402,7 @@ impl AdminEngine {
                         ack_floor_seq: 0,
                         last_delivered_seq: worker.processed_events,
                         push_bound: worker.status != "offline",
+                        status: Some(worker.status.clone()),
                     });
                 }
             }
@@ -488,7 +489,25 @@ impl AdminEngine {
                         }
                     })
                 });
-            let workers = self.worker_registry.get_active_workers_with_filter(app_param);
+            let mut workers = self.worker_registry.get_active_workers_with_filter(app_param);
+            if workers.is_empty() {
+                // Zero-Touch Broker-Native Discovery: Synthesize worker summaries from broker consumers
+                let eventsink_resp = self.eventsink_inspector.inspect().await;
+                for c in eventsink_resp.consumers {
+                    let status = c.status.clone().unwrap_or_else(|| c.compute_status());
+                    workers.push(crate::admin::WorkerSummary {
+                        worker_id: c.name,
+                        app_id: None,
+                        sink: eventsink_resp.broker_type.clone(),
+                        stream: c.stream_name,
+                        status,
+                        uptime_seconds: 0,
+                        processed_events: c.ack_floor_seq,
+                        total_errors: c.num_redelivered as u64,
+                        last_seen_secs_ago: 0,
+                    });
+                }
+            }
             return self.respond_json(session, 200, &workers).await;
         }
 
