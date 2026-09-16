@@ -1,7 +1,3 @@
-use mlua::{
-    IntoLua,
-    prelude::{LuaUserData, LuaUserDataFields},
-};
 use serde::Serialize;
 use std::fmt;
 
@@ -100,10 +96,3 @@ impl fmt::Display for RequestInfo {
     }
 }
 
-impl LuaUserData for RequestInfo {
-    fn add_fields<F: LuaUserDataFields<Self>>(fields: &mut F) {
-        fields.add_field_method_get("request_id", |_, this| Ok(this.request_id.to_string()));
-        fields.add_field_method_get("hlc", |_, this| Ok(this.hlc.to_compact_string()));
-        fields.add_field_method_get("http", |lua, this| this.http.clone().into_lua(lua));
-    }
-}
