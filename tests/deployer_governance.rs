@@ -3,12 +3,12 @@ use spectragql::core::config::{ExecutionStrategy, SpectraRouteConfig};
 use spectragql::interceptors::{
     DeployAuthInterceptor, InterceptorContext, InterceptorVerdict, RequestInterceptor,
 };
-use spectral_flux::config::DeployerConfig;
-use spectral_flux::deployer::{
+use spectra_flux::config::DeployerConfig;
+use spectra_flux::deployer::{
     DeployerGuard, DeployerRegistry, FluxcellDeployer, FluxcellStatus, SSRFShield,
 };
-use spectral_flux::http::FluxRouter;
-use spectral_flux::wasm::WasmHost;
+use spectra_flux::http::FluxRouter;
+use spectra_flux::wasm::WasmHost;
 
 #[test]
 fn test_deploy_auth_interceptor_validates_token_and_rejects_missing() {
@@ -150,6 +150,7 @@ fn test_deploy_route_disabled_by_default() {
         upstream: None,
         receipt_status: "ACCEPTED".to_string(),
         interceptors: vec![],
+        dispatch_policy: None,
     };
 
     assert!(!route.enabled);
@@ -182,7 +183,7 @@ async fn test_deployer_two_phase_staged_lifecycle_and_hot_swap() {
 
     // Phase 1: Stage artifact directly
     let record = deployer
-        .stage_uploaded_artifact("invoice-service", wasm_bytes.clone(), "/api/invoices", None, None)
+        .stage_uploaded_artifact("invoice-service", wasm_bytes.clone(), "/api/invoices", Some(25), None)
         .expect("Staging valid wasm should succeed");
 
     assert_eq!(record.name, "invoice-service");

@@ -3,15 +3,15 @@ use std::sync::Arc;
 use std::time::Duration;
 use hyper_util::rt::TokioIo;
 use hyper_util::server::conn::auto::Builder as ServerBuilder;
-use spectral_flux::http::{handle_request, FluxRouter, RouteDefinition};
-use spectral_flux::storage::create_storage;
-use spectral_flux::telemetry::TelemetryClient;
-use spectral_flux::wasm::WasmHost;
+use spectra_flux::http::{handle_request, FluxRouter, RouteDefinition};
+use spectra_flux::storage::create_storage;
+use spectra_flux::telemetry::TelemetryClient;
+use spectra_flux::wasm::WasmHost;
 use spectragql::HlcClock;
 use spectragql::gateway::generate_command_receipt;
 use tokio::net::TcpListener;
 
-async fn start_spectral_flux_server() -> (SocketAddr, Arc<dyn spectral_flux::storage::FluxStorage>) {
+async fn start_spectral_flux_server() -> (SocketAddr, Arc<dyn spectra_flux::storage::FluxStorage>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
 
@@ -20,38 +20,14 @@ async fn start_spectral_flux_server() -> (SocketAddr, Arc<dyn spectral_flux::sto
 
     let mut router = FluxRouter::new();
     let magic_routes = vec![
-        RouteDefinition {
-            method: "GET".to_string(),
-            relative_path: "/verify".to_string(),
-            description: "Verify magic link".to_string(),
-        },
-        RouteDefinition {
-            method: "POST".to_string(),
-            relative_path: "/verify".to_string(),
-            description: "Redeem magic link".to_string(),
-        },
-        RouteDefinition {
-            method: "GET".to_string(),
-            relative_path: "/status".to_string(),
-            description: "Status".to_string(),
-        },
+        RouteDefinition::new("GET", "/verify", "Verify magic link"),
+        RouteDefinition::new("POST", "/verify", "Redeem magic link"),
+        RouteDefinition::new("GET", "/status", "Status"),
     ];
     let webhook_routes = vec![
-        RouteDefinition {
-            method: "GET".to_string(),
-            relative_path: "/health".to_string(),
-            description: "Health".to_string(),
-        },
-        RouteDefinition {
-            method: "GET".to_string(),
-            relative_path: "/dlq".to_string(),
-            description: "DLQ".to_string(),
-        },
-        RouteDefinition {
-            method: "POST".to_string(),
-            relative_path: "/test".to_string(),
-            description: "Test".to_string(),
-        },
+        RouteDefinition::new("GET", "/health", "Health"),
+        RouteDefinition::new("GET", "/dlq", "DLQ"),
+        RouteDefinition::new("POST", "/test", "Test"),
     ];
 
     router.register_fluxcell_routes("magic_link", "/auth", &magic_routes).unwrap();
@@ -81,7 +57,7 @@ async fn start_spectral_flux_server() -> (SocketAddr, Arc<dyn spectral_flux::sto
 
             tokio::spawn(async move {
                 let service = hyper::service::service_fn(move |req| {
-                    handle_request(req, r_clone.clone(), t_clone.clone(), d_clone.clone(), None)
+                    handle_request(req, r_clone.clone(), t_clone.clone(), d_clone.clone(), None, None)
                 });
 
                 let _ = ServerBuilder::new(hyper_util::rt::TokioExecutor::new())

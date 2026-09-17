@@ -200,7 +200,7 @@ async fn start_spectral_flux_with_coeval_vote_wasm() -> (SocketAddr, Arc<WasmHos
 
             tokio::spawn(async move {
                 let service = hyper::service::service_fn(move |req| {
-                    handle_request(req, r_clone.clone(), t_clone.clone(), d_clone.clone(), None)
+                    handle_request(req, r_clone.clone(), t_clone.clone(), d_clone.clone(), None, None)
                 });
 
                 let _ = ServerBuilder::new(hyper_util::rt::TokioExecutor::new())

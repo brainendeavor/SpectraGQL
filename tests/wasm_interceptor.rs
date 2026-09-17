@@ -415,8 +415,10 @@ fn test_wasm_circuit_breaker_half_open_recovery() {
     std::thread::sleep(Duration::from_millis(60));
 
     // Reload plugin with passing WAT to simulate healed module
+    let mut healed_cfg = plugin_cfg.clone();
+    healed_cfg.timeout_ms = 50;
     evaluator
-        .load_wat("circuit_recovery", PASSING_WAT, plugin_cfg)
+        .load_wat("circuit_recovery", PASSING_WAT, healed_cfg)
         .unwrap();
 
     // Probe request is allowed and succeeds, resetting circuit to CLOSED!
