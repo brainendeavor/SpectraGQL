@@ -77,8 +77,49 @@ impl NatsDispatch {
         let client = async_nats::connect_with_options(&self.addr, options).await?;
         log::info!("Connected to NATS at {} successfully", self.addr);
         let js = Arc::new(async_nats::jetstream::new(client));
+
+        // Auto-provision standard JetStream stream if not already present
+        Self::ensure_default_streams(&js).await;
+
         self.jetstream.store(Some(js.clone()));
         Ok(js)
+    }
+
+    async fn ensure_default_streams(js: &async_nats::jetstream::Context) {
+        let stream_cfg = async_nats::jetstream::stream::Config {
+            name: "mutations".to_string(),
+            description: Some("SpectraGQL mutation and telemetry stream".to_string()),
+            subjects: vec![
+                "mutation.>".to_string(),
+                "spectra.>".to_string(),
+                "interceptors.>".to_string(),
+            ],
+            max_message_size: 4 * 1024 * 1024,
+            ..Default::default()
+        };
+        match js.get_or_create_stream(stream_cfg.clone()).await {
+            Ok(_) => {
+                log::info!(
+                    "NATS JetStream stream '{}' ready (subjects: {:?})",
+                    stream_cfg.name,
+                    stream_cfg.subjects
+                );
+            }
+            Err(e) => {
+                // If File storage fails on container/disk limits, fallback to Memory
+                let mut mem_cfg = stream_cfg.clone();
+                mem_cfg.storage = async_nats::jetstream::stream::StorageType::Memory;
+                if let Ok(_) = js.get_or_create_stream(mem_cfg).await {
+                    log::info!(
+                        "NATS JetStream stream '{}' (Memory) ready (subjects: {:?})",
+                        stream_cfg.name,
+                        stream_cfg.subjects
+                    );
+                } else {
+                    log::debug!("NATS JetStream stream provisioning note: {}", e);
+                }
+            }
+        }
     }
 
     /// Atomically evicts the disconnected context to release socket from kqueue.
@@ -116,15 +157,14 @@ impl NatsDispatch {
         };
 
         if let Err(e) = ack.await {
-            log::error!("write_to_nats ack error: {}\nsubject: {}\n{}", e, subject, data);
-            self.evict_client();
+            log::error!("write_to_nats ack error: {} on subject: {}", e, subject);
             return Err(pingora::Error::explain(
                 pingora::ErrorType::WriteError,
                 format!("NATS ack error: {}", e),
             ));
         }
 
-        log::info!("write_to_nats done.\n{}", data);
+        log::debug!("write_to_nats successfully published to subject: {}", subject);
         Ok(())
     }
 }
