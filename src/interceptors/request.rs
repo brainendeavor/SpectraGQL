@@ -31,6 +31,11 @@ impl RequestInterceptor for GraphQLSyntaxInterceptor {
             return InterceptorVerdict::Pass;
         }
 
+        // Fast path: if already parsed and verified by protocol decoder, pass immediately with zero redundant work
+        if ctx.operation_type.is_some() {
+            return InterceptorVerdict::Pass;
+        }
+
         // Must be non-empty
         if body.trim().is_empty() {
             return InterceptorVerdict::Reject(InterceptorRejection::new(

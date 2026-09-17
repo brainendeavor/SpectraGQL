@@ -223,7 +223,7 @@ impl DispatchHandler for NatsDispatch {
         response_info: &ResponseInfo,
     ) -> pingora::Result<()> {
         log::info!("NatsDispatch.dispatch ResponseInfo {:?}", response_info);
-        if let Ok(payload) = serde_json::to_string_pretty(&response_info) {
+        if let Ok(payload) = serde_json::to_string(&response_info) {
             match self.publish(dispatch_topic, payload.as_bytes()).await {
                 Ok(_) => {}
                 Err(e) => {

@@ -58,6 +58,8 @@ pub struct GraphQLRequestInfo {
     pub root_fields: Vec<String>,
     raw_body: Option<String>,
     json_body: serde_json::Value,
+    #[serde(skip)]
+    parsed_body: Option<GraphQLRequestBody>,
 }
 
 impl GraphQLRequestInfo {
@@ -68,6 +70,7 @@ impl GraphQLRequestInfo {
             root_fields: Vec::new(),
             raw_body: None,
             json_body: serde_json::Value::Null,
+            parsed_body: None,
         };
         if let Err(e) = gql_request_info.set_request_json(request_json) {
             log::error!("Invalid JSON for gql request: {}", e);
@@ -86,20 +89,26 @@ impl GraphQLRequestInfo {
 
     pub fn set_request_json(&mut self, request_json: &str) -> Result<&mut Self> {
         self.raw_body = Some(request_json.to_string());
-        if let Ok(val) = serde_json::from_str(request_json) {
+        if let Ok(val) = serde_json::from_str::<serde_json::Value>(request_json) {
+            let query = val.get("query").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let operation_name = val.get("operationName").and_then(|v| v.as_str()).map(|s| s.to_string());
+            let variables = val.get("variables").cloned();
+            let extensions = val.get("extensions").cloned();
+            self.parsed_body = Some(GraphQLRequestBody {
+                query,
+                operation_name,
+                variables,
+                extensions,
+            });
             self.json_body = val;
         }
         Ok(self)
     }
 
     pub fn gql_request_body(&self) -> Result<GraphQLRequestBody> {
-        match self.raw_body.as_ref() {
-            Some(json_body) => {
-                let parsed_body: GraphQLRequestBody = serde_json::from_str(json_body)?;
-                Ok(parsed_body)
-            }
-            None => Err(anyhow!("Request body has not been set.")),
-        }
+        self.parsed_body
+            .clone()
+            .ok_or_else(|| anyhow!("Request body has not been set or is invalid JSON."))
     }
 
     #[inline]
@@ -113,6 +122,11 @@ impl GraphQLRequestInfo {
         }
         if !self.json_body.is_null() {
             sanitizer.sanitize_value(&mut self.json_body);
+        }
+        if let Some(body) = self.parsed_body.as_mut() {
+            if let Some(vars) = body.variables.as_mut() {
+                sanitizer.sanitize_value(vars);
+            }
         }
     }
 }

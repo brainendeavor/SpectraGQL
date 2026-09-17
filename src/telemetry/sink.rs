@@ -31,7 +31,7 @@ pub struct JsonEventEncoder;
 
 impl EventEncoder for JsonEventEncoder {
     fn encode_request(&self, request: &RequestInfo) -> pingora::Result<Vec<u8>> {
-        serde_json::to_vec_pretty(request).map_err(|e| {
+        serde_json::to_vec(request).map_err(|e| {
             log::error!("JsonEventEncoder: failed to serialize request: {:?}", e);
             pingora::Error::explain(
                 pingora::ErrorType::Custom("SerializationError"),
@@ -41,7 +41,7 @@ impl EventEncoder for JsonEventEncoder {
     }
 
     fn encode_completion(&self, completion: &TerminalEvent) -> pingora::Result<Vec<u8>> {
-        serde_json::to_vec_pretty(completion).map_err(|e| {
+        serde_json::to_vec(completion).map_err(|e| {
             log::error!("JsonEventEncoder: failed to serialize completion event: {:?}", e);
             pingora::Error::explain(
                 pingora::ErrorType::Custom("SerializationError"),

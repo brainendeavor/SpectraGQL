@@ -43,10 +43,12 @@ impl Default for SpectraModeAConfig {
     }
 }
 
+pub type SpectraSyncConfig = SpectraModeAConfig;
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct SpectraRouteConfig {
     pub operation: String,
-    #[serde(default, alias = "strategy")]
+    #[serde(default, alias = "strategy", alias = "execution", alias = "execution_strategy")]
     pub mode: ExecutionStrategy,
     #[serde(default = "default_true")]
     pub enabled: bool,
@@ -315,7 +317,7 @@ pub struct SpectraGqlConfig {
     pub ops_to_dispatch: String,
     pub upstream: Option<SpectraUpstreamConfig>,
     pub dispatch: Option<SpectraDispatchConfig>,
-    #[serde(default)]
+    #[serde(default, alias = "sync", alias = "synchronous", alias = "sync_execution")]
     pub mode_a: SpectraModeAConfig,
     #[serde(default)]
     pub routes: HashMap<String, SpectraRouteConfig>,
@@ -447,9 +449,6 @@ impl SpectraConfig {
             .set_default("dispatch.name", "default")?
             .set_default("gql.paths", "/gql,/graphql")?
             .set_default("gql.ops_to_dispatch", "query, mutation, subscription")?
-            .set_default("gql.mode_a.enabled", true)?
-            .set_default("gql.mode_a.dispatch_policy", "response_with_failure")?
-            .set_default("gql.mode_a.timeout_ms", 3000)?
             .set_default("idempotency.backend", "memory")?
             .set_default("idempotency.ttl_secs", 300)?
             .set_default("idempotency.max_capacity", 10000)?
@@ -684,6 +683,76 @@ mod tests {
         assert_eq!(vote_route.dispatch_policy, Some(ModeADispatchPolicy::None));
         let inv_route = cfg.gql.routes.get("adjust_inventory").unwrap();
         assert_eq!(inv_route.dispatch_policy, Some(ModeADispatchPolicy::ResponseOnly));
+    }
+
+    #[test]
+    fn test_sync_and_async_strategy_and_dispatch_policy_config() {
+        let toml_str = r#"
+            bind_addr = "0.0.0.0:8000"
+
+            [upstream]
+            addr = "127.0.0.1:4000"
+
+            [gql]
+            paths = "/graphql"
+            ops_to_dispatch = "mutation"
+
+            [gql.sync]
+            enabled = true
+            dispatch_policy = "none"
+            timeout_ms = 4500
+
+            [gql.routes.record_vote]
+            operation = "recordVote"
+            strategy = "sync"
+            dispatch_policy = "response_only"
+
+            [gql.routes.submit_order]
+            operation = "submitOrder"
+            strategy = "upstream"
+            dispatch_policy = "response_with_failure"
+
+            [gql.routes.record_observations]
+            operation = "recordObservationBatch"
+            strategy = "async"
+            receipt_status = "ACCEPTED"
+
+            [gql.routes.audit_log]
+            operation = "auditLog"
+            strategy = "queue"
+            receipt_status = "ACCEPTED"
+
+            [dispatch]
+            method = "NATS"
+            addr = "127.0.0.1:4222"
+            name = "default"
+
+            [rest]
+            paths = "/api"
+        "#;
+        let cfg: SpectraConfig = Config::builder()
+            .add_source(config::File::from_str(toml_str, config::FileFormat::Toml))
+            .build()
+            .unwrap()
+            .try_deserialize()
+            .unwrap();
+
+        assert_eq!(cfg.gql.mode_a.dispatch_policy, ModeADispatchPolicy::None);
+        assert_eq!(cfg.gql.mode_a.timeout_ms, 4500);
+
+        let vote = cfg.gql.routes.get("record_vote").unwrap();
+        assert_eq!(vote.strategy(), ExecutionStrategy::SyncUpstreamExecution);
+        assert_eq!(vote.dispatch_policy, Some(ModeADispatchPolicy::ResponseOnly));
+
+        let order = cfg.gql.routes.get("submit_order").unwrap();
+        assert_eq!(order.strategy(), ExecutionStrategy::SyncUpstreamExecution);
+        assert_eq!(order.dispatch_policy, Some(ModeADispatchPolicy::ResponseWithFailure));
+
+        let obs = cfg.gql.routes.get("record_observations").unwrap();
+        assert_eq!(obs.strategy(), ExecutionStrategy::AsyncCommandReceipt);
+
+        let audit = cfg.gql.routes.get("audit_log").unwrap();
+        assert_eq!(audit.strategy(), ExecutionStrategy::AsyncCommandReceipt);
     }
 
     #[test]

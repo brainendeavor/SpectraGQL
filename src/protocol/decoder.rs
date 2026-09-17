@@ -24,14 +24,26 @@ pub struct GraphQLDecoder {
 
 impl GraphQLDecoder {
     pub fn new(ops_to_dispatch: &str) -> Self {
-        let ops = HashSet::from_iter(
-            ops_to_dispatch
-                .split(',')
-                .map(|s| GraphQLOperationType::from_str(s.trim()).unwrap()),
-        );
-        GraphQLDecoder {
-            ops_to_dispatch: ops,
+        Self::try_new(ops_to_dispatch).unwrap_or_else(|e| {
+            log::warn!("Invalid ops_to_dispatch '{}' ({}), defaulting to Mutation", ops_to_dispatch, e);
+            let mut set = HashSet::new();
+            set.insert(GraphQLOperationType::Mutation);
+            GraphQLDecoder { ops_to_dispatch: set }
+        })
+    }
+
+    pub fn try_new(ops_to_dispatch: &str) -> Result<Self> {
+        let mut ops = HashSet::new();
+        for s in ops_to_dispatch.split(',') {
+            let trimmed = s.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let op = GraphQLOperationType::from_str(trimmed)
+                .map_err(|e| anyhow::anyhow!("Invalid GraphQL operation type '{}': {}", trimmed, e))?;
+            ops.insert(op);
         }
+        Ok(GraphQLDecoder { ops_to_dispatch: ops })
     }
 }
 

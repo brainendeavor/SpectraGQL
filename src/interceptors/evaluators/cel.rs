@@ -232,8 +232,18 @@ impl RequestInterceptor for CelRequestInterceptor {
             cel_ctx.add_variable("operation_name", Value::Null);
         }
 
-        // 4. Variables & query from parsed body if JSON
-        if let Ok(json_body) = serde_json::from_str::<serde_json::Value>(body) {
+        // 4. Variables & query from parsed body if JSON (reuse pre-parsed Value from ctx if available)
+        let parsed_json_holder;
+        let json_body_opt = if let Some(ref j) = ctx.json_body {
+            Some(j)
+        } else if let Ok(j) = serde_json::from_str::<serde_json::Value>(body) {
+            parsed_json_holder = j;
+            Some(&parsed_json_holder)
+        } else {
+            None
+        };
+
+        if let Some(json_body) = json_body_opt {
             if let Some(vars) = json_body.get("variables") {
                 cel_ctx.add_variable("variables", json_to_cel(vars));
             } else {
@@ -247,7 +257,7 @@ impl RequestInterceptor for CelRequestInterceptor {
             if let Some(q) = json_body.get("query").and_then(|q| q.as_str()) {
                 cel_ctx.add_variable("query", Value::String(Arc::new(q.to_string())));
             }
-            cel_ctx.add_variable("body", json_to_cel(&json_body));
+            cel_ctx.add_variable("body", json_to_cel(json_body));
         } else {
             cel_ctx.add_variable(
                 "variables",

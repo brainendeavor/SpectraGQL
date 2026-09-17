@@ -45,24 +45,24 @@ pub fn build_composite_service(spectra_configuration: &SpectraConfig) -> Result<
         "ops_to_dispatch".to_string(),
         spectra_configuration.gql.ops_to_dispatch.clone(),
     );
-    let gql_service = ServiceConfig::new(
+    let gql_service = ServiceConfig::try_new(
         "gql",
         spectra_configuration.gql_upstream().addr.as_str(),
         spectra_configuration.gql.paths.as_str(),
         gql_dispatch.method.as_str(),
         gql_dispatch.addr.as_str(),
         extra_params,
-    );
+    )?;
 
     let rest_dispatch = spectra_configuration.rest_dispatch();
-    let rest_service = ServiceConfig::new(
+    let rest_service = ServiceConfig::try_new(
         "http",
         spectra_configuration.rest_upstream().addr.as_str(),
         spectra_configuration.rest.paths.as_str(),
         rest_dispatch.method.as_str(),
         rest_dispatch.addr.as_str(),
         ExtraServiceParams::new(),
-    );
+    )?;
 
     let idempotency_engine = match spectra_configuration.idempotency.backend {
         IdempotencyBackendType::Redis => {

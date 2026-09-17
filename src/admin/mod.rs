@@ -218,7 +218,7 @@ impl AdminEngine {
             || path == format!("{}/index.html", self.config.path_prefix)
         {
             if self.config.enable_ui {
-                let mut header = ResponseHeader::build(200, None).unwrap();
+                let mut header = ResponseHeader::build(200, None)?;
                 let _ = header.insert_header("content-type", "text/html; charset=utf-8");
                 session.set_keepalive(None);
                 session.write_response_header(Box::new(header), false).await?;
@@ -227,7 +227,7 @@ impl AdminEngine {
                     .await?;
                 return Ok(true);
             } else {
-                let mut header = ResponseHeader::build(404, None).unwrap();
+                let mut header = ResponseHeader::build(404, None)?;
                 let _ = header.insert_header("content-type", "application/json");
                 session.set_keepalive(None);
                 session.write_response_header(Box::new(header), false).await?;
@@ -540,7 +540,7 @@ impl AdminEngine {
         }
 
         // Unknown admin route
-        let mut header = ResponseHeader::build(404, None).unwrap();
+        let mut header = ResponseHeader::build(404, None)?;
         let _ = header.insert_header("content-type", "application/json");
         session.set_keepalive(None);
         session.write_response_header(Box::new(header), false).await?;
@@ -575,7 +575,7 @@ impl AdminEngine {
         status: u16,
         data: &T,
     ) -> pingora::Result<bool> {
-        let mut header = ResponseHeader::build(status, None).unwrap();
+        let mut header = ResponseHeader::build(status, None)?;
         let _ = header.insert_header("content-type", "application/json");
         let _ = header.insert_header("cache-control", "no-store");
         session.set_keepalive(None);

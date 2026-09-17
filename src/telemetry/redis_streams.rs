@@ -137,7 +137,7 @@ impl DispatchHandler for RedisStreamsDispatch {
         dispatch_topic: &str,
         response_info: &ResponseInfo,
     ) -> pingora::Result<()> {
-        if let Ok(payload) = serde_json::to_string_pretty(&response_info) {
+        if let Ok(payload) = serde_json::to_string(&response_info) {
             let stream = self.stream_key(dispatch_topic);
             let req_id_str = response_info.request_id.to_string();
             let hlc_str = response_info.hlc.to_compact_string();

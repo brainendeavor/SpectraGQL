@@ -159,7 +159,7 @@ impl DispatchHandler for IggyDispatch {
         dispatch_topic: &str,
         response_info: &ResponseInfo,
     ) -> pingora::Result<()> {
-        if let Ok(payload) = serde_json::to_string_pretty(&response_info) {
+        if let Ok(payload) = serde_json::to_string(&response_info) {
             let _ = self.publish(dispatch_topic, payload.as_bytes()).await;
         }
         Ok(())

@@ -41,6 +41,14 @@ Every microsecond, heap allocation, and mutex lock on the request/dispatch hot p
 ### Invariant 4: Strict Out-of-Band Administrative APIs
 * **Rule:** All administrative inspection and management endpoints (`/admin/*`) must execute out-of-band and introduce zero branching, locking, or allocation into `/graphql`, `/gql`, or `/api`.
 
+### Invariant 5: Zero Unwraps & Fail-Safe Result Propagation
+* **Rule:** Never call `.unwrap()` or `.expect()` in production code paths, runtime initialization, network parsing, or concurrency guards.
+* **Bad:** `addr.to_socket_addrs().unwrap().next().unwrap()`, `HeaderValue::from_str(...).unwrap()`, `lock().unwrap()`.
+* **Good:**
+  * Network resolution and configuration loading must propagate typed `Result` errors with actionable diagnostics.
+  * HTTP headers must use compile-time static constants (`HeaderValue::from_static(...)`) or fallible conversion (`HeaderValue::try_from(...)`).
+  * Concurrency locks must use poison-safe recovery (`lock().unwrap_or_else(|e| e.into_inner())`) or lock-free atomics.
+
 ---
 
 ## 3. Event Sink Philosophy & Least-Common-Denominator Capabilities

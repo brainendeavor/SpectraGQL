@@ -13,7 +13,7 @@ use crate::idempotency::IdempotencyEngine;
 use crate::protocol::{ResponseBody, RequestDecoder};
 use crate::telemetry::DispatchHandler;
 
-use anyhow::{Result, bail};
+use anyhow::{Result, anyhow, bail};
 use async_trait::async_trait;
 use bytes::Bytes;
 use pingora::ErrorType::ConnectNoRoute;
@@ -61,16 +61,39 @@ impl ServiceConfig {
         dispatch_address: &str,
         extra_params: ExtraServiceParams,
     ) -> Self {
-        let upstream_addr = upstream_address.to_socket_addrs().unwrap().next().unwrap();
+        Self::try_new(
+            service_type,
+            upstream_address,
+            upstream_routes,
+            dispatch_method,
+            dispatch_address,
+            extra_params,
+        )
+        .expect("Failed to initialize ServiceConfig")
+    }
+
+    pub fn try_new(
+        service_type: &str,
+        upstream_address: &str,
+        upstream_routes: &str,
+        dispatch_method: &str,
+        dispatch_address: &str,
+        extra_params: ExtraServiceParams,
+    ) -> Result<Self> {
+        let upstream_addr = upstream_address
+            .to_socket_addrs()
+            .map_err(|e| anyhow!("Failed to resolve upstream address '{}': {}", upstream_address, e))?
+            .next()
+            .ok_or_else(|| anyhow!("No socket address resolved for upstream '{}'", upstream_address))?;
         let proxy_service =
-            new_proxy_service(service_type, dispatch_method, dispatch_address, extra_params).unwrap();
+            new_proxy_service(service_type, dispatch_method, dispatch_address, extra_params)?;
         let service = Arc::new(proxy_service);
 
-        ServiceConfig {
+        Ok(ServiceConfig {
             service,
             upstream_addr,
             upstream_routes: upstream_routes.to_string(),
-        }
+        })
     }
 }
 
@@ -251,7 +274,7 @@ impl CompositeServiceProxy {
             .to_string();
 
         if sec_key.is_empty() {
-            let resp = pingora::http::ResponseHeader::build(400, None).unwrap();
+            let resp = pingora::http::ResponseHeader::build(400, None)?;
             session.write_response_header(Box::new(resp), false).await?;
             session.write_response_body(Some(bytes::Bytes::from("Missing Sec-WebSocket-Key")), true).await?;
             return Ok(true);
@@ -266,7 +289,7 @@ impl CompositeServiceProxy {
             .and_then(|v| v.to_str().ok())
             .map(|s| s.to_string());
 
-        let mut resp = pingora::http::ResponseHeader::build(101, None).unwrap();
+        let mut resp = pingora::http::ResponseHeader::build(101, None)?;
         let _ = resp.insert_header(http::header::CONNECTION, "Upgrade");
         let _ = resp.insert_header(http::header::UPGRADE, "websocket");
         let _ = resp.insert_header("sec-websocket-accept", accept_key);
@@ -606,7 +629,7 @@ impl ProxyHttp for CompositeServiceProxy {
                     "Request body exceeded {} bytes limit from client",
                     MAX_GATEWAY_BODY_BYTES
                 );
-                let mut header = pingora::http::ResponseHeader::build(413, None).unwrap();
+                let mut header = pingora::http::ResponseHeader::build(413, None)?;
                 let _ = header.insert_header("content-type", "application/json");
                 let _ = header.insert_header(REQUEST_ID_HEADER, ctx.proxy_context.request_id.to_string());
                 let _ = header.insert_header("x-spectra-hlc", ctx.proxy_context.hlc.to_compact_string());
@@ -700,6 +723,7 @@ impl ProxyHttp for CompositeServiceProxy {
                     if let Some(g) = &request_info.gql {
                         interceptor_ctx.operation_name = g.operation_name.clone();
                         interceptor_ctx.operation_type = Some(g.operation_type.clone());
+                        interceptor_ctx.json_body = Some(g.json_body().clone());
                     }
 
                     let mut req_parts = session.req_header().as_owned_parts();
@@ -729,8 +753,7 @@ impl ProxyHttp for CompositeServiceProxy {
                             let mut header = pingora::http::ResponseHeader::build(
                                 rejection.status_code.as_u16(),
                                 None,
-                            )
-                            .unwrap();
+                            )?;
                             let _ = header.insert_header("content-type", "application/json");
                             let _ = header.insert_header(
                                 REQUEST_ID_HEADER,
@@ -1085,7 +1108,11 @@ impl ProxyHttp for CompositeServiceProxy {
                 } else if ctx.proxy_context.dispatch_policy != crate::core::config::ModeADispatchPolicy::ResponseOnly
                     && ctx.proxy_context.dispatch_policy != crate::core::config::ModeADispatchPolicy::None
                 {
-                    ctx.proxy_context.buffer.extend(&b[..]);
+                    const MAX_TELEMETRY_RESPONSE_BYTES: usize = 64 * 1024; // 64KB cap for telemetry logging
+                    if ctx.proxy_context.buffer.len() < MAX_TELEMETRY_RESPONSE_BYTES {
+                        let to_take = (MAX_TELEMETRY_RESPONSE_BYTES - ctx.proxy_context.buffer.len()).min(b.len());
+                        ctx.proxy_context.buffer.extend_from_slice(&b[..to_take]);
+                    }
                 }
             }
 

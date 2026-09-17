@@ -20,22 +20,22 @@ ops_to_dispatch = "query, mutation, subscription"
 # Global interceptors (run on every request before route-specific interceptors)
 # interceptors = ["auth_guard"]
 
-# Mode A: The Default Workhorse Gateway
-[gql.mode_a]
+# Synchronous Upstream Execution (The Default Workhorse Gateway)
+[gql.sync]
 enabled = true
-# Options: "response_with_failure" (default), "response_only", "raw_audit"
+# Options: "response_with_failure" (default), "response_only", "raw_audit", "none"
 dispatch_policy = "response_with_failure"
 timeout_ms = 3000
 
-# Mode A Route Overrides: Route specific mutations to dedicated microservices
+# Route Overrides: Route specific mutations to dedicated microservices
 [gql.routes.inventory_update]
 operation = "adjustInventory"
-mode = "A"
+strategy = "sync"
 upstream = "inventory"
 
 [gql.routes.customer_address]
 operation = "updateCustomerAddress"
-mode = "A"
+strategy = "sync"
 upstream = "crm"
 # Route-specific interceptors (appended after global interceptors)
 # interceptors = ["leak_guard"]
@@ -44,26 +44,26 @@ upstream = "crm"
 addr = "127.0.0.1:8081"
 name = "spectral_flux"
 
-# Mode B Route Overrides: Pure async command receipts (edge-terminated)
+# Asynchronous Route Overrides: Pure async command receipts (edge-terminated)
 [gql.routes.bulk_import]
 operation = "importCatalog"
-mode = "B"
+strategy = "async"
 receipt_status = "ACCEPTED"
 
 [gql.routes.magic_link]
 operation = "requestMagicLink"
-mode = "B"
+strategy = "async"
 receipt_status = "ACCEPTED"
 
 [gql.routes.webhook_dispatch]
 operation = "dispatchWebhook"
-mode = "B"
+strategy = "async"
 receipt_status = "ACCEPTED"
 
 # Remote Fluxcell Deployment Routes (Disabled by default for production security)
 [gql.routes.fluxcell_deploy]
 operation = "deployFluxcell"
-mode = "B"
+strategy = "async"
 enabled = false
 receipt_status = "ACCEPTED"
 interceptors = ["deploy_guard"]

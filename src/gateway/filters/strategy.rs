@@ -108,9 +108,13 @@ impl StrategyRouter {
             // Complete idempotency tracking
             if let Some(key) = ctx.proxy_context.idempotency_key.as_ref() {
                 let mut fake_headers = http::HeaderMap::new();
-                fake_headers.insert("content-type", "application/json".parse().unwrap());
-                fake_headers.insert(REQUEST_ID_HEADER, ctx.proxy_context.request_id.to_string().parse().unwrap());
-                fake_headers.insert("x-spectra-hlc", ctx.proxy_context.hlc.to_compact_string().parse().unwrap());
+                fake_headers.insert("content-type", http::HeaderValue::from_static("application/json"));
+                if let Ok(val) = http::HeaderValue::try_from(ctx.proxy_context.request_id.to_string()) {
+                    fake_headers.insert(REQUEST_ID_HEADER, val);
+                }
+                if let Ok(val) = http::HeaderValue::try_from(ctx.proxy_context.hlc.to_compact_string()) {
+                    fake_headers.insert("x-spectra-hlc", val);
+                }
                 idempotency_engine
                     .complete(key, ctx.proxy_context.hlc, 200, &fake_headers, &receipt_body)
                     .await;
@@ -122,7 +126,7 @@ impl StrategyRouter {
             }
         }
 
-        let mut header = pingora::http::ResponseHeader::build(200, None).unwrap();
+        let mut header = pingora::http::ResponseHeader::build(200, None)?;
         let _ = header.insert_header("content-type", "application/json");
         let _ = header.insert_header("access-control-allow-origin", "*");
         let _ = header.insert_header(

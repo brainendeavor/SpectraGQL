@@ -11,6 +11,8 @@ pub enum ExecutionStrategy {
         alias = "SYNC_UPSTREAM_EXECUTION",
         alias = "synchronous",
         alias = "proxy",
+        alias = "upstream",
+        alias = "UPSTREAM",
         alias = "A",
         alias = "a"
     )]
@@ -25,6 +27,8 @@ pub enum ExecutionStrategy {
         alias = "ASYNC_EDGE_COMMAND",
         alias = "asynchronous",
         alias = "receipt",
+        alias = "queue",
+        alias = "QUEUE",
         alias = "B",
         alias = "b"
     )]
@@ -59,7 +63,7 @@ impl ExecutionStrategy {
     }
 }
 
-/// Dispatch policy options for Mode A (synchronous upstream execution).
+/// Dispatch policy options for synchronous upstream execution (Mode A).
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Copy, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ModeADispatchPolicy {
@@ -69,6 +73,9 @@ pub enum ModeADispatchPolicy {
     RawAudit,
     None,
 }
+
+pub type SyncDispatchPolicy = ModeADispatchPolicy;
+pub type DispatchPolicy = ModeADispatchPolicy;
 
 /// Lifecycle outcome of an executed operation.
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]

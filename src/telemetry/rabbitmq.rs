@@ -206,7 +206,7 @@ impl DispatchHandler for RabbitMqDispatch {
         dispatch_topic: &str,
         response_info: &ResponseInfo,
     ) -> pingora::Result<()> {
-        if let Ok(payload) = serde_json::to_string_pretty(&response_info) {
+        if let Ok(payload) = serde_json::to_string(&response_info) {
             let rk = self.routing_key(dispatch_topic);
             let req_id = response_info.request_id.to_string();
             let hlc = response_info.hlc.to_compact_string();

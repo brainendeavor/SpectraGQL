@@ -137,7 +137,7 @@ impl DispatchHandler for SierraDbDispatch {
         dispatch_topic: &str,
         response_info: &ResponseInfo,
     ) -> pingora::Result<()> {
-        if let Ok(payload) = serde_json::to_string_pretty(&response_info) {
+        if let Ok(payload) = serde_json::to_string(&response_info) {
             let stream = self.stream_id(dispatch_topic);
             self.append_event(&stream, "Response", &payload).await?;
         }

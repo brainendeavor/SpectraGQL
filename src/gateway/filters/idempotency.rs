@@ -97,7 +97,7 @@ impl IdempotencyFilter {
         key: &str,
         conflict_hlc: HlcTimestamp,
     ) -> pingora::Result<()> {
-        let mut header = pingora::http::ResponseHeader::build(409, None).unwrap();
+        let mut header = pingora::http::ResponseHeader::build(409, None)?;
         let _ = header.insert_header("content-type", "application/json");
         let _ = header.insert_header(REQUEST_ID_HEADER, request_id.to_string());
         let _ = header.insert_header("x-spectra-hlc", hlc.to_compact_string());
@@ -114,7 +114,7 @@ impl IdempotencyFilter {
         hlc: HlcTimestamp,
         conflict_hlc: HlcTimestamp,
     ) -> pingora::Result<()> {
-        let mut header = pingora::http::ResponseHeader::build(409, None).unwrap();
+        let mut header = pingora::http::ResponseHeader::build(409, None)?;
         let _ = header.insert_header("content-type", "application/json");
         let _ = header.insert_header(REQUEST_ID_HEADER, request_id.to_string());
         let _ = header.insert_header("x-spectra-hlc", hlc.to_compact_string());
@@ -133,7 +133,7 @@ impl IdempotencyFilter {
         headers: Vec<(String, String)>,
         body: String,
     ) -> pingora::Result<()> {
-        let mut header = pingora::http::ResponseHeader::build(status_code, None).unwrap();
+        let mut header = pingora::http::ResponseHeader::build(status_code, None)?;
         for (k, v) in headers {
             let _ = header.insert_header(k, v);
         }
