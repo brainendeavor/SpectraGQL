@@ -1,5 +1,5 @@
 use std::fmt;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -40,18 +40,25 @@ impl fmt::Display for HlcTimestamp {
     }
 }
 
-/// Thread-safe Hybrid Logical Clock generator.
+/// Thread-safe Hybrid Logical Clock generator using lock-free atomic compare-and-swap (CAS).
+///
+/// State is bit-packed into a single 64-bit atomic integer:
+/// - Upper 48 bits: Physical wall-clock timestamp in milliseconds (~8,900 years of range).
+/// - Lower 16 bits: Logical sequence counter (up to 65,535 operations per millisecond per node).
 pub struct HlcClock {
-    state: Mutex<HlcTimestamp>,
+    pub(crate) state: AtomicU64,
 }
 
 impl HlcClock {
     pub const MAX_ALLOWED_CLOCK_DRIFT_MS: u64 = 60_000;
+    const LOGICAL_MASK: u64 = 0xFFFF;
+    const MAX_LOGICAL: u32 = 0xFFFF;
 
     pub fn new() -> Self {
         let initial_physical = Self::get_physical_time();
+        let packed = (initial_physical << 16) & !Self::LOGICAL_MASK;
         HlcClock {
-            state: Mutex::new(HlcTimestamp::new(initial_physical, 0)),
+            state: AtomicU64::new(packed),
         }
     }
 
@@ -62,34 +69,42 @@ impl HlcClock {
             .as_millis() as u64
     }
 
-    /// Generates the next monotonic HLC timestamp for a local event.
+    /// Generates the next monotonic HLC timestamp for a local event using lock-free CAS.
     pub fn now(&self) -> HlcTimestamp {
         let physical_now = Self::get_physical_time();
-        let mut state = self.state.lock().unwrap();
+        let mut current = self.state.load(Ordering::Acquire);
 
-        if physical_now > state.physical {
-            state.physical = physical_now;
-            state.logical = 0;
-        } else {
-            match state.logical.checked_add(1) {
-                Some(next) => state.logical = next,
-                None => {
-                    // Counter exhausted within the current millisecond:
-                    // Advance physical time by 1ms and reset logical counter to 0.
-                    state.physical = state.physical.saturating_add(1);
-                    state.logical = 0;
-                }
+        loop {
+            let curr_physical = current >> 16;
+            let curr_logical = (current & Self::LOGICAL_MASK) as u32;
+
+            let (next_physical, next_logical) = if physical_now > curr_physical {
+                (physical_now, 0u32)
+            } else if curr_logical < Self::MAX_LOGICAL {
+                (curr_physical, curr_logical + 1)
+            } else {
+                // Counter exhausted within the current millisecond:
+                // Advance physical time by 1ms and reset logical counter to 0.
+                (curr_physical.saturating_add(1), 0u32)
+            };
+
+            let next_packed = (next_physical << 16) | (next_logical as u64 & Self::LOGICAL_MASK);
+            match self.state.compare_exchange_weak(
+                current,
+                next_packed,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => return HlcTimestamp::new(next_physical, next_logical),
+                Err(actual) => current = actual,
             }
         }
-
-        *state
     }
 
-    /// Updates local clock causality upon receiving a remote HLC timestamp.
+    /// Updates local clock causality upon receiving a remote HLC timestamp using lock-free CAS.
     #[allow(dead_code)]
     pub fn update(&self, remote: HlcTimestamp) -> HlcTimestamp {
         let physical_now = Self::get_physical_time();
-        let mut state = self.state.lock().unwrap();
 
         // Guard against Byzantine or misconfigured remote nodes poisoning the local clock.
         let max_tolerated_physical = physical_now.saturating_add(Self::MAX_ALLOWED_CLOCK_DRIFT_MS);
@@ -105,38 +120,52 @@ impl HlcClock {
             remote.physical
         };
 
-        let mut new_physical = physical_now.max(state.physical).max(safe_remote_physical);
+        let mut current = self.state.load(Ordering::Acquire);
 
-        if new_physical == state.physical && new_physical == safe_remote_physical {
-            match state.logical.max(remote.logical).checked_add(1) {
-                Some(val) => state.logical = val,
-                None => {
-                    new_physical = new_physical.saturating_add(1);
-                    state.logical = 0;
+        loop {
+            let curr_physical = current >> 16;
+            let curr_logical = (current & Self::LOGICAL_MASK) as u32;
+
+            let mut new_physical = physical_now.max(curr_physical).max(safe_remote_physical);
+            let next_logical = if new_physical == curr_physical && new_physical == safe_remote_physical {
+                match curr_logical.max(remote.logical).checked_add(1) {
+                    Some(val) if val <= Self::MAX_LOGICAL => val,
+                    _ => {
+                        new_physical = new_physical.saturating_add(1);
+                        0
+                    }
                 }
-            }
-        } else if new_physical == state.physical {
-            match state.logical.checked_add(1) {
-                Some(val) => state.logical = val,
-                None => {
-                    new_physical = new_physical.saturating_add(1);
-                    state.logical = 0;
+            } else if new_physical == curr_physical {
+                match curr_logical.checked_add(1) {
+                    Some(val) if val <= Self::MAX_LOGICAL => val,
+                    _ => {
+                        new_physical = new_physical.saturating_add(1);
+                        0
+                    }
                 }
-            }
-        } else if new_physical == safe_remote_physical {
-            match remote.logical.checked_add(1) {
-                Some(val) => state.logical = val,
-                None => {
-                    new_physical = new_physical.saturating_add(1);
-                    state.logical = 0;
+            } else if new_physical == safe_remote_physical {
+                match remote.logical.checked_add(1) {
+                    Some(val) if val <= Self::MAX_LOGICAL => val,
+                    _ => {
+                        new_physical = new_physical.saturating_add(1);
+                        0
+                    }
                 }
+            } else {
+                0
+            };
+
+            let next_packed = (new_physical << 16) | (next_logical as u64 & Self::LOGICAL_MASK);
+            match self.state.compare_exchange_weak(
+                current,
+                next_packed,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => return HlcTimestamp::new(new_physical, next_logical),
+                Err(actual) => current = actual,
             }
-        } else {
-            state.logical = 0;
         }
-
-        state.physical = new_physical;
-        *state
     }
 
     /// Generates a time-sortable UUIDv7 paired with its originating HLC timestamp.
@@ -225,11 +254,8 @@ mod tests {
         let clock = HlcClock::new();
         let current = clock.now();
 
-        // Force logical counter to u32::MAX
-        {
-            let mut state = clock.state.lock().unwrap();
-            state.logical = u32::MAX;
-        }
+        // Force logical counter to 16-bit max (0xFFFF)
+        clock.state.store((current.physical << 16) | 0xFFFF, Ordering::SeqCst);
 
         // The next call to now() must not panic or wrap to (current.physical, 0)
         let next = clock.now();

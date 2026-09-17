@@ -1,9 +1,10 @@
-use std::collections::HashMap;
-use std::sync::RwLock;
+use std::hash::{DefaultHasher, Hash, Hasher};
+use std::num::NonZeroUsize;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use sha2::{Digest, Sha256};
 use http::HeaderMap;
+use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::core::clock::HlcTimestamp;
 use crate::telemetry::resp::RespClient;
@@ -11,6 +12,7 @@ use crate::telemetry::resp::RespClient;
 pub const DEFAULT_IDEMPOTENCY_TTL: Duration = Duration::from_secs(300); // 5 minutes
 pub const DEFAULT_MAX_CAPACITY: usize = 10_000;
 pub const DEFAULT_REDIS_KEY_PREFIX: &str = "spectra:idempotency";
+const NUM_MEMORY_SHARDS: usize = 32;
 
 pub const IDEMPOTENCY_KEY_HEADER: &str = "idempotency-key";
 pub const ALT_IDEMPOTENCY_KEY_HEADER: &str = "x-idempotency-key";
@@ -58,10 +60,31 @@ pub enum IdempotencyOutcome {
     },
 }
 
+pub struct MemoryShard {
+    cache: Mutex<lru::LruCache<String, IdempotencyRecord>>,
+}
+
+impl MemoryShard {
+    fn new(capacity: usize) -> Self {
+        let cap = NonZeroUsize::new(capacity.max(1)).unwrap_or(NonZeroUsize::MIN);
+        Self {
+            cache: Mutex::new(lru::LruCache::new(cap)),
+        }
+    }
+}
+
+#[inline]
+fn get_shard_index(key: &str) -> usize {
+    let mut hasher = DefaultHasher::new();
+    key.hash(&mut hasher);
+    (hasher.finish() as usize) % NUM_MEMORY_SHARDS
+}
+
 pub enum IdempotencyBackend {
     Memory {
-        records: RwLock<HashMap<String, IdempotencyRecord>>,
+        shards: Box<[MemoryShard; NUM_MEMORY_SHARDS]>,
         max_capacity: usize,
+        len: std::sync::atomic::AtomicUsize,
     },
     Redis {
         client: RespClient,
@@ -79,10 +102,12 @@ pub struct IdempotencyEngine {
 impl IdempotencyEngine {
     /// Creates an in-memory IdempotencyEngine.
     pub fn new(ttl: Duration, max_capacity: usize) -> Self {
+        let shards = Box::new(std::array::from_fn(|_| MemoryShard::new(max_capacity)));
         IdempotencyEngine {
             backend: IdempotencyBackend::Memory {
-                records: RwLock::new(HashMap::new()),
+                shards,
                 max_capacity,
+                len: std::sync::atomic::AtomicUsize::new(0),
             },
             ttl,
         }
@@ -107,43 +132,13 @@ impl IdempotencyEngine {
     /// Checks if a key already exists. If not (or expired), registers it as `InProgress`.
     pub async fn check_or_insert(&self, key: &str, hlc: HlcTimestamp) -> IdempotencyOutcome {
         match &self.backend {
-            IdempotencyBackend::Memory { records, max_capacity } => {
+            IdempotencyBackend::Memory { shards, max_capacity, len } => {
                 let now_secs = current_unix_secs();
                 let ttl_secs = self.ttl.as_secs().max(1);
+                let shard_idx = get_shard_index(key);
+                let mut guard = shards[shard_idx].cache.lock();
 
-                // 1. Fast read-lock check
-                {
-                    let read_guard = records.read().unwrap();
-                    if let Some(record) = read_guard.get(key) {
-                        match record {
-                            IdempotencyRecord::InProgress { started_at_secs, hlc } => {
-                                if now_secs.saturating_sub(*started_at_secs) < ttl_secs {
-                                    return IdempotencyOutcome::Conflict { hlc: *hlc };
-                                }
-                            }
-                            IdempotencyRecord::Completed {
-                                completed_at_secs,
-                                hlc,
-                                status_code,
-                                headers,
-                                body,
-                            } => {
-                                if now_secs.saturating_sub(*completed_at_secs) < ttl_secs {
-                                    return IdempotencyOutcome::Replay {
-                                        hlc: *hlc,
-                                        status_code: *status_code,
-                                        headers: headers.clone(),
-                                        body: body.clone(),
-                                    };
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // 2. Write lock insert
-                let mut write_guard = records.write().unwrap();
-                if let Some(record) = write_guard.get(key) {
+                if let Some(record) = guard.get(key) {
                     match record {
                         IdempotencyRecord::InProgress { started_at_secs, hlc } => {
                             if now_secs.saturating_sub(*started_at_secs) < ttl_secs {
@@ -169,22 +164,34 @@ impl IdempotencyEngine {
                     }
                 }
 
-                if write_guard.len() >= *max_capacity {
-                    Self::prune_expired_locked(&mut write_guard, now_secs, ttl_secs);
-                    if write_guard.len() >= *max_capacity {
-                        if let Some(first_key) = write_guard.keys().next().cloned() {
-                            write_guard.remove(&first_key);
+                // Global capacity check: if total length across all shards is at or above max_capacity,
+                // evict least recently used entry in O(1).
+                if len.load(std::sync::atomic::Ordering::Relaxed) >= *max_capacity {
+                    if guard.pop_lru().is_some() {
+                        len.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+                    } else {
+                        for (i, shard) in shards.iter().enumerate() {
+                            if i != shard_idx {
+                                if let Some(mut other) = shard.cache.try_lock() {
+                                    if other.pop_lru().is_some() {
+                                        len.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+                                        break;
+                                    }
+                                }
+                            }
                         }
                     }
                 }
 
-                write_guard.insert(
+                if guard.put(
                     key.to_string(),
                     IdempotencyRecord::InProgress {
                         started_at_secs: now_secs,
                         hlc,
                     },
-                );
+                ).is_none() {
+                    len.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
 
                 IdempotencyOutcome::New
             }
@@ -289,9 +296,10 @@ impl IdempotencyEngine {
             .collect();
 
         match &self.backend {
-            IdempotencyBackend::Memory { records, .. } => {
-                let mut write_guard = records.write().unwrap();
-                write_guard.insert(
+            IdempotencyBackend::Memory { shards, len, .. } => {
+                let shard_idx = get_shard_index(key);
+                let mut guard = shards[shard_idx].cache.lock();
+                if guard.put(
                     key.to_string(),
                     IdempotencyRecord::Completed {
                         completed_at_secs: current_unix_secs(),
@@ -300,7 +308,9 @@ impl IdempotencyEngine {
                         headers: header_pairs,
                         body: body.to_string(),
                     },
-                );
+                ).is_none() {
+                    len.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
             }
             IdempotencyBackend::Redis { client, key_prefix } => {
                 let redis_key = format!("{}:{}", key_prefix, key);
@@ -326,9 +336,12 @@ impl IdempotencyEngine {
     /// Removes an in-flight entry so the client can retry if an error occurred before completion.
     pub async fn remove(&self, key: &str) {
         match &self.backend {
-            IdempotencyBackend::Memory { records, .. } => {
-                let mut write_guard = records.write().unwrap();
-                write_guard.remove(key);
+            IdempotencyBackend::Memory { shards, len, .. } => {
+                let shard_idx = get_shard_index(key);
+                let mut guard = shards[shard_idx].cache.lock();
+                if guard.pop(key).is_some() {
+                    len.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+                }
             }
             IdempotencyBackend::Redis { client, key_prefix } => {
                 let redis_key = format!("{}:{}", key_prefix, key);
@@ -365,27 +378,11 @@ impl IdempotencyEngine {
     /// Returns the count of active records currently held in memory.
     pub fn active_record_count(&self) -> usize {
         match &self.backend {
-            IdempotencyBackend::Memory { records, .. } => {
-                records.read().map(|r| r.len()).unwrap_or(0)
+            IdempotencyBackend::Memory { len, .. } => {
+                len.load(std::sync::atomic::Ordering::Relaxed)
             }
             IdempotencyBackend::Redis { .. } => 0,
         }
-    }
-
-    /// Prunes expired records under an active write guard.
-    fn prune_expired_locked(
-        records: &mut HashMap<String, IdempotencyRecord>,
-        now_secs: u64,
-        ttl_secs: u64,
-    ) {
-        records.retain(|_, record| match record {
-            IdempotencyRecord::InProgress { started_at_secs, .. } => {
-                now_secs.saturating_sub(*started_at_secs) < ttl_secs
-            }
-            IdempotencyRecord::Completed { completed_at_secs, .. } => {
-                now_secs.saturating_sub(*completed_at_secs) < ttl_secs
-            }
-        });
     }
 
     /// Helper to extract idempotency key from incoming HTTP headers.

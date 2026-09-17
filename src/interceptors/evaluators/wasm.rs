@@ -5,6 +5,7 @@ use crate::interceptors::request::RequestInterceptor;
 use crate::interceptors::response::ResponseInterceptor;
 use crate::interceptors::rules::RuleEvaluator;
 use anyhow::{anyhow, Context, Result};
+use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -58,8 +59,8 @@ pub enum CircuitPermission {
 pub struct WasmCircuitBreaker {
     config: CircuitBreakerConfig,
     failures: AtomicU32,
-    state: std::sync::RwLock<CircuitState>,
-    last_tripped_at: std::sync::RwLock<Option<Instant>>,
+    state: RwLock<CircuitState>,
+    last_tripped_at: RwLock<Option<Instant>>,
 }
 
 impl WasmCircuitBreaker {
@@ -67,21 +68,21 @@ impl WasmCircuitBreaker {
         Self {
             config,
             failures: AtomicU32::new(0),
-            state: std::sync::RwLock::new(CircuitState::Closed),
-            last_tripped_at: std::sync::RwLock::new(None),
+            state: RwLock::new(CircuitState::Closed),
+            last_tripped_at: RwLock::new(None),
         }
     }
 
     pub fn can_execute(&self) -> CircuitPermission {
-        let current_state = *self.state.read().unwrap();
+        let current_state = *self.state.read();
         match current_state {
             CircuitState::Closed => CircuitPermission::Allow,
             CircuitState::Open => {
-                let tripped_at = *self.last_tripped_at.read().unwrap();
+                let tripped_at = *self.last_tripped_at.read();
                 if let Some(t) = tripped_at
                     && t.elapsed() >= self.config.cooloff_duration
                 {
-                    let mut state_lock = self.state.write().unwrap();
+                    let mut state_lock = self.state.write();
                     if *state_lock == CircuitState::Open {
                         *state_lock = CircuitState::HalfOpen;
                         return CircuitPermission::Probe;
@@ -95,23 +96,23 @@ impl WasmCircuitBreaker {
 
     pub fn record_success(&self) {
         self.failures.store(0, Ordering::Relaxed);
-        let mut state_lock = self.state.write().unwrap();
+        let mut state_lock = self.state.write();
         *state_lock = CircuitState::Closed;
     }
 
     pub fn record_failure(&self) {
         let prev = self.failures.fetch_add(1, Ordering::Relaxed);
         let failures = prev + 1;
-        let mut state_lock = self.state.write().unwrap();
+        let mut state_lock = self.state.write();
         if *state_lock == CircuitState::HalfOpen || failures >= self.config.consecutive_failure_threshold {
             *state_lock = CircuitState::Open;
-            let mut tripped_lock = self.last_tripped_at.write().unwrap();
+            let mut tripped_lock = self.last_tripped_at.write();
             *tripped_lock = Some(Instant::now());
         }
     }
 
     pub fn is_open(&self) -> bool {
-        *self.state.read().unwrap() == CircuitState::Open
+        *self.state.read() == CircuitState::Open
     }
 }
 
@@ -171,7 +172,7 @@ struct HostState {
 pub struct WasmInterceptorEvaluator {
     config: WasmEngineConfig,
     engine: Engine,
-    plugins: std::sync::RwLock<HashMap<String, Arc<RegisteredPlugin>>>,
+    plugins: RwLock<HashMap<String, Arc<RegisteredPlugin>>>,
     ticker_running: Arc<AtomicBool>,
 }
 
@@ -180,6 +181,7 @@ impl WasmInterceptorEvaluator {
         let mut wasm_cfg = wasmtime::Config::new();
         wasm_cfg.epoch_interruption(true);
         wasm_cfg.cranelift_opt_level(wasmtime::OptLevel::Speed);
+        wasm_cfg.allocation_strategy(wasmtime::InstanceAllocationStrategy::pooling());
 
         let engine = Engine::new(&wasm_cfg)
             .map_err(|e| anyhow!("{:#}", e))
@@ -203,7 +205,7 @@ impl WasmInterceptorEvaluator {
         Ok(Self {
             config,
             engine,
-            plugins: std::sync::RwLock::new(HashMap::new()),
+            plugins: RwLock::new(HashMap::new()),
             ticker_running,
         })
     }
@@ -233,7 +235,7 @@ impl WasmInterceptorEvaluator {
             config: plugin_cfg,
         };
 
-        self.plugins.write().unwrap().insert(name, Arc::new(plugin));
+        self.plugins.write().insert(name, Arc::new(plugin));
         Ok(())
     }
 
@@ -269,7 +271,7 @@ impl WasmInterceptorEvaluator {
             config: plugin_cfg,
         };
 
-        self.plugins.write().unwrap().insert(name, Arc::new(plugin));
+        self.plugins.write().insert(name, Arc::new(plugin));
         Ok(())
     }
 
@@ -284,7 +286,6 @@ impl WasmInterceptorEvaluator {
     pub fn is_circuit_open(&self, plugin_name: &str) -> bool {
         self.plugins
             .read()
-            .unwrap()
             .get(plugin_name)
             .map(|p| p.circuit_breaker.is_open())
             .unwrap_or(false)
@@ -298,7 +299,7 @@ impl WasmInterceptorEvaluator {
         parts: &mut http::request::Parts,
         body: &str,
     ) -> InterceptorVerdict {
-        let plugin = match self.plugins.read().unwrap().get(plugin_name).cloned() {
+        let plugin = match self.plugins.read().get(plugin_name).cloned() {
             Some(p) => p,
             None => {
                 return InterceptorVerdict::Reject(InterceptorRejection::new(
@@ -361,7 +362,7 @@ impl WasmInterceptorEvaluator {
         parts: &mut http::response::Parts,
         body: &[u8],
     ) -> InterceptorVerdict {
-        let plugin = match self.plugins.read().unwrap().get(plugin_name).cloned() {
+        let plugin = match self.plugins.read().get(plugin_name).cloned() {
             Some(p) => p,
             None => {
                 return InterceptorVerdict::Reject(InterceptorRejection::new(
@@ -587,7 +588,7 @@ impl Drop for WasmInterceptorEvaluator {
 
 impl RuleEvaluator for WasmInterceptorEvaluator {
     fn evaluate(&self, rule_name: &str, input: &serde_json::Value) -> Result<bool, crate::interceptors::context::RuleEvaluationError> {
-        let plugin = self.plugins.read().unwrap().get(rule_name).cloned().ok_or_else(|| {
+        let plugin = self.plugins.read().get(rule_name).cloned().ok_or_else(|| {
             crate::interceptors::context::RuleEvaluationError::NotFound(rule_name.to_string())
         })?;
 
