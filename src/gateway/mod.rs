@@ -58,6 +58,10 @@ pub struct SpectraProxyCtx {
     pub query_preview: Option<String>,
     pub variables_preview: Option<String>,
     pub app_id: String,
+    pub audit_tag: Option<String>,
+    pub audit_rule: Option<String>,
+    pub response_preview: Option<String>,
+    pub error_preview: Option<String>,
 }
 
 #[derive(Clone)]

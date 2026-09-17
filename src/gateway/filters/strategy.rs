@@ -178,8 +178,10 @@ impl StrategyRouter {
                 let sanitized_request = request_info.clone().into_sanitized();
                 let _ = dispatch_method.dispatch_request_info(&sanitized_request).await;
             }
-            ModeADispatchPolicy::ResponseOnly | ModeADispatchPolicy::ResponseWithFailure => {
-                // Defer dispatch until response logging
+            ModeADispatchPolicy::ResponseOnly
+            | ModeADispatchPolicy::ResponseWithFailure
+            | ModeADispatchPolicy::None => {
+                // Defer dispatch until response logging, or suppress in ModeADispatchPolicy::None
             }
         }
     }

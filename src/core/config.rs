@@ -55,6 +55,8 @@ pub struct SpectraRouteConfig {
     pub receipt_status: String,
     #[serde(default)]
     pub interceptors: Vec<String>,
+    #[serde(default)]
+    pub dispatch_policy: Option<ModeADispatchPolicy>,
 }
 
 impl SpectraRouteConfig {
@@ -89,6 +91,8 @@ pub struct InterceptorConfig {
     pub status_code: Option<u16>,
     pub code: Option<String>,
     pub message: Option<String>,
+    pub action: Option<String>,
+    pub tag: Option<String>,
     // WASM configuration
     #[serde(alias = "module")]
     pub path: Option<String>,
@@ -213,6 +217,33 @@ impl Default for SpectraIdempotencyConfig {
             max_capacity: default_max_capacity(),
         }
     }
+}
+
+fn default_error_max_body_bytes() -> usize {
+    4096
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct ErrorCaptureConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "default_error_max_body_bytes")]
+    pub max_body_bytes: usize,
+}
+
+impl Default for ErrorCaptureConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            max_body_bytes: default_error_max_body_bytes(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Default)]
+pub struct SpectraTelemetryConfig {
+    #[serde(default)]
+    pub error_capture: ErrorCaptureConfig,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -397,6 +428,8 @@ pub struct SpectraConfig {
     pub interceptors: HashMap<String, InterceptorConfig>,
     #[serde(default)]
     pub wasm: SpectraWasmConfig,
+    #[serde(default)]
+    pub telemetry: SpectraTelemetryConfig,
 }
 
 impl SpectraConfig {
@@ -432,7 +465,9 @@ impl SpectraConfig {
             .set_default("wasm.allow_jit", false)?
             .set_default("wasm.epoch_tick_interval_ms", 1)?
             .set_default("wasm.default_timeout_ms", 25)?
-            .set_default("rest.paths", "/api,/api/{*path}")?;
+            .set_default("rest.paths", "/api,/api/{*path}")?
+            .set_default("telemetry.error_capture.enabled", true)?
+            .set_default("telemetry.error_capture.max_body_bytes", 4096)?;
 
         // 1. Explicit config file via SPECTRA_CONFIG or SPECTRAGQL_CONFIG takes top precedence
         if let Ok(config_path) = env::var("SPECTRA_CONFIG").or_else(|_| env::var("SPECTRAGQL_CONFIG")) {
@@ -603,6 +638,52 @@ mod tests {
             ModeADispatchPolicy::ResponseWithFailure
         );
         assert_eq!(default_mode_a.timeout_ms, 3000);
+    }
+
+    #[test]
+    fn test_mode_a_dispatch_policy_none_and_route_override() {
+        let toml_str = r#"
+            bind_addr = "0.0.0.0:8000"
+
+            [upstream]
+            addr = "127.0.0.1:4000"
+
+            [gql]
+            paths = "/graphql"
+            ops_to_dispatch = "mutation"
+
+            [gql.mode_a]
+            dispatch_policy = "none"
+
+            [gql.routes.record_vote]
+            operation = "recordVote"
+            mode = "A"
+            dispatch_policy = "none"
+
+            [gql.routes.adjust_inventory]
+            operation = "adjustInventory"
+            mode = "A"
+            dispatch_policy = "response_only"
+
+            [dispatch]
+            method = "NATS"
+            addr = "127.0.0.1:4222"
+            name = "default"
+
+            [rest]
+            paths = "/api"
+        "#;
+        let cfg: SpectraConfig = Config::builder()
+            .add_source(config::File::from_str(toml_str, config::FileFormat::Toml))
+            .build()
+            .unwrap()
+            .try_deserialize()
+            .unwrap();
+        assert_eq!(cfg.gql.mode_a.dispatch_policy, ModeADispatchPolicy::None);
+        let vote_route = cfg.gql.routes.get("record_vote").unwrap();
+        assert_eq!(vote_route.dispatch_policy, Some(ModeADispatchPolicy::None));
+        let inv_route = cfg.gql.routes.get("adjust_inventory").unwrap();
+        assert_eq!(inv_route.dispatch_policy, Some(ModeADispatchPolicy::ResponseOnly));
     }
 
     #[test]

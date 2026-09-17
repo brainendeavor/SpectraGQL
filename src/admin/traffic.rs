@@ -29,6 +29,14 @@ pub struct TrafficRecord {
     pub target: String,
     pub query_preview: Option<String>,
     pub variables_preview: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audit_tag: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audit_rule: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response_preview: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_preview: Option<String>,
 }
 
 /// Aggregated traffic statistics.
@@ -90,7 +98,10 @@ impl TrafficRecorder {
             self.mode_a_requests.fetch_add(1, Ordering::Relaxed);
         }
 
-        if record.status_code >= 400 || record.receipt_status.as_deref() == Some("DISPATCH_FAILED") {
+        if record.status_code >= 400
+            || record.receipt_status.as_deref() == Some("DISPATCH_FAILED")
+            || record.error_preview.is_some()
+        {
             self.error_requests.fetch_add(1, Ordering::Relaxed);
         }
 

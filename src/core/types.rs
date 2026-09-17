@@ -67,6 +67,7 @@ pub enum ModeADispatchPolicy {
     ResponseWithFailure,
     ResponseOnly,
     RawAudit,
+    None,
 }
 
 /// Lifecycle outcome of an executed operation.

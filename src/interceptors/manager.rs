@@ -108,23 +108,31 @@ impl InterceptorManager {
                     let status_code = ic.status_code.map(|c| {
                         http::StatusCode::from_u16(c).unwrap_or(http::StatusCode::FORBIDDEN)
                     });
+                    let action = crate::interceptors::evaluators::CelAction::from_str_opt(ic.action.as_deref());
+                    let tag = ic.tag.clone();
                     match ic.stage {
                         InterceptorStage::Request => {
-                            let interceptor = CelRequestInterceptor::new(
+                            let interceptor = CelRequestInterceptor::with_options(
+                                name,
                                 expr,
                                 status_code,
                                 ic.code.clone(),
                                 ic.message.clone(),
+                                action,
+                                tag,
                             )
                             .map_err(|e| anyhow!("Invalid CEL request rule '{}': {}", name, e))?;
                             request_interceptors.insert(name.clone(), Arc::new(interceptor));
                         }
                         InterceptorStage::Response => {
-                            let interceptor = CelResponseInterceptor::new(
+                            let interceptor = CelResponseInterceptor::with_options(
+                                name,
                                 expr,
                                 status_code,
                                 ic.code.clone(),
                                 ic.message.clone(),
+                                action,
+                                tag,
                             )
                             .map_err(|e| anyhow!("Invalid CEL response rule '{}': {}", name, e))?;
                             response_interceptors.insert(name.clone(), Arc::new(interceptor));

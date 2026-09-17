@@ -254,6 +254,7 @@ mod tests {
                 upstream: Some("inventory".to_string()),
                 receipt_status: "ACCEPTED".to_string(),
                 interceptors: vec![],
+                dispatch_policy: None,
             },
         );
         routes.insert(
@@ -265,6 +266,7 @@ mod tests {
                 upstream: None,
                 receipt_status: "ACCEPTED".to_string(),
                 interceptors: vec![],
+                dispatch_policy: None,
             },
         );
         routes.insert(
@@ -276,6 +278,7 @@ mod tests {
                 upstream: Some("ghost_service".to_string()),
                 receipt_status: "ACCEPTED".to_string(),
                 interceptors: vec![],
+                dispatch_policy: None,
             },
         );
 

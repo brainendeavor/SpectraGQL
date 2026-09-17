@@ -257,12 +257,20 @@ impl RequestInterceptorPipeline {
         parts: &mut http::request::Parts,
         body: &str,
     ) -> InterceptorVerdict {
+        let mut audit_verdict: Option<InterceptorVerdict> = None;
         for interceptor in &self.interceptors {
             match interceptor.intercept_request(ctx, parts, body) {
                 InterceptorVerdict::Pass => {}
+                InterceptorVerdict::Audit { rule_name, tag, reason } => {
+                    audit_verdict = Some(InterceptorVerdict::Audit { rule_name, tag, reason });
+                }
                 other => return other,
             }
         }
-        InterceptorVerdict::Pass
+        if let Some(audit) = audit_verdict {
+            audit
+        } else {
+            InterceptorVerdict::Pass
+        }
     }
 }

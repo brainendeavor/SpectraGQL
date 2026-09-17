@@ -1,7 +1,7 @@
 use crate::core::clock::HlcClock;
 use crate::core::config::{SpectraModeAConfig, SpectraRouteConfig, SpectraSubscriptionsConfig};
 use crate::gateway::filters::{
-    AdminFilter, HealthFilter, IdempotencyFilter, IdempotencyInterceptResult, StrategyRouter,
+    AdminFilter, FaviconFilter, HealthFilter, IdempotencyFilter, IdempotencyInterceptResult, StrategyRouter,
     TelemetryDispatcher,
 };
 use crate::gateway::SpectraProxyService;
@@ -49,6 +49,7 @@ pub struct CompositeServiceProxy {
     pub traffic_recorder: Arc<crate::admin::TrafficRecorder>,
     pub apps: Arc<Vec<crate::core::SpectraAppConfig>>,
     pub default_app: Option<String>,
+    pub telemetry_config: crate::core::config::SpectraTelemetryConfig,
 }
 
 impl ServiceConfig {
@@ -89,7 +90,16 @@ impl CompositeServiceProxy {
             traffic_recorder: Arc::new(crate::admin::TrafficRecorder::new(250)),
             apps: Arc::new(vec![]),
             default_app: None,
+            telemetry_config: crate::core::config::SpectraTelemetryConfig::default(),
         }
+    }
+
+    pub fn with_telemetry(
+        mut self,
+        telemetry: crate::core::config::SpectraTelemetryConfig,
+    ) -> Self {
+        self.telemetry_config = telemetry;
+        self
     }
 
     pub fn with_routing(
@@ -374,6 +384,10 @@ impl ProxyHttp for CompositeServiceProxy {
             query_preview: None,
             variables_preview: None,
             app_id: self.default_app.clone().unwrap_or_else(|| "default".to_string()),
+            audit_tag: None,
+            audit_rule: None,
+            response_preview: None,
+            error_preview: None,
         };
         CompositeServiceProxyCtx {
             proxy_context,
@@ -398,7 +412,12 @@ impl ProxyHttp for CompositeServiceProxy {
             return Ok(());
         }
 
-        // 2. Admin Engine requests do not need an upstream service
+        // 2. Favicon requests do not need an upstream service
+        if FaviconFilter::is_favicon_request(path) {
+            return Ok(());
+        }
+
+        // 3. Admin Engine requests do not need an upstream service
         if AdminFilter::is_admin_request(self.admin_engine.as_ref(), path) {
             return Ok(());
         }
@@ -473,7 +492,12 @@ impl ProxyHttp for CompositeServiceProxy {
             return Ok(true);
         }
 
-        // 2. Admin Engine routing
+        // 2. Favicon requests
+        if FaviconFilter::handle(session).await? {
+            return Ok(true);
+        }
+
+        // 3. Admin Engine routing
         if AdminFilter::handle(
             session,
             self.admin_engine.as_ref(),
@@ -550,6 +574,10 @@ impl ProxyHttp for CompositeServiceProxy {
                     target: "Idempotency Cache".to_string(),
                     query_preview: None,
                     variables_preview: None,
+                    audit_tag: None,
+                    audit_rule: None,
+                    response_preview: None,
+                    error_preview: None,
                 });
                 return Ok(true);
             }
@@ -615,8 +643,14 @@ impl ProxyHttp for CompositeServiceProxy {
                     .find(|a| a.id == ctx.proxy_context.app_id)
                     .map(|a| a.effective_subject_prefix());
                 ctx.proxy_context.request_topic = if let Some(prefix) = app_prefix {
-                    if let Some(op) = base_topic.split('.').nth(1) {
-                        format!("{}.{}", prefix, op)
+                    if let Some((kind, op)) = base_topic.split_once('.') {
+                        if kind == "query" && prefix.starts_with("mutation.") {
+                            format!("query.{}.{}", prefix.trim_start_matches("mutation."), op)
+                        } else if kind == "subscription" && prefix.starts_with("mutation.") {
+                            format!("subscription.{}.{}", prefix.trim_start_matches("mutation."), op)
+                        } else {
+                            format!("{}.{}", prefix, op)
+                        }
                     } else {
                         format!("{}.{}", prefix, base_topic)
                     }
@@ -677,6 +711,11 @@ impl ProxyHttp for CompositeServiceProxy {
 
                     match verdict {
                         crate::interceptors::InterceptorVerdict::Pass => {}
+                        crate::interceptors::InterceptorVerdict::Audit { rule_name, tag, reason } => {
+                            log::info!("Request flagged by audit rule '{}': tag={:?}, reason={}", rule_name, tag, reason);
+                            ctx.proxy_context.audit_tag = tag;
+                            ctx.proxy_context.audit_rule = Some(rule_name);
+                        }
                         crate::interceptors::InterceptorVerdict::Reject(rejection) => {
                             log::info!(
                                 "Request rejected at edge by interceptor: code={}, status={}",
@@ -759,6 +798,10 @@ impl ProxyHttp for CompositeServiceProxy {
                                 target: format!("Sink: {}", rejection_topic),
                                 query_preview: ctx.proxy_context.query_preview.clone(),
                                 variables_preview: ctx.proxy_context.variables_preview.clone(),
+                                audit_tag: None,
+                                audit_rule: None,
+                                response_preview: None,
+                                error_preview: Some(format!("{}: {}", rejection.code, rejection.message)),
                             });
 
                             return Ok(true);
@@ -836,6 +879,10 @@ impl ProxyHttp for CompositeServiceProxy {
                                     target: "Idempotency Cache".to_string(),
                                     query_preview: ctx.proxy_context.query_preview.clone(),
                                     variables_preview: ctx.proxy_context.variables_preview.clone(),
+                                    audit_tag: None,
+                                    audit_rule: None,
+                                    response_preview: None,
+                                    error_preview: None,
                                 });
                                 return Ok(true);
                             }
@@ -886,6 +933,10 @@ impl ProxyHttp for CompositeServiceProxy {
                                 target: "Route Policy".to_string(),
                                 query_preview: ctx.proxy_context.query_preview.clone(),
                                 variables_preview: ctx.proxy_context.variables_preview.clone(),
+                                audit_tag: None,
+                                audit_rule: None,
+                                response_preview: None,
+                                error_preview: Some(err_msg),
                             });
                             return Ok(true);
                         }
@@ -922,6 +973,10 @@ impl ProxyHttp for CompositeServiceProxy {
                                 target: format!("NATS: {}", ctx.proxy_context.request_topic),
                                 query_preview: ctx.proxy_context.query_preview.clone(),
                                 variables_preview: ctx.proxy_context.variables_preview.clone(),
+                                audit_tag: None,
+                                audit_rule: None,
+                                response_preview: None,
+                                error_preview: None,
                             });
 
                             return res;
@@ -931,6 +986,10 @@ impl ProxyHttp for CompositeServiceProxy {
                             StrategyRouter::resolve_mode_a_upstream(route, &self.named_upstreams)
                         {
                             ctx.proxy_context.target_upstream_addr = Some(addr);
+                        }
+
+                        if let Some(policy) = route.dispatch_policy {
+                            ctx.proxy_context.dispatch_policy = policy;
                         }
                     }
 
@@ -1013,12 +1072,28 @@ impl ProxyHttp for CompositeServiceProxy {
     {
         // 1. Fast path: If no response interceptors are registered, stream chunks through with zero buffering!
         if !ctx.proxy_context.has_response_interception {
+            let status = ctx.proxy_context.response_parts.as_ref().map(|p| p.status);
+            let is_err = status.map(|s| s.is_client_error() || s.is_server_error()).unwrap_or(false);
+
             if let Some(b) = body {
-                ctx.proxy_context.buffer.extend(&b[..]);
+                let max_bytes = self.telemetry_config.error_capture.max_body_bytes;
+                if is_err && self.telemetry_config.error_capture.enabled {
+                    if ctx.proxy_context.buffer.len() < max_bytes {
+                        let to_take = (max_bytes - ctx.proxy_context.buffer.len()).min(b.len());
+                        ctx.proxy_context.buffer.extend_from_slice(&b[..to_take]);
+                    }
+                } else if ctx.proxy_context.dispatch_policy != crate::core::config::ModeADispatchPolicy::ResponseOnly
+                    && ctx.proxy_context.dispatch_policy != crate::core::config::ModeADispatchPolicy::None
+                {
+                    ctx.proxy_context.buffer.extend(&b[..]);
+                }
             }
 
             if end_of_stream {
                 let body_str = std::str::from_utf8(&ctx.proxy_context.buffer).unwrap_or_default();
+                if is_err && self.telemetry_config.error_capture.enabled {
+                    ctx.proxy_context.error_preview = Some(body_str.to_string());
+                }
                 let response_body = match ctx.proxy_context.response_parts.as_ref() {
                     Some(parts) => ResponseBody::new(&parts.headers, body_str),
                     None => ResponseBody::new(&http::HeaderMap::new(), body_str),
@@ -1043,6 +1118,7 @@ impl ProxyHttp for CompositeServiceProxy {
                 ctx.proxy_context.request_id,
                 ctx.proxy_context.hlc,
             );
+            interceptor_ctx.duration_ms = ctx.proxy_context.start_time.elapsed().as_millis() as u64;
             interceptor_ctx.operation_name = ctx.proxy_context.active_operation.clone();
 
             let mut fake_parts = http::response::Response::builder()
@@ -1061,6 +1137,7 @@ impl ProxyHttp for CompositeServiceProxy {
                 &ctx.proxy_context.buffer,
             );
 
+            let max_bytes = self.telemetry_config.error_capture.max_body_bytes;
             let final_bytes = match verdict {
                 crate::interceptors::InterceptorVerdict::Pass => {
                     std::mem::take(&mut ctx.proxy_context.buffer)
@@ -1074,7 +1151,25 @@ impl ProxyHttp for CompositeServiceProxy {
                         rejection.code,
                         rejection.status_code
                     );
+                    ctx.proxy_context.error_preview = Some(format!("{}: {}", rejection.code, rejection.message));
                     rejection.to_graphql_response().into_bytes()
+                }
+                crate::interceptors::InterceptorVerdict::Audit { rule_name, tag, reason } => {
+                    log::info!(
+                        "Response flagged by audit rule '{}': tag={:?}, reason={}",
+                        rule_name,
+                        tag,
+                        reason
+                    );
+                    ctx.proxy_context.audit_tag = tag;
+                    ctx.proxy_context.audit_rule = Some(rule_name);
+                    let preview_len = ctx.proxy_context.buffer.len().min(max_bytes);
+                    let mut preview = String::from_utf8_lossy(&ctx.proxy_context.buffer[..preview_len]).to_string();
+                    if ctx.proxy_context.buffer.len() > max_bytes {
+                        preview.push_str("... [truncated]");
+                    }
+                    ctx.proxy_context.response_preview = Some(preview);
+                    std::mem::take(&mut ctx.proxy_context.buffer)
                 }
             };
 
@@ -1156,6 +1251,10 @@ impl ProxyHttp for CompositeServiceProxy {
                     (qp, None)
                 };
 
+                if let Some(err) = e {
+                    ctx.proxy_context.error_preview = Some(err.to_string());
+                }
+
                 self.traffic_recorder.record(crate::admin::TrafficRecord {
                     id: ctx.proxy_context.request_id.to_string(),
                     hlc: ctx.proxy_context.hlc.to_compact_string(),
@@ -1174,6 +1273,10 @@ impl ProxyHttp for CompositeServiceProxy {
                     target: target_str,
                     query_preview,
                     variables_preview,
+                    audit_tag: ctx.proxy_context.audit_tag.clone(),
+                    audit_rule: ctx.proxy_context.audit_rule.clone(),
+                    response_preview: ctx.proxy_context.response_preview.clone(),
+                    error_preview: ctx.proxy_context.error_preview.clone(),
                 });
             }
         }
@@ -1240,6 +1343,7 @@ mod tests {
                 upstream: Some("inventory".to_string()),
                 receipt_status: "ACCEPTED".to_string(),
                 interceptors: vec![],
+                dispatch_policy: None,
             },
         );
         routes.insert(
@@ -1251,6 +1355,7 @@ mod tests {
                 upstream: Some("crm".to_string()),
                 receipt_status: "ACCEPTED".to_string(),
                 interceptors: vec![],
+                dispatch_policy: None,
             },
         );
         routes.insert(
@@ -1262,6 +1367,7 @@ mod tests {
                 upstream: None,
                 receipt_status: "ACCEPTED".to_string(),
                 interceptors: vec![],
+                dispatch_policy: None,
             },
         );
 

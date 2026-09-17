@@ -12,6 +12,7 @@ pub struct InterceptorContext {
     pub operation_type: Option<GraphQLOperationType>,
     pub metadata: HashMap<String, String>,
     pub extensions: HashMap<String, serde_json::Value>,
+    pub duration_ms: u64,
 }
 
 impl InterceptorContext {
@@ -23,6 +24,7 @@ impl InterceptorContext {
             operation_type: None,
             metadata: HashMap::new(),
             extensions: HashMap::new(),
+            duration_ms: 0,
         }
     }
 
@@ -38,7 +40,7 @@ impl InterceptorContext {
 }
 
 /// Verdict returned by an interceptor.
-/// Allows pure pass-through, defensive rejection, or active payload transformation (e.g. anonymization, shaping).
+/// Allows pure pass-through, defensive rejection, active payload transformation, or non-destructive observation/auditing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InterceptorVerdict {
     /// The request/response passed without modification.
@@ -49,6 +51,12 @@ pub enum InterceptorVerdict {
     Transform {
         headers: Option<http::HeaderMap>,
         body: Option<Vec<u8>>,
+    },
+    /// The request/response passed without modification, but an audit/observation rule was triggered.
+    Audit {
+        rule_name: String,
+        tag: Option<String>,
+        reason: String,
     },
 }
 

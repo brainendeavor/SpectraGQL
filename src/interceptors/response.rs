@@ -138,6 +138,7 @@ impl ResponseInterceptorPipeline {
     ) -> InterceptorVerdict {
         let mut current_body: Option<Vec<u8>> = None;
         let mut current_headers: Option<http::HeaderMap> = None;
+        let mut audit_verdict: Option<InterceptorVerdict> = None;
 
         for interceptor in &self.interceptors {
             let effective_body = current_body.as_deref().unwrap_or(body);
@@ -152,6 +153,9 @@ impl ResponseInterceptorPipeline {
                         current_body = Some(b);
                     }
                 }
+                InterceptorVerdict::Audit { rule_name, tag, reason } => {
+                    audit_verdict = Some(InterceptorVerdict::Audit { rule_name, tag, reason });
+                }
             }
         }
 
@@ -160,6 +164,8 @@ impl ResponseInterceptorPipeline {
                 headers: current_headers,
                 body: current_body,
             }
+        } else if let Some(audit) = audit_verdict {
+            audit
         } else {
             InterceptorVerdict::Pass
         }

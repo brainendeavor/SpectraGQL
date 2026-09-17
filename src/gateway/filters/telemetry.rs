@@ -31,6 +31,19 @@ impl TelemetryDispatcher {
             return;
         }
 
+        // Skip broker telemetry dispatch for HTTP transport-level checks (OPTIONS / HEAD).
+        // CORS preflight checks and HEAD probes are not domain or business events.
+        if session.req_header().method == http::Method::OPTIONS
+            || session.req_header().method == http::Method::HEAD
+        {
+            log::debug!(
+                "Skipping broker telemetry dispatch for HTTP {}",
+                session.req_header().method
+            );
+            ctx.proxy_context.buffer.clear();
+            return;
+        }
+
         let duration_ms = ctx.proxy_context.start_time.elapsed().as_millis() as u64;
         let request_id = ctx.proxy_context.request_id;
         let hlc = ctx.proxy_context.hlc;
@@ -39,6 +52,19 @@ impl TelemetryDispatcher {
             RequestInfo::new(request_id, hlc, session.req_header().as_owned_parts())
         });
 
+        // Ensure request_topic is not left as placeholder "spectra"
+        if ctx.proxy_context.request_topic == "spectra" {
+            if let Some(op) = &ctx.proxy_context.active_operation {
+                ctx.proxy_context.request_topic = format!("operation.{}", op.to_lowercase());
+            } else if request_info.gql.is_some() {
+                ctx.proxy_context.request_topic = dispatch_method.get_dispatch_topic(&request_info);
+            } else {
+                log::debug!("No operation or stream subject resolved for telemetry dispatch; skipping.");
+                ctx.proxy_context.buffer.clear();
+                return;
+            }
+        }
+
         let op_name = request_info.gql.as_ref().and_then(|g| g.operation_name.clone());
 
         match error {
@@ -46,9 +72,12 @@ impl TelemetryDispatcher {
                 if let Some(key) = ctx.proxy_context.idempotency_key.as_ref() {
                     idempotency_engine.remove(key).await;
                 }
-                if ctx.proxy_context.dispatch_policy == ModeADispatchPolicy::ResponseOnly {
+                if ctx.proxy_context.dispatch_policy == ModeADispatchPolicy::ResponseOnly
+                    || ctx.proxy_context.dispatch_policy == ModeADispatchPolicy::None
+                {
                     log::info!(
-                        "Mode A response_only: suppressing event dispatch on connection error: {}",
+                        "Mode A {}: suppressing event dispatch on connection error: {}",
+                        if ctx.proxy_context.dispatch_policy == ModeADispatchPolicy::None { "none" } else { "response_only" },
                         err
                     );
                 } else {
@@ -93,9 +122,12 @@ impl TelemetryDispatcher {
                     if let Some(key) = ctx.proxy_context.idempotency_key.as_ref() {
                         idempotency_engine.remove(key).await;
                     }
-                    if ctx.proxy_context.dispatch_policy == ModeADispatchPolicy::ResponseOnly {
+                    if ctx.proxy_context.dispatch_policy == ModeADispatchPolicy::ResponseOnly
+                        || ctx.proxy_context.dispatch_policy == ModeADispatchPolicy::None
+                    {
                         log::info!(
-                            "Mode A response_only: suppressing event dispatch on HTTP error: {:?}",
+                            "Mode A {}: suppressing event dispatch on HTTP error: {:?}",
+                            if ctx.proxy_context.dispatch_policy == ModeADispatchPolicy::None { "none" } else { "response_only" },
                             status_code
                         );
                     } else {
@@ -140,28 +172,35 @@ impl TelemetryDispatcher {
                             .await;
                     }
 
-                    let response_info = ResponseInfo::new(
-                        request_id,
-                        hlc,
-                        response_body,
-                        http_response_headers,
-                    );
-                    let terminal_event = TerminalEvent::success(
-                        request_id,
-                        hlc,
-                        duration_ms,
-                        op_name,
-                        request_info,
-                        response_info,
-                    );
-                    let dispatch_result = dispatch_method
-                        .dispatch_terminal_event(&ctx.proxy_context.request_topic, &terminal_event)
-                        .await;
-                    Self::log_dispatch_error(
-                        &ctx.proxy_context.request_topic,
-                        &ctx.proxy_context.buffer,
-                        dispatch_result,
-                    );
+                    if ctx.proxy_context.dispatch_policy == ModeADispatchPolicy::None {
+                        log::info!(
+                            "Mode A none: suppressing event dispatch on success for op: {:?}",
+                            op_name
+                        );
+                    } else {
+                        let response_info = ResponseInfo::new(
+                            request_id,
+                            hlc,
+                            response_body,
+                            http_response_headers,
+                        );
+                        let terminal_event = TerminalEvent::success(
+                            request_id,
+                            hlc,
+                            duration_ms,
+                            op_name,
+                            request_info,
+                            response_info,
+                        );
+                        let dispatch_result = dispatch_method
+                            .dispatch_terminal_event(&ctx.proxy_context.request_topic, &terminal_event)
+                            .await;
+                        Self::log_dispatch_error(
+                            &ctx.proxy_context.request_topic,
+                            &ctx.proxy_context.buffer,
+                            dispatch_result,
+                        );
+                    }
                 }
             }
         }
@@ -174,12 +213,19 @@ impl TelemetryDispatcher {
         dispatch_result: pingora::Result<()>,
     ) {
         if let Err(e) = dispatch_result {
+            let preview = if buffer.is_empty() {
+                ""
+            } else {
+                let len = buffer.len().min(256);
+                std::str::from_utf8(&buffer[..len]).unwrap_or("<binary>")
+            };
             log::error!(
-                "DISPATCH failed. {:?} context: {} request_topic: {}\n{:?}",
+                "DISPATCH failed. {:?} context: {} request_topic: {} (preview: {} bytes) {}",
                 e.etype(),
                 e.to_string(),
                 request_topic,
-                buffer
+                buffer.len(),
+                preview
             );
         }
     }

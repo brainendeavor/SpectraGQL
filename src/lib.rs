@@ -114,7 +114,8 @@ pub fn build_composite_service(spectra_configuration: &SpectraConfig) -> Result<
         .with_subscriptions(subscription_hub, spectra_configuration.subscriptions.clone())
         .with_admin(admin_engine)
         .with_interceptor_manager(Arc::new(interceptor_manager))
-        .with_traffic_recorder(traffic_recorder);
+        .with_traffic_recorder(traffic_recorder)
+        .with_telemetry(spectra_configuration.telemetry.clone());
     composite_service.add_service_config(gql_service);
     composite_service.add_service_config(rest_service);
 
