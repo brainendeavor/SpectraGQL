@@ -93,6 +93,14 @@
     .btn-primary { background: #1f6feb; border-color: #1f6feb; color: white; }
     .btn-primary:hover { background: #388bfd; }
     .btn-active { background: rgba(88, 166, 255, 0.2); border-color: var(--primary); color: var(--primary); font-weight: 600; }
+    .btn-sm { padding: 4px 9px; font-size: 11.5px; }
+
+    /* Filter Input & Kbd */
+    input.filter-input { background: #0d1117; border: 1px solid var(--border); border-radius: 6px; color: var(--text-bright); padding: 6px 12px; font-size: 13px; outline: none; box-sizing: border-box; transition: border-color 0.2s, box-shadow 0.2s; }
+    input.filter-input:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(88, 166, 255, 0.2); }
+    kbd { display: inline-block; background: #161b22; border: 1px solid #30363d; border-bottom: 2px solid #21262d; border-radius: 4px; padding: 2px 6px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; color: #c9d1d9; box-shadow: 0 1px 0 rgba(0, 0, 0, 0.2); line-height: 1.2; }
+    .pill-policy-override { background: rgba(210, 153, 34, 0.25); color: #e3b341; border: 1px solid rgba(210, 153, 34, 0.4); }
+    .pill-policy-inherited { background: rgba(139, 148, 158, 0.15); color: var(--text-muted); border: 1px solid rgba(139, 148, 158, 0.3); }
     
     .code-box { background: #050911; border: 1px solid var(--border); border-radius: 6px; padding: 10px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px; color: #7ee787; max-height: 140px; overflow-y: auto; white-space: pre-wrap; word-break: break-all; }
     .meta-key { color: var(--text-muted); font-size: 12px; }
@@ -106,7 +114,10 @@
         <div class="logo-badge">SpectraGQL</div>
         <h1>Appliance Gateway Admin</h1>
       </div>
-      <div style="display: flex; align-items: center; gap: 14px;">
+      <div style="display: flex; align-items: center; gap: 12px;">
+        <button class="btn" onclick="openShortcutsModal()" style="font-size: 12px; padding: 4px 10px; display: flex; align-items: center; gap: 6px;" title="View Keyboard Shortcuts (?)">
+          ⌨️ Shortcuts <kbd>?</kbd>
+        </button>
         <div style="display: flex; align-items: center; gap: 8px;">
           <label for="app-select" style="font-size: 13px; color: var(--text-muted); font-weight: 500;">Application:</label>
           <select id="app-select" class="app-select-dropdown" onchange="onAppFilterChange(this.value)">
@@ -127,6 +138,11 @@
         <div class="card-title">Broker Protocol</div>
         <div class="card-value" id="kpi-broker-method">--</div>
         <div class="card-meta" id="kpi-broker-addr">Target: --</div>
+      </div>
+      <div class="card">
+        <div class="card-title">Default Dispatch Policy</div>
+        <div class="card-value" id="kpi-dispatch-policy" style="font-size: 18px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--accent-cyan);">--</div>
+        <div class="card-meta" id="kpi-dispatch-meta">Mode A Proxy Baseline</div>
       </div>
       <div class="card">
         <div class="card-title">JetStream Stream</div>
@@ -151,7 +167,7 @@
     </div>
 
     <!-- 1. Event Sink & Broker Telemetry Panel -->
-    <div class="section-card">
+    <div class="section-card" id="section-eventsink">
       <div class="section-header">
         <div>
           <div class="section-title" id="eventsink-section-title">Event Sink & Broker Telemetry</div>
@@ -217,7 +233,7 @@
     </div>
 
     <!-- 2. Live Traffic & Activity Inspector Panel -->
-    <div class="section-card">
+    <div class="section-card" id="section-traffic">
       <div class="section-header">
         <div>
           <div class="section-title">Live Traffic & Activity Inspector</div>
@@ -269,7 +285,7 @@
     </div>
 
     <!-- 3. GraphQL Mutation Routing Breakdown -->
-    <div class="section-card">
+    <div class="section-card" id="section-schema-coverage">
       <div class="section-header">
         <div>
           <div class="section-title">GraphQL Mutation Routing Breakdown</div>
@@ -298,41 +314,55 @@
       </div>
     </div>
 
-    <!-- 4. GraphQL Mutations Inspection Table -->
-    <div class="section-card">
-      <div class="section-title" style="margin-bottom: 14px;">Introspected GraphQL Mutations</div>
-      <table>
-        <thead>
-          <tr>
-            <th>Mutation Field Name</th>
-            <th>Routing Classification</th>
-            <th>Execution Mode</th>
-            <th>Target / Outcome</th>
-          </tr>
-        </thead>
-        <tbody id="table-schema-mutations">
-          <tr><td colspan="4" style="text-align: center; color: var(--text-muted);">Awaiting upstream introspection...</td></tr>
-        </tbody>
-      </table>
-    </div>
+    <!-- 4. Operations & Gateway Route Matrix (Option A Unified View) -->
+    <div class="section-card" id="section-matrix">
+      <div class="section-header">
+        <div>
+          <div class="section-title">Operations & Gateway Route Matrix</div>
+          <div style="font-size: 13px; color: var(--text-muted); margin-top: 4px;">
+            Unified GraphQL mutation schema contracts correlated with active Pingora edge dispatch policies and target upstreams.
+          </div>
+        </div>
+        <div style="display: flex; gap: 8px; align-items: center;">
+          <button class="btn btn-sm" onclick="openShortcutsModal()" title="View Keyboard Shortcuts (?)">⌨️ Shortcuts <kbd>?</kbd></button>
+          <button class="btn btn-sm btn-primary" onclick="refreshSchema()" id="btn-refresh-schema-matrix">🔄 Refresh Schema</button>
+        </div>
+      </div>
 
-    <!-- 5. Configured Routes Table -->
-    <div class="section-card">
-      <div class="section-title" style="margin-bottom: 14px;">Active Gateway Route Table</div>
+      <!-- Filter & Search Toolbar -->
+      <div style="display: flex; gap: 10px; align-items: center; justify-content: space-between; flex-wrap: wrap; margin-bottom: 14px;">
+        <div style="display: flex; gap: 10px; align-items: center; flex: 1; min-width: 280px;">
+          <div style="position: relative; flex: 1; max-width: 440px;">
+            <input type="text" id="matrix-search-input" class="filter-input" placeholder="Search operations, routes, upstreams, policies... (Press / to focus)" oninput="onMatrixSearch(this.value)" style="width: 100%; padding-left: 32px;">
+            <span style="position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: var(--text-muted); font-size: 13px; pointer-events: none;">🔍</span>
+          </div>
+          <span id="matrix-match-count" style="font-size: 12px; color: var(--text-muted); white-space: nowrap;">Loading operations...</span>
+        </div>
+        <div style="display: flex; gap: 6px; align-items: center; flex-wrap: wrap;">
+          <button id="btn-matrix-all" class="btn btn-sm btn-active" onclick="setMatrixFilter('all')">All</button>
+          <button id="btn-matrix-async" class="btn btn-sm" onclick="setMatrixFilter('async')">⚡ Async (Mode B)</button>
+          <button id="btn-matrix-sync" class="btn btn-sm" onclick="setMatrixFilter('sync')">🔀 Targeted (Mode A)</button>
+          <button id="btn-matrix-fallback" class="btn btn-sm" onclick="setMatrixFilter('fallback')">🌐 Monolith</button>
+          <button id="btn-matrix-override" class="btn btn-sm" onclick="setMatrixFilter('override')">🔧 Policy Override</button>
+          <button id="btn-matrix-drift" class="btn btn-sm" onclick="setMatrixFilter('drift')">⚠️ Drifted</button>
+        </div>
+      </div>
+
+      <!-- Unified Matrix Table -->
       <table>
         <thead>
           <tr>
-            <th>Route ID</th>
-            <th>Operation Name</th>
-            <th>Mode</th>
-            <th>Status</th>
-            <th>Upstream Target</th>
-            <th>Target Address</th>
-            <th>Receipt Status</th>
+            <th>GraphQL Operation</th>
+            <th>Gateway Route ID</th>
+            <th>Strategy / Mode</th>
+            <th>Target Upstream / Socket</th>
+            <th>Dispatch Policy</th>
+            <th>Status / Health</th>
+            <th>Interceptors & Guards</th>
           </tr>
         </thead>
-        <tbody id="table-routes">
-          <tr><td colspan="7" style="text-align: center; color: var(--text-muted);">Loading route mapping...</td></tr>
+        <tbody id="table-matrix-operations">
+          <tr><td colspan="7" style="text-align: center; color: var(--text-muted);">Loading unified route & schema matrix...</td></tr>
         </tbody>
       </table>
     </div>
@@ -415,6 +445,13 @@
     let autoRefreshActive = true;
     let refreshTimer = null;
 
+    // Route Matrix State
+    let cachedRoutes = null;
+    let cachedSchema = null;
+    let cachedStatus = null;
+    let matrixSearchQuery = '';
+    let matrixFilter = 'all';
+
     function getAppBadge(appId) {
       if (!appId || appId === 'default') {
         return '<span class="pill pill-app-default">default</span>';
@@ -455,10 +492,19 @@
     async function loadStatus() {
       const status = await fetchJSON('/admin/api/v1/status');
       if (status) {
+        cachedStatus = status;
         document.getElementById('uptime-display').innerText = 'Uptime: ' + formatUptime(status.uptime_seconds);
         document.getElementById('kpi-broker-method').innerText = status.broker_method;
         document.getElementById('kpi-broker-addr').innerText = 'Target: ' + status.broker_addr;
         document.getElementById('gateway-status').innerText = status.broker_status.toUpperCase();
+
+        const defaultPolicy = status.mode_a_dispatch_policy || status.sync_dispatch_policy || 'response_with_failure';
+        const policyEl = document.getElementById('kpi-dispatch-policy');
+        if (policyEl) {
+          policyEl.innerText = defaultPolicy;
+        }
+
+        renderMatrix();
 
         if (status.apps && Array.isArray(status.apps)) {
           const appSelect = document.getElementById('app-select');
@@ -816,24 +862,8 @@
     async function loadRoutes() {
       const data = await fetchJSON('/admin/api/v1/routes');
       if (!data) return;
-
-      const tbody = document.getElementById('table-routes');
-      if (!data.routes || data.routes.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="7" style="text-align: center; color: var(--text-muted);">No custom mutation routes configured. All traffic falls through to default upstream.</td></tr>';
-        return;
-      }
-
-      tbody.innerHTML = data.routes.map(r => `
-        <tr>
-          <td><code>${r.name}</code></td>
-          <td><strong>${r.operation}</strong></td>
-          <td><span class="pill ${r.mode === 'Async' || r.mode === 'B' ? 'pill-mode-b' : 'pill-strangled'}">${r.mode}</span></td>
-          <td>${r.enabled !== false ? '<span class="pill pill-success">Active</span>' : '<span class="pill pill-danger">Disabled</span>'}</td>
-          <td><span class="pill pill-upstream">${r.upstream}</span></td>
-          <td><code>${r.upstream_addr}</code></td>
-          <td><code>${r.receipt_status}</code></td>
-        </tr>
-      `).join('');
+      cachedRoutes = data;
+      renderMatrix();
     }
 
     async function loadFluxcells() {
@@ -996,6 +1026,7 @@
     async function loadSchema() {
       const data = await fetchJSON('/admin/api/v1/schema');
       if (!data) return;
+      cachedSchema = data;
 
       const asyncCount = data.async_count !== undefined ? data.async_count : (data.mode_b_count || 0);
       const targetedCount = data.targeted_count !== undefined ? data.targeted_count : (data.strangled_count || 0);
@@ -1013,54 +1044,249 @@
       if (document.getElementById('seg-async')) document.getElementById('seg-async').style.width = asyncPct + '%';
       if (document.getElementById('seg-targeted')) document.getElementById('seg-targeted').style.width = targetedPct + '%';
       if (document.getElementById('seg-default')) document.getElementById('seg-default').style.width = defaultPct + '%';
-      if (document.getElementById('seg-mode-b')) document.getElementById('seg-mode-b').style.width = asyncPct + '%';
-      if (document.getElementById('seg-strangled')) document.getElementById('seg-strangled').style.width = targetedPct + '%';
-      if (document.getElementById('seg-monolith')) document.getElementById('seg-monolith').style.width = defaultPct + '%';
 
       if (document.getElementById('count-async')) document.getElementById('count-async').innerText = asyncCount;
       if (document.getElementById('count-targeted')) document.getElementById('count-targeted').innerText = targetedCount;
       if (document.getElementById('count-default')) document.getElementById('count-default').innerText = defaultCount;
-      if (document.getElementById('count-mode-b')) document.getElementById('count-mode-b').innerText = asyncCount;
-      if (document.getElementById('count-strangled')) document.getElementById('count-strangled').innerText = targetedCount;
-      if (document.getElementById('count-monolith')) document.getElementById('count-monolith').innerText = defaultCount;
 
       const driftBox = document.getElementById('drift-container');
       const driftList = document.getElementById('drift-list');
       if (data.drifted_routes && data.drifted_routes.length > 0) {
         driftBox.style.display = 'block';
-        driftList.innerHTML = data.drifted_routes.map(d => `<li>${d}</li>`).join('');
+        driftList.innerHTML = data.drifted_routes.map(d => `<li>${escapeHtml(d)}</li>`).join('');
       } else {
         driftBox.style.display = 'none';
       }
 
-      const tbody = document.getElementById('table-schema-mutations');
-      if (!data.mutations || data.mutations.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="4" style="text-align: center; color: var(--text-muted);">No mutations discovered from upstream introspection.</td></tr>';
+      renderMatrix();
+    }
+
+    function toSnakeCase(str) {
+      return (str || '').replace(/[A-Z]/g, letter => `_${letter.toLowerCase()}`).replace(/^_/, '');
+    }
+
+    function setMatrixFilter(filter) {
+      matrixFilter = filter;
+      const buttons = ['all', 'async', 'sync', 'fallback', 'override', 'drift'];
+      buttons.forEach(b => {
+        const btn = document.getElementById(`btn-matrix-${b}`);
+        if (btn) {
+          if (b === filter) btn.classList.add('btn-active');
+          else btn.classList.remove('btn-active');
+        }
+      });
+      renderMatrix();
+    }
+
+    function onMatrixSearch(query) {
+      matrixSearchQuery = (query || '').trim().toLowerCase();
+      renderMatrix();
+    }
+
+    function renderMatrix() {
+      const tbody = document.getElementById('table-matrix-operations');
+      if (!tbody) return;
+
+      const routes = (cachedRoutes && cachedRoutes.routes) ? cachedRoutes.routes : [];
+      const mutations = (cachedSchema && cachedSchema.mutations) ? cachedSchema.mutations : [];
+      const defaultUpstreamAddr = (cachedRoutes && cachedRoutes.default_upstream_addr) ? cachedRoutes.default_upstream_addr : '127.0.0.1:4000';
+      const defaultPolicy = (cachedStatus && (cachedStatus.mode_a_dispatch_policy || cachedStatus.sync_dispatch_policy))
+        ? (cachedStatus.mode_a_dispatch_policy || cachedStatus.sync_dispatch_policy)
+        : 'response_with_failure';
+
+      const routeByOp = new Map();
+      const routeByName = new Map();
+      for (const r of routes) {
+        if (r.operation) routeByOp.set(r.operation, r);
+        if (r.name) routeByName.set(r.name, r);
+      }
+
+      const rows = [];
+      const processedRouteOps = new Set();
+
+      // 1. Process schema mutations
+      for (const m of mutations) {
+        const matchedRoute = (m.route_name && routeByName.get(m.route_name)) || routeByOp.get(m.field_name);
+        if (matchedRoute) {
+          processedRouteOps.add(matchedRoute.operation);
+        }
+
+        const opName = m.field_name;
+        const routeId = matchedRoute ? matchedRoute.name : (m.route_name || null);
+        const isModeB = (matchedRoute && (matchedRoute.mode === 'Async' || matchedRoute.mode === 'B')) || m.classification === 'AsyncReceipt' || m.classification === 'EdgeTerminatedModeB';
+        const isTargeted = !isModeB && ((matchedRoute && matchedRoute.upstream && matchedRoute.upstream !== 'default') || m.classification === 'TargetedService' || m.classification === 'Strangled');
+        const isFallback = !isModeB && !isTargeted;
+
+        const modeLabel = isModeB ? 'Async (Mode B)' : 'Sync (Mode A)';
+        const upstreamName = matchedRoute ? matchedRoute.upstream : (m.target_upstream || 'default');
+        const upstreamAddr = matchedRoute ? matchedRoute.upstream_addr : (isFallback ? defaultUpstreamAddr : '—');
+        const dispatchPolicy = matchedRoute ? matchedRoute.dispatch_policy : (isModeB ? 'event_sink' : (m.dispatch_policy || defaultPolicy));
+        const isOverride = matchedRoute ? matchedRoute.is_policy_override : (m.is_policy_override || false);
+        const receiptStatus = matchedRoute ? matchedRoute.receipt_status : (m.receipt_status || 'ACCEPTED');
+        const enabled = matchedRoute ? matchedRoute.enabled : true;
+        const interceptors = matchedRoute ? (matchedRoute.interceptors || []) : [];
+
+        rows.push({
+          operation: opName,
+          routeId: routeId,
+          mode: modeLabel,
+          isModeB: isModeB,
+          isTargeted: isTargeted,
+          isFallback: isFallback,
+          upstream: upstreamName,
+          upstreamAddr: upstreamAddr,
+          dispatchPolicy: dispatchPolicy,
+          isOverride: isOverride,
+          receiptStatus: receiptStatus,
+          enabled: enabled,
+          interceptors: interceptors,
+          inSchema: true,
+          isDrifted: false,
+        });
+      }
+
+      // 2. Process configured routes not in schema (drifted or uninspected)
+      for (const r of routes) {
+        if (!processedRouteOps.has(r.operation)) {
+          const isModeB = r.mode === 'Async' || r.mode === 'B';
+          const isDrifted = cachedSchema && (cachedSchema.total_mutations > 0 || (cachedSchema.drifted_routes && cachedSchema.drifted_routes.length > 0));
+          rows.push({
+            operation: r.operation,
+            routeId: r.name,
+            mode: isModeB ? 'Async (Mode B)' : 'Sync (Mode A)',
+            isModeB: isModeB,
+            isTargeted: !isModeB && r.upstream !== 'default',
+            isFallback: !isModeB && r.upstream === 'default',
+            upstream: r.upstream,
+            upstreamAddr: r.upstream_addr,
+            dispatchPolicy: r.dispatch_policy,
+            isOverride: r.is_policy_override,
+            receiptStatus: r.receipt_status,
+            enabled: r.enabled,
+            interceptors: r.interceptors || [],
+            inSchema: false,
+            isDrifted: isDrifted,
+          });
+        }
+      }
+
+      // If no data loaded yet
+      if (rows.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="7" style="text-align: center; color: var(--text-muted); padding: 24px;">Awaiting schema introspection and route configuration...</td></tr>';
+        const countEl = document.getElementById('matrix-match-count');
+        if (countEl) countEl.innerText = '0 operations';
         return;
       }
 
-      tbody.innerHTML = data.mutations.map(m => {
-        let pillClass = 'pill-monolith';
-        let label = 'Default Upstream';
-        let target = m.target_upstream || 'default';
-        let modeLabel = m.mode === 'B' || m.mode === 'Async' ? 'Async' : 'Sync';
+      // Filter rows
+      let filtered = rows;
+      if (matrixFilter === 'async') {
+        filtered = filtered.filter(r => r.isModeB);
+      } else if (matrixFilter === 'sync') {
+        filtered = filtered.filter(r => r.isTargeted);
+      } else if (matrixFilter === 'fallback') {
+        filtered = filtered.filter(r => r.isFallback);
+      } else if (matrixFilter === 'override') {
+        filtered = filtered.filter(r => r.isOverride);
+      } else if (matrixFilter === 'drift') {
+        filtered = filtered.filter(r => r.isDrifted || !r.enabled);
+      }
 
-        if (m.classification === 'TargetedService' || m.classification === 'Strangled') {
-          pillClass = 'pill-strangled';
-          label = 'Targeted Service';
-          target = m.target_upstream || 'microservice';
-        } else if (m.classification === 'AsyncReceipt' || m.classification === 'EdgeTerminatedModeB') {
-          pillClass = 'pill-mode-b';
-          label = 'Async Receipt';
-          target = `Event Stream (${m.receipt_status || 'ACCEPTED'})`;
+      if (matrixSearchQuery) {
+        filtered = filtered.filter(r => {
+          const op = (r.operation || '').toLowerCase();
+          const route = (r.routeId || '').toLowerCase();
+          const up = (r.upstream || '').toLowerCase();
+          const addr = (r.upstreamAddr || '').toLowerCase();
+          const policy = (r.dispatchPolicy || '').toLowerCase();
+          return op.includes(matrixSearchQuery) ||
+                 route.includes(matrixSearchQuery) ||
+                 up.includes(matrixSearchQuery) ||
+                 addr.includes(matrixSearchQuery) ||
+                 policy.includes(matrixSearchQuery);
+        });
+      }
+
+      const countEl = document.getElementById('matrix-match-count');
+      if (countEl) {
+        countEl.innerText = `Showing ${filtered.length} of ${rows.length} operations`;
+      }
+
+      if (filtered.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="7" style="text-align: center; color: var(--text-muted); padding: 24px;">No operations matching filter "${escapeHtml(matrixSearchQuery || matrixFilter)}".</td></tr>`;
+        return;
+      }
+
+      tbody.innerHTML = filtered.map(r => {
+        let aliasBadge = '';
+        if (r.routeId && r.routeId !== r.operation && r.routeId !== toSnakeCase(r.operation)) {
+          aliasBadge = `<div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">Alias: <code>${escapeHtml(r.routeId)}</code></div>`;
+        }
+
+        const routeHtml = r.routeId
+          ? `<strong><code>${escapeHtml(r.routeId)}</code></strong>`
+          : `<span style="color: var(--text-muted); font-style: italic;">— (monolith fallback)</span>`;
+
+        const modePill = r.isModeB
+          ? '<span class="pill pill-mode-b">⚡ Async (Mode B)</span>'
+          : '<span class="pill pill-strangled">🔀 Sync (Mode A)</span>';
+
+        let targetHtml = '';
+        if (r.isModeB) {
+          targetHtml = `<div><span class="pill pill-mode-b">Event Sink</span></div><div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">Receipt: <code>${escapeHtml(r.receiptStatus || 'ACCEPTED')}</code></div>`;
+        } else if (r.upstream && r.upstream !== 'default') {
+          targetHtml = `<div><span class="pill pill-upstream">${escapeHtml(r.upstream)}</span></div><div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;"><code>${escapeHtml(r.upstreamAddr)}</code></div>`;
+        } else {
+          targetHtml = `<div><span class="pill pill-monolith">default</span></div><div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;"><code>${escapeHtml(r.upstreamAddr)}</code></div>`;
+        }
+
+        let policyPill = '';
+        if (r.isModeB) {
+          policyPill = '<span class="pill pill-monolith" style="font-size: 11px;">— (Async Receipt)</span>';
+        } else {
+          const pol = r.dispatchPolicy || 'response_with_failure';
+          let polColorClass = 'pill-success';
+          if (pol === 'none') polColorClass = 'pill-monolith';
+          else if (pol === 'raw_audit') polColorClass = 'pill-replay';
+          else if (pol === 'response_only') polColorClass = 'pill-mode-b';
+
+          const tagHtml = r.isOverride
+            ? '<span class="pill pill-policy-override" style="font-size: 10px; margin-left: 4px;" title="Route-level explicit override">override</span>'
+            : '<span class="pill pill-policy-inherited" style="font-size: 10px; margin-left: 4px;" title="Inherited from global [gql.sync]">inherited</span>';
+
+          policyPill = `<span class="pill ${polColorClass}" style="font-size: 11.5px;">${escapeHtml(pol)}</span>${tagHtml}`;
+        }
+
+        let statusPill = '';
+        if (r.isDrifted) {
+          statusPill = '<span class="pill pill-warning">⚠️ Schema Drift</span>';
+        } else if (r.enabled === false) {
+          statusPill = '<span class="pill pill-danger">⏸ Disabled</span>';
+        } else if (r.isModeB) {
+          statusPill = '<span class="pill pill-success">✓ Edge Terminated</span>';
+        } else if (r.isTargeted) {
+          statusPill = '<span class="pill pill-success">✓ Strangled</span>';
+        } else {
+          statusPill = '<span class="pill pill-monolith">🌐 Monolith Fallback</span>';
+        }
+
+        let interceptorsHtml = '<span style="color: var(--text-muted);">—</span>';
+        if (r.interceptors && r.interceptors.length > 0) {
+          interceptorsHtml = r.interceptors.map(i => `<span class="pill pill-warning" style="font-size: 11px; margin-right: 4px;">🛡️ ${escapeHtml(i)}</span>`).join('');
         }
 
         return `
           <tr>
-            <td><strong>${m.field_name}</strong></td>
-            <td><span class="pill ${pillClass}">${label}</span></td>
-            <td><code>${modeLabel}</code></td>
-            <td>${m.target_upstream ? `<span class="pill pill-upstream">${target}</span>` : `<code>${target}</code>`}</td>
+            <td>
+              <div style="font-weight: 700; color: var(--text-bright); font-size: 13.5px;">${escapeHtml(r.operation)}</div>
+              ${aliasBadge}
+            </td>
+            <td>${routeHtml}</td>
+            <td>${modePill}</td>
+            <td>${targetHtml}</td>
+            <td>${policyPill}</td>
+            <td>${statusPill}</td>
+            <td>${interceptorsHtml}</td>
           </tr>
         `;
       }).join('');
@@ -1075,17 +1301,104 @@
     }
 
     async function refreshSchema() {
-      const btn = document.getElementById('btn-refresh-schema');
-      btn.innerText = 'Refreshing...';
-      btn.disabled = true;
+      const btn1 = document.getElementById('btn-refresh-schema');
+      const btn2 = document.getElementById('btn-refresh-schema-matrix');
+      if (btn1) { btn1.innerText = 'Refreshing...'; btn1.disabled = true; }
+      if (btn2) { btn2.innerText = 'Refreshing...'; btn2.disabled = true; }
       try {
         await fetch('/admin/api/v1/schema/refresh', { method: 'POST' });
-        await loadSchema();
+        await Promise.all([loadSchema(), loadRoutes()]);
       } finally {
-        btn.innerText = 'Refresh Schema';
-        btn.disabled = false;
+        if (btn1) { btn1.innerText = 'Refresh Schema'; btn1.disabled = false; }
+        if (btn2) { btn2.innerText = '🔄 Refresh Schema'; btn2.disabled = false; }
       }
     }
+
+    function openShortcutsModal() {
+      document.getElementById('shortcuts-modal').style.display = 'flex';
+    }
+
+    function closeShortcutsModal() {
+      document.getElementById('shortcuts-modal').style.display = 'none';
+    }
+
+    function toggleShortcutsModal() {
+      const m = document.getElementById('shortcuts-modal');
+      if (!m) return;
+      m.style.display = m.style.display === 'flex' ? 'none' : 'flex';
+    }
+
+    window.addEventListener('keydown', (e) => {
+      const activeEl = document.activeElement;
+      const isInput = activeEl && (
+        activeEl.tagName === 'INPUT' ||
+        activeEl.tagName === 'TEXTAREA' ||
+        activeEl.tagName === 'SELECT' ||
+        activeEl.isContentEditable
+      );
+
+      if (e.key === 'Escape') {
+        const shortcutsModal = document.getElementById('shortcuts-modal');
+        const workerLogsModal = document.getElementById('worker-logs-modal');
+        const devUploadModal = document.getElementById('dev-upload-modal');
+        if (shortcutsModal && shortcutsModal.style.display === 'flex') {
+          closeShortcutsModal();
+          return;
+        }
+        if (workerLogsModal && workerLogsModal.style.display === 'flex') {
+          closeWorkerLogsModal();
+          return;
+        }
+        if (devUploadModal && devUploadModal.style.display === 'flex') {
+          closeDevUploadModal();
+          return;
+        }
+        if (isInput) {
+          if (activeEl.id === 'matrix-search-input' && activeEl.value) {
+            activeEl.value = '';
+            onMatrixSearch('');
+          }
+          activeEl.blur();
+        }
+        return;
+      }
+
+      if (isInput) return;
+
+      if (e.key === '/' || e.key === 's') {
+        e.preventDefault();
+        const searchInput = document.getElementById('matrix-search-input');
+        if (searchInput) {
+          document.getElementById('section-matrix')?.scrollIntoView({ behavior: 'smooth' });
+          searchInput.focus();
+          searchInput.select();
+        }
+      } else if (e.key === '?') {
+        e.preventDefault();
+        toggleShortcutsModal();
+      } else if (e.key === 'r') {
+        e.preventDefault();
+        refreshAll();
+      } else if (e.key === 'p' || e.key === ' ') {
+        e.preventDefault();
+        toggleAutoRefresh();
+      } else if (e.key === 'c') {
+        e.preventDefault();
+        clearTraffic();
+      } else if (e.key === 't') {
+        e.preventDefault();
+        document.getElementById('section-traffic')?.scrollIntoView({ behavior: 'smooth' });
+      } else if (e.key === 'm') {
+        e.preventDefault();
+        document.getElementById('section-matrix')?.scrollIntoView({ behavior: 'smooth' });
+      } else if (e.key === 'f') {
+        e.preventDefault();
+        document.getElementById('fluxcell-governance-panel')?.scrollIntoView({ behavior: 'smooth' });
+      } else if (e.key === 'e') {
+        e.preventDefault();
+        document.getElementById('section-eventsink')?.scrollIntoView({ behavior: 'smooth' });
+      }
+    });
 
     async function refreshAll() {
       if (!autoRefreshActive) return;
@@ -1238,6 +1551,40 @@
           <button class="btn" onclick="closeDevUploadModal()" style="background:#334155; color:#cbd5e1;">Cancel</button>
           <button class="btn btn-primary" onclick="submitDevUpload()">Stage Artifact</button>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Keyboard Shortcuts Cheat Sheet Modal -->
+  <div id="shortcuts-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.75); z-index:9999; justify-content:center; align-items:center; backdrop-filter:blur(3px);" onclick="if(event.target===this) closeShortcutsModal()">
+    <div style="width: 580px; max-width: 94vw; background: #0f172a; border: 1px solid #334155; border-radius: 10px; box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.7); overflow: hidden;">
+      <div style="padding: 16px 20px; border-bottom: 1px solid #334155; display: flex; justify-content: space-between; align-items: center; background: #1e293b;">
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <span style="font-size: 18px;">⌨️</span>
+          <h3 style="margin: 0; font-size: 16px; color: #f8fafc;">Admin Keyboard Shortcuts</h3>
+        </div>
+        <button class="btn btn-sm" onclick="closeShortcutsModal()" style="background:#334155; color:#cbd5e1; border: 1px solid #475569;">✕</button>
+      </div>
+      <div style="padding: 20px; display: grid; grid-template-columns: 1fr 1fr; gap: 16px; font-size: 13px;">
+        <div>
+          <div style="font-weight: 700; color: var(--text-muted); font-size: 11px; text-transform: uppercase; margin-bottom: 10px;">Navigation & Search</div>
+          <div style="display: flex; justify-content: space-between; margin-bottom: 9px;"><span style="color: var(--text-bright);">Focus Matrix Search</span> <span><kbd>/</kbd> or <kbd>s</kbd></span></div>
+          <div style="display: flex; justify-content: space-between; margin-bottom: 9px;"><span style="color: var(--text-bright);">Jump to Live Traffic</span> <kbd>t</kbd></div>
+          <div style="display: flex; justify-content: space-between; margin-bottom: 9px;"><span style="color: var(--text-bright);">Jump to Route Matrix</span> <kbd>m</kbd></div>
+          <div style="display: flex; justify-content: space-between; margin-bottom: 9px;"><span style="color: var(--text-bright);">Jump to Fluxcells</span> <kbd>f</kbd></div>
+          <div style="display: flex; justify-content: space-between;"><span style="color: var(--text-bright);">Jump to Event Sink</span> <kbd>e</kbd></div>
+        </div>
+        <div>
+          <div style="font-weight: 700; color: var(--text-muted); font-size: 11px; text-transform: uppercase; margin-bottom: 10px;">Actions & Controls</div>
+          <div style="display: flex; justify-content: space-between; margin-bottom: 9px;"><span style="color: var(--text-bright);">Refresh All Data</span> <kbd>r</kbd></div>
+          <div style="display: flex; justify-content: space-between; margin-bottom: 9px;"><span style="color: var(--text-bright);">Play / Pause Polling</span> <span><kbd>p</kbd> or <kbd>Space</kbd></span></div>
+          <div style="display: flex; justify-content: space-between; margin-bottom: 9px;"><span style="color: var(--text-bright);">Clear Traffic Log</span> <kbd>c</kbd></div>
+          <div style="display: flex; justify-content: space-between; margin-bottom: 9px;"><span style="color: var(--text-bright);">Close Modals / Blur</span> <kbd>Esc</kbd></div>
+          <div style="display: flex; justify-content: space-between;"><span style="color: var(--text-bright);">Show Cheat Sheet</span> <kbd>?</kbd></div>
+        </div>
+      </div>
+      <div style="padding: 12px 20px; background: #182234; border-top: 1px solid #334155; font-size: 12px; color: var(--text-muted); text-align: right;">
+        Press <kbd>Esc</kbd> anytime to dismiss
       </div>
     </div>
   </div>
