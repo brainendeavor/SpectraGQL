@@ -1,11 +1,13 @@
 pub mod api;
 pub mod eventsink;
 pub mod registry;
+pub mod router;
 pub mod schema_inspector;
 pub mod traffic;
 
 pub use eventsink::{ConsumerMetrics, EventSinkInspector, EventSinkResponse, StreamMetrics};
 pub use registry::{WorkerLogEntry, WorkerLogsResponse, WorkerRegistry, WorkerSummary, WorkerTelemetryReport};
+pub use router::{AdminRoute, AdminRouter};
 pub use traffic::{TrafficRecord, TrafficRecorder, TrafficResponse, TrafficStats, format_timestamp, now_epoch_ms};
 
 use std::collections::HashMap;
@@ -133,6 +135,7 @@ pub struct AdminEngine {
     pub eventsink_inspector: EventSinkInspector,
     pub worker_registry: Arc<WorkerRegistry>,
     pub apps: Vec<crate::admin::api::SpectraAppSummary>,
+    pub router: AdminRouter,
 }
 
 impl AdminEngine {
@@ -150,6 +153,7 @@ impl AdminEngine {
         let broker_method = spectra_cfg.gql_dispatch().method.clone();
         let broker_addr = spectra_cfg.gql_dispatch().addr.clone();
         let eventsink_inspector = EventSinkInspector::new(&broker_method, &broker_addr);
+        let router = AdminRouter::new(&config.path_prefix);
         let apps = spectra_cfg
             .apps
             .iter()
@@ -178,6 +182,7 @@ impl AdminEngine {
             eventsink_inspector,
             worker_registry,
             apps,
+            router,
         }
     }
 
@@ -191,355 +196,374 @@ impl AdminEngine {
     ) -> pingora::Result<bool> {
         let client_ip = extract_client_ip(session);
         if !is_ip_allowed(&client_ip, &self.config.allowed_ips) {
-            log::warn!(
-                "Admin access denied for client IP: {} (not in allowed_ips)",
-                client_ip
-            );
-            let mut header = ResponseHeader::build(403, None).unwrap();
-            let _ = header.insert_header("content-type", "application/json");
-            session.set_keepalive(None);
-            session.write_response_header(Box::new(header), false).await?;
-            let body = serde_json::json!({
-                "error": "Forbidden",
-                "message": format!("Access denied for IP '{}'. Configure allowed_ips in spectra.toml to grant access.", client_ip)
-            });
-            session
-                .write_response_body(Some(bytes::Bytes::from(body.to_string())), true)
-                .await?;
-            return Ok(true);
+            return self.handle_forbidden(session, &client_ip).await;
         }
 
         let path = session.req_header().uri.path().to_string();
         let method = session.req_header().method.clone();
 
-        // UI Dashboard
-        if path == self.config.path_prefix
-            || path == format!("{}/", self.config.path_prefix)
-            || path == format!("{}/index.html", self.config.path_prefix)
+        if let Some((route, params)) = self.router.match_route(&method, &path) {
+            match route {
+                AdminRoute::Dashboard => self.handle_dashboard(session).await,
+                AdminRoute::Status => self.handle_status(session).await,
+                AdminRoute::Routes => self.handle_routes(session).await,
+                AdminRoute::Schema => self.handle_schema(session).await,
+                AdminRoute::SchemaRefresh => self.handle_schema_refresh(session).await,
+                AdminRoute::Subscriptions => {
+                    self.handle_subscriptions(session, subscription_hub).await
+                }
+                AdminRoute::Idempotency => {
+                    self.handle_idempotency(session, idempotency_engine).await
+                }
+                AdminRoute::Eventsink => self.handle_eventsink(session).await,
+                AdminRoute::Traffic => self.handle_traffic(session).await,
+                AdminRoute::TrafficClear => self.handle_traffic_clear(session).await,
+                AdminRoute::TelemetryReport => self.handle_telemetry_report(session).await,
+                AdminRoute::Workers => self.handle_workers(session).await,
+                AdminRoute::WorkerLogs => {
+                    let worker_id = params.get("id").map(|s| s.as_str()).unwrap_or("");
+                    self.handle_worker_logs(session, worker_id).await
+                }
+            }
+        } else {
+            self.handle_not_found(session, &path).await
+        }
+    }
+
+    async fn handle_forbidden(
+        &self,
+        session: &mut Session,
+        client_ip: &IpAddr,
+    ) -> pingora::Result<bool> {
+        log::warn!(
+            "Admin access denied for client IP: {} (not in allowed_ips)",
+            client_ip
+        );
+        let mut header = ResponseHeader::build(403, None)?;
+        let _ = header.insert_header("content-type", "application/json");
+        session.set_keepalive(None);
+        session.write_response_header(Box::new(header), false).await?;
+        let body = serde_json::json!({
+            "error": "Forbidden",
+            "message": format!("Access denied for IP '{}'. Configure allowed_ips in spectra.toml to grant access.", client_ip)
+        });
+        session
+            .write_response_body(Some(bytes::Bytes::from(body.to_string())), true)
+            .await?;
+        Ok(true)
+    }
+
+    async fn handle_dashboard(&self, session: &mut Session) -> pingora::Result<bool> {
+        if self.config.enable_ui {
+            let mut header = ResponseHeader::build(200, None)?;
+            let _ = header.insert_header("content-type", "text/html; charset=utf-8");
+            session.set_keepalive(None);
+            session.write_response_header(Box::new(header), false).await?;
+            session
+                .write_response_body(Some(bytes::Bytes::from(ADMIN_HTML)), true)
+                .await?;
+            Ok(true)
+        } else {
+            let mut header = ResponseHeader::build(404, None)?;
+            let _ = header.insert_header("content-type", "application/json");
+            session.set_keepalive(None);
+            session.write_response_header(Box::new(header), false).await?;
+            let body = serde_json::json!({
+                "error": "Not Found",
+                "message": "Admin UI is disabled in spectra.toml (enable_ui = false)"
+            });
+            session
+                .write_response_body(Some(bytes::Bytes::from(body.to_string())), true)
+                .await?;
+            Ok(true)
+        }
+    }
+
+    async fn handle_status(&self, session: &mut Session) -> pingora::Result<bool> {
+        let async_count = self
+            .routes
+            .values()
+            .filter(|r| r.mode.is_async_command_receipt())
+            .count();
+
+        let status_resp = AdminStatusResponse {
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            uptime_seconds: self.start_time.elapsed().as_secs(),
+            sync_enabled: self.mode_a_enabled,
+            sync_dispatch_policy: self.mode_a_dispatch_policy.clone(),
+            sync_timeout_ms: self.mode_a_timeout_ms,
+            async_routes_count: async_count,
+            mode_a_enabled: self.mode_a_enabled,
+            mode_a_dispatch_policy: self.mode_a_dispatch_policy.clone(),
+            mode_a_timeout_ms: self.mode_a_timeout_ms,
+            mode_b_routes_count: async_count,
+            broker_method: self.broker_method.clone(),
+            broker_addr: self.broker_addr.clone(),
+            broker_status: "online".to_string(),
+            apps: self.apps.clone(),
+        };
+        self.respond_json(session, 200, &status_resp).await
+    }
+
+    async fn handle_routes(&self, session: &mut Session) -> pingora::Result<bool> {
+        let mut route_entries = Vec::new();
+        for (name, r) in self.routes.iter() {
+            let target_name = r.upstream.clone().unwrap_or_else(|| "default".to_string());
+            let target_addr = self
+                .named_upstreams
+                .get(&target_name)
+                .map(|a| a.to_string())
+                .unwrap_or_else(|| self.default_upstream_addr.clone());
+
+            route_entries.push(AdminRouteEntry {
+                name: name.clone(),
+                operation: r.operation.clone(),
+                mode: r.mode.display_name().to_string(),
+                upstream: target_name,
+                upstream_addr: target_addr,
+                receipt_status: r.receipt_status.clone(),
+                enabled: r.enabled,
+            });
+        }
+        route_entries.sort_by(|a, b| a.name.cmp(&b.name));
+
+        let mut named_upstreams_list = Vec::new();
+        for (name, addr) in self.named_upstreams.iter() {
+            named_upstreams_list.push(AdminNamedUpstream {
+                name: name.clone(),
+                addr: addr.to_string(),
+            });
+        }
+        named_upstreams_list.sort_by(|a, b| a.name.cmp(&b.name));
+
+        let routes_resp = AdminRoutesResponse {
+            default_upstream: self.default_upstream_name.clone(),
+            default_upstream_addr: self.default_upstream_addr.clone(),
+            named_upstreams: named_upstreams_list,
+            routes: route_entries,
+        };
+        self.respond_json(session, 200, &routes_resp).await
+    }
+
+    async fn handle_schema(&self, session: &mut Session) -> pingora::Result<bool> {
+        if let Some(coverage) = self.schema_inspector.get_coverage().await {
+            return self.respond_json(session, 200, &coverage).await;
+        }
+
+        // Attempt on-demand refresh
+        let upstream_url = format!("http://{}/graphql", self.default_upstream_addr);
+        match self
+            .schema_inspector
+            .refresh(&upstream_url, &self.routes)
+            .await
         {
-            if self.config.enable_ui {
-                let mut header = ResponseHeader::build(200, None)?;
-                let _ = header.insert_header("content-type", "text/html; charset=utf-8");
-                session.set_keepalive(None);
-                session.write_response_header(Box::new(header), false).await?;
-                session
-                    .write_response_body(Some(bytes::Bytes::from(ADMIN_HTML)), true)
-                    .await?;
-                return Ok(true);
-            } else {
-                let mut header = ResponseHeader::build(404, None)?;
-                let _ = header.insert_header("content-type", "application/json");
-                session.set_keepalive(None);
-                session.write_response_header(Box::new(header), false).await?;
-                let body = serde_json::json!({
-                    "error": "Not Found",
-                    "message": "Admin UI is disabled in spectra.toml (enable_ui = false)"
+            Ok(coverage) => self.respond_json(session, 200, &coverage).await,
+            Err(err) => {
+                let err_body = serde_json::json!({
+                    "error": "Upstream Introspection Unavailable",
+                    "details": err,
+                    "upstream_url": upstream_url,
+                    "suggestion": "Ensure the upstream GraphQL service is running and accessible."
                 });
-                session
-                    .write_response_body(Some(bytes::Bytes::from(body.to_string())), true)
-                    .await?;
-                return Ok(true);
+                self.respond_json(session, 502, &err_body).await
             }
         }
+    }
 
-        // REST API: GET /admin/api/v1/status
-        if path == "/admin/api/v1/status" || path == "/admin/api/status" {
-            let async_count = self
-                .routes
-                .values()
-                .filter(|r| r.mode.is_async_command_receipt())
-                .count();
-
-            let status_resp = AdminStatusResponse {
-                version: env!("CARGO_PKG_VERSION").to_string(),
-                uptime_seconds: self.start_time.elapsed().as_secs(),
-                sync_enabled: self.mode_a_enabled,
-                sync_dispatch_policy: self.mode_a_dispatch_policy.clone(),
-                sync_timeout_ms: self.mode_a_timeout_ms,
-                async_routes_count: async_count,
-                mode_a_enabled: self.mode_a_enabled,
-                mode_a_dispatch_policy: self.mode_a_dispatch_policy.clone(),
-                mode_a_timeout_ms: self.mode_a_timeout_ms,
-                mode_b_routes_count: async_count,
-                broker_method: self.broker_method.clone(),
-                broker_addr: self.broker_addr.clone(),
-                broker_status: "online".to_string(),
-                apps: self.apps.clone(),
-            };
-            return self.respond_json(session, 200, &status_resp).await;
-        }
-
-        // REST API: GET /admin/api/v1/routes
-        if path == "/admin/api/v1/routes" || path == "/admin/api/routes" {
-            let mut route_entries = Vec::new();
-            for (name, r) in self.routes.iter() {
-                let target_name = r.upstream.clone().unwrap_or_else(|| "default".to_string());
-                let target_addr = self
-                    .named_upstreams
-                    .get(&target_name)
-                    .map(|a| a.to_string())
-                    .unwrap_or_else(|| self.default_upstream_addr.clone());
-
-                route_entries.push(AdminRouteEntry {
-                    name: name.clone(),
-                    operation: r.operation.clone(),
-                    mode: r.mode.display_name().to_string(),
-                    upstream: target_name,
-                    upstream_addr: target_addr,
-                    receipt_status: r.receipt_status.clone(),
-                    enabled: r.enabled,
-                });
-            }
-            route_entries.sort_by(|a, b| a.name.cmp(&b.name));
-
-            let mut named_upstreams_list = Vec::new();
-            for (name, addr) in self.named_upstreams.iter() {
-                named_upstreams_list.push(AdminNamedUpstream {
-                    name: name.clone(),
-                    addr: addr.to_string(),
-                });
-            }
-            named_upstreams_list.sort_by(|a, b| a.name.cmp(&b.name));
-
-            let routes_resp = AdminRoutesResponse {
-                default_upstream: self.default_upstream_name.clone(),
-                default_upstream_addr: self.default_upstream_addr.clone(),
-                named_upstreams: named_upstreams_list,
-                routes: route_entries,
-            };
-            return self.respond_json(session, 200, &routes_resp).await;
-        }
-
-        // REST API: GET /admin/api/v1/schema & POST /admin/api/v1/schema/refresh
-        if path == "/admin/api/v1/schema" || path == "/admin/api/schema" {
-            if let Some(coverage) = self.schema_inspector.get_coverage().await {
-                return self.respond_json(session, 200, &coverage).await;
-            }
-
-            // Attempt on-demand refresh
-            let upstream_url = format!("http://{}/graphql", self.default_upstream_addr);
-            match self
-                .schema_inspector
-                .refresh(&upstream_url, &self.routes)
-                .await
-            {
-                Ok(coverage) => return self.respond_json(session, 200, &coverage).await,
-                Err(err) => {
-                    let err_body = serde_json::json!({
-                        "error": "Upstream Introspection Unavailable",
-                        "details": err,
-                        "upstream_url": upstream_url,
-                        "suggestion": "Ensure the upstream GraphQL service is running and accessible."
-                    });
-                    return self.respond_json(session, 502, &err_body).await;
-                }
-            }
-        }
-
-        if (path == "/admin/api/v1/schema/refresh" || path == "/admin/api/schema/refresh")
-            && method == http::Method::POST
+    async fn handle_schema_refresh(&self, session: &mut Session) -> pingora::Result<bool> {
+        let upstream_url = format!("http://{}/graphql", self.default_upstream_addr);
+        match self
+            .schema_inspector
+            .refresh(&upstream_url, &self.routes)
+            .await
         {
-            let upstream_url = format!("http://{}/graphql", self.default_upstream_addr);
-            match self
-                .schema_inspector
-                .refresh(&upstream_url, &self.routes)
-                .await
-            {
-                Ok(coverage) => return self.respond_json(session, 200, &coverage).await,
-                Err(err) => {
-                    let err_body = serde_json::json!({
-                        "error": "Introspection Refresh Failed",
-                        "details": err,
-                        "upstream_url": upstream_url
-                    });
-                    return self.respond_json(session, 502, &err_body).await;
-                }
-            }
-        }
-
-        // REST API: GET /admin/api/v1/subscriptions
-        if path == "/admin/api/v1/subscriptions" || path == "/admin/api/subscriptions" {
-            let active_conns = subscription_hub.active_connection_count().await;
-            let active_topics = subscription_hub.active_topics().await;
-
-            let subs_resp = AdminSubscriptionsResponse {
-                enabled: true,
-                active_connections: active_conns,
-                topic_prefix: "spectra".to_string(),
-                active_topics_count: active_topics.len(),
-                active_topics,
-            };
-            return self.respond_json(session, 200, &subs_resp).await;
-        }
-
-        // REST API: GET /admin/api/v1/idempotency
-        if path == "/admin/api/v1/idempotency" || path == "/admin/api/idempotency" {
-            let idemp_resp = AdminIdempotencyResponse {
-                backend: idempotency_engine.backend_name().to_string(),
-                ttl_secs: idempotency_engine.ttl_secs(),
-                max_capacity: idempotency_engine.max_capacity(),
-                active_records: idempotency_engine.active_record_count(),
-            };
-            return self.respond_json(session, 200, &idemp_resp).await;
-        }
-
-        // REST API: GET /admin/api/v1/eventsink
-        if path == "/admin/api/v1/eventsink" || path == "/admin/api/eventsink" {
-            let mut eventsink_resp = self.eventsink_inspector.inspect().await;
-
-            // Merge active workers reporting via Telemetry API into consumer list if not already present
-            for worker in self.worker_registry.get_active_workers() {
-                if !eventsink_resp.consumers.iter().any(|c| c.name == worker.worker_id) {
-                    eventsink_resp.consumers.push(ConsumerMetrics {
-                        name: worker.worker_id.clone(),
-                        stream_name: worker.stream.clone(),
-                        created: format!("via Telemetry API (uptime {}s)", worker.uptime_seconds),
-                        filter_subject: Some(format!("{}.*", worker.stream)),
-                        num_pending: 0,
-                        num_ack_pending: 0,
-                        num_redelivered: 0,
-                        num_waiting: 0,
-                        ack_floor_seq: 0,
-                        last_delivered_seq: worker.processed_events,
-                        push_bound: worker.status != "offline",
-                        status: Some(worker.status.clone()),
-                    });
-                }
-            }
-
-            return self.respond_json(session, 200, &eventsink_resp).await;
-        }
-
-        // REST API: GET /admin/api/v1/traffic
-        if path == "/admin/api/v1/traffic" || path == "/admin/api/traffic" {
-            let app_param = session
-                .req_header()
-                .uri
-                .query()
-                .and_then(|q| {
-                    q.split('&').find_map(|pair| {
-                        let mut parts = pair.split('=');
-                        if parts.next()? == "app" {
-                            parts.next()
-                        } else {
-                            None
-                        }
-                    })
+            Ok(coverage) => self.respond_json(session, 200, &coverage).await,
+            Err(err) => {
+                let err_body = serde_json::json!({
+                    "error": "Introspection Refresh Failed",
+                    "details": err,
+                    "upstream_url": upstream_url
                 });
-            let traffic_resp = self.traffic_recorder.get_response_with_filter(50, app_param);
-            return self.respond_json(session, 200, &traffic_resp).await;
-        }
-
-        // REST API: POST /admin/api/v1/traffic/clear
-        if (path == "/admin/api/v1/traffic/clear" || path == "/admin/api/traffic/clear")
-            && method == http::Method::POST
-        {
-            self.traffic_recorder.clear();
-            let clear_resp = serde_json::json!({ "status": "cleared" });
-            return self.respond_json(session, 200, &clear_resp).await;
-        }
-
-        // REST API: POST /admin/api/v1/telemetry/report (Consumer Worker status & log rollups)
-        if (path == "/admin/api/v1/telemetry/report" || path == "/admin/api/telemetry/report")
-            && method == http::Method::POST
-        {
-            let mut body_bytes = Vec::new();
-            while let Some(chunk) = session.read_request_body().await? {
-                body_bytes.extend_from_slice(&chunk);
-                if body_bytes.len() > 1024 * 1024 {
-                    break;
-                }
-            }
-
-            match serde_json::from_slice::<crate::admin::WorkerTelemetryReport>(&body_bytes) {
-                Ok(report) => {
-                    log::debug!(
-                        "Received telemetry report from worker '{}' (status: {:?}, logs: {})",
-                        report.worker_id,
-                        report.status,
-                        report.logs.as_ref().map(|l| l.len()).unwrap_or(0)
-                    );
-                    self.worker_registry.record_report(report);
-                    let ok_resp = serde_json::json!({ "status": "accepted" });
-                    return self.respond_json(session, 200, &ok_resp).await;
-                }
-                Err(err) => {
-                    let err_resp = serde_json::json!({
-                        "error": "Invalid telemetry report JSON",
-                        "details": err.to_string()
-                    });
-                    return self.respond_json(session, 400, &err_resp).await;
-                }
+                self.respond_json(session, 502, &err_body).await
             }
         }
+    }
 
-        // REST API: GET /admin/api/v1/workers (List registered consumer workers)
-        if path == "/admin/api/v1/workers" || path == "/admin/api/workers" {
-            let app_param = session
-                .req_header()
-                .uri
-                .query()
-                .and_then(|q| {
-                    q.split('&').find_map(|pair| {
-                        let mut parts = pair.split('=');
-                        if parts.next()? == "app" {
-                            parts.next()
-                        } else {
-                            None
-                        }
-                    })
+    async fn handle_subscriptions(
+        &self,
+        session: &mut Session,
+        subscription_hub: &SubscriptionHub,
+    ) -> pingora::Result<bool> {
+        let active_conns = subscription_hub.active_connection_count().await;
+        let active_topics = subscription_hub.active_topics().await;
+
+        let subs_resp = AdminSubscriptionsResponse {
+            enabled: true,
+            active_connections: active_conns,
+            topic_prefix: "spectra".to_string(),
+            active_topics_count: active_topics.len(),
+            active_topics,
+        };
+        self.respond_json(session, 200, &subs_resp).await
+    }
+
+    async fn handle_idempotency(
+        &self,
+        session: &mut Session,
+        idempotency_engine: &IdempotencyEngine,
+    ) -> pingora::Result<bool> {
+        let idemp_resp = AdminIdempotencyResponse {
+            backend: idempotency_engine.backend_name().to_string(),
+            ttl_secs: idempotency_engine.ttl_secs(),
+            max_capacity: idempotency_engine.max_capacity(),
+            active_records: idempotency_engine.active_record_count(),
+        };
+        self.respond_json(session, 200, &idemp_resp).await
+    }
+
+    async fn handle_eventsink(&self, session: &mut Session) -> pingora::Result<bool> {
+        let mut eventsink_resp = self.eventsink_inspector.inspect().await;
+
+        // Merge active workers reporting via Telemetry API into consumer list if not already present
+        for worker in self.worker_registry.get_active_workers() {
+            if !eventsink_resp.consumers.iter().any(|c| c.name == worker.worker_id) {
+                eventsink_resp.consumers.push(ConsumerMetrics {
+                    name: worker.worker_id.clone(),
+                    stream_name: worker.stream.clone(),
+                    created: format!("via Telemetry API (uptime {}s)", worker.uptime_seconds),
+                    filter_subject: Some(format!("{}.*", worker.stream)),
+                    num_pending: 0,
+                    num_ack_pending: 0,
+                    num_redelivered: 0,
+                    num_waiting: 0,
+                    ack_floor_seq: 0,
+                    last_delivered_seq: worker.processed_events,
+                    push_bound: worker.status != "offline",
+                    status: Some(worker.status.clone()),
                 });
-            let mut workers = self.worker_registry.get_active_workers_with_filter(app_param);
-            if workers.is_empty() {
-                // Zero-Touch Broker-Native Discovery: Synthesize worker summaries from broker consumers
-                let eventsink_resp = self.eventsink_inspector.inspect().await;
-                for c in eventsink_resp.consumers {
-                    let status = c.status.clone().unwrap_or_else(|| c.compute_status());
-                    workers.push(crate::admin::WorkerSummary {
-                        worker_id: c.name,
-                        app_id: None,
-                        sink: eventsink_resp.broker_type.clone(),
-                        stream: c.stream_name,
-                        status,
-                        uptime_seconds: 0,
-                        processed_events: c.ack_floor_seq,
-                        total_errors: c.num_redelivered as u64,
-                        last_seen_secs_ago: 0,
-                    });
-                }
             }
-            return self.respond_json(session, 200, &workers).await;
         }
 
-        // REST API: GET /admin/api/v1/workers/:id/logs
-        if path.starts_with("/admin/api/v1/workers/") && path.ends_with("/logs") {
-            let worker_id = path
-                .strip_prefix("/admin/api/v1/workers/")
-                .unwrap_or("")
-                .strip_suffix("/logs")
-                .unwrap_or("");
-            if !worker_id.is_empty() {
-                // 1. Check in-memory WorkerRegistry first (works for all sinks: NATS, Kafka, Redis, SierraDB, Iggy)
-                if let Some(logs_data) = self.worker_registry.get_worker_logs(worker_id, 100) {
-                    return self.respond_json(session, 200, &logs_data).await;
-                }
+        self.respond_json(session, 200, &eventsink_resp).await
+    }
 
-                // 2. Fallback to native broker query (e.g. NATS Request-Reply SWTP)
-                match self.eventsink_inspector.query_worker_logs(worker_id, 100).await {
-                    Ok(logs_data) => return self.respond_json(session, 200, &logs_data).await,
-                    Err(err) => {
-                        let err_body = serde_json::json!({
-                            "workerId": worker_id,
-                            "status": "unavailable",
-                            "error": err
-                        });
-                        return self.respond_json(session, 502, &err_body).await;
+    async fn handle_traffic(&self, session: &mut Session) -> pingora::Result<bool> {
+        let app_param = session
+            .req_header()
+            .uri
+            .query()
+            .and_then(|q| {
+                q.split('&').find_map(|pair| {
+                    let mut parts = pair.split('=');
+                    if parts.next()? == "app" {
+                        parts.next()
+                    } else {
+                        None
                     }
-                }
+                })
+            });
+        let traffic_resp = self.traffic_recorder.get_response_with_filter(50, app_param);
+        self.respond_json(session, 200, &traffic_resp).await
+    }
+
+    async fn handle_traffic_clear(&self, session: &mut Session) -> pingora::Result<bool> {
+        self.traffic_recorder.clear();
+        let clear_resp = serde_json::json!({ "status": "cleared" });
+        self.respond_json(session, 200, &clear_resp).await
+    }
+
+    async fn handle_telemetry_report(&self, session: &mut Session) -> pingora::Result<bool> {
+        let mut body_bytes = Vec::new();
+        while let Some(chunk) = session.read_request_body().await? {
+            body_bytes.extend_from_slice(&chunk);
+            if body_bytes.len() > 1024 * 1024 {
+                break;
             }
         }
 
-        // Unknown admin route
+        match serde_json::from_slice::<crate::admin::WorkerTelemetryReport>(&body_bytes) {
+            Ok(report) => {
+                log::debug!(
+                    "Received telemetry report from worker '{}' (status: {:?}, logs: {})",
+                    report.worker_id,
+                    report.status,
+                    report.logs.as_ref().map(|l| l.len()).unwrap_or(0)
+                );
+                self.worker_registry.record_report(report);
+                let ok_resp = serde_json::json!({ "status": "accepted" });
+                self.respond_json(session, 200, &ok_resp).await
+            }
+            Err(err) => {
+                let err_resp = serde_json::json!({
+                    "error": "Invalid telemetry report JSON",
+                    "details": err.to_string()
+                });
+                self.respond_json(session, 400, &err_resp).await
+            }
+        }
+    }
+
+    async fn handle_workers(&self, session: &mut Session) -> pingora::Result<bool> {
+        let app_param = session
+            .req_header()
+            .uri
+            .query()
+            .and_then(|q| {
+                q.split('&').find_map(|pair| {
+                    let mut parts = pair.split('=');
+                    if parts.next()? == "app" {
+                        parts.next()
+                    } else {
+                        None
+                    }
+                })
+            });
+        let mut workers = self.worker_registry.get_active_workers_with_filter(app_param);
+        if workers.is_empty() {
+            // Zero-Touch Broker-Native Discovery: Synthesize worker summaries from broker consumers
+            let eventsink_resp = self.eventsink_inspector.inspect().await;
+            for c in eventsink_resp.consumers {
+                let status = c.status.clone().unwrap_or_else(|| c.compute_status());
+                workers.push(crate::admin::WorkerSummary {
+                    worker_id: c.name,
+                    app_id: None,
+                    sink: eventsink_resp.broker_type.clone(),
+                    stream: c.stream_name,
+                    status,
+                    uptime_seconds: 0,
+                    processed_events: c.ack_floor_seq,
+                    total_errors: c.num_redelivered as u64,
+                    last_seen_secs_ago: 0,
+                });
+            }
+        }
+        self.respond_json(session, 200, &workers).await
+    }
+
+    async fn handle_worker_logs(&self, session: &mut Session, worker_id: &str) -> pingora::Result<bool> {
+        if !worker_id.is_empty() {
+            // 1. Check in-memory WorkerRegistry first (works for all sinks: NATS, Kafka, Redis, SierraDB, Iggy)
+            if let Some(logs_data) = self.worker_registry.get_worker_logs(worker_id, 100) {
+                return self.respond_json(session, 200, &logs_data).await;
+            }
+
+            // 2. Fallback to native broker query (e.g. NATS Request-Reply SWTP)
+            match self.eventsink_inspector.query_worker_logs(worker_id, 100).await {
+                Ok(logs_data) => return self.respond_json(session, 200, &logs_data).await,
+                Err(err) => {
+                    let err_body = serde_json::json!({
+                        "workerId": worker_id,
+                        "status": "unavailable",
+                        "error": err
+                    });
+                    return self.respond_json(session, 502, &err_body).await;
+                }
+            }
+        }
+        self.handle_not_found(session, &format!("/admin/api/v1/workers/{}/logs", worker_id)).await
+    }
+
+    async fn handle_not_found(&self, session: &mut Session, path: &str) -> pingora::Result<bool> {
         let mut header = ResponseHeader::build(404, None)?;
         let _ = header.insert_header("content-type", "application/json");
         session.set_keepalive(None);

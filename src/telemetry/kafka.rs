@@ -144,29 +144,7 @@ impl crate::telemetry::sink::EventSink for KafkaDispatch {
 
 impl DispatchHandler for KafkaDispatch {
     fn get_dispatch_topic(&self, request_info: &RequestInfo) -> String {
-        match request_info.gql.as_ref() {
-            Some(gql_op) => {
-                let op_type = gql_op.operation_type.to_string();
-                let op_name = gql_op
-                    .operation_name
-                    .clone()
-                    .or_else(|| gql_op.root_fields.first().cloned())
-                    .unwrap_or_else(|| "anonymous".to_string());
-                format!("{}.{}", op_type, op_name).to_lowercase()
-            }
-            None => {
-                format!(
-                    "{}.{}",
-                    request_info.http.method.to_string().to_uppercase(),
-                    request_info
-                        .http
-                        .uri
-                        .to_string()
-                        .replace('.', "_")
-                        .to_lowercase()
-                )
-            }
-        }
+        crate::telemetry::topic::TopicResolver::resolve_dispatch_topic(request_info)
     }
 
     async fn dispatch_request_info(&self, request_info: &RequestInfo) -> pingora::Result<()> {

@@ -7,10 +7,12 @@ pub mod redis_streams;
 pub mod resp;
 pub mod sierradb;
 pub mod sink;
+pub mod topic;
 pub mod webhook;
 
 pub use event::{CompletionEvent, EventStatus, OperationOutcome, TerminalEvent};
 pub use sink::{EventEncoder, EventSink, JsonEventEncoder};
+pub use topic::TopicResolver;
 
 use crate::protocol::{RequestInfo, ResponseInfo};
 use anyhow::{Result, bail};

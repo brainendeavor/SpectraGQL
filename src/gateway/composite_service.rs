@@ -263,117 +263,66 @@ impl CompositeServiceProxy {
     }
 
     pub async fn handle_websocket_subscription(&self, session: &mut Session) -> pingora::Result<bool> {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-        let sec_key = session
-            .req_header()
-            .headers
-            .get("sec-websocket-key")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("")
-            .to_string();
-
-        if sec_key.is_empty() {
-            let resp = pingora::http::ResponseHeader::build(400, None)?;
-            session.write_response_header(Box::new(resp), false).await?;
-            session.write_response_body(Some(bytes::Bytes::from("Missing Sec-WebSocket-Key")), true).await?;
-            return Ok(true);
-        }
-
-        let accept_key = crate::subscriptions::compute_accept_key(&sec_key);
-
-        let requested_subprotocol = session
-            .req_header()
-            .headers
-            .get("sec-websocket-protocol")
-            .and_then(|v| v.to_str().ok())
-            .map(|s| s.to_string());
-
-        let mut resp = pingora::http::ResponseHeader::build(101, None)?;
-        let _ = resp.insert_header(http::header::CONNECTION, "Upgrade");
-        let _ = resp.insert_header(http::header::UPGRADE, "websocket");
-        let _ = resp.insert_header("sec-websocket-accept", accept_key);
-        if let Some(subprotocol) = requested_subprotocol {
-            if subprotocol.contains("graphql-transport-ws") {
-                let _ = resp.insert_header("sec-websocket-protocol", "graphql-transport-ws");
-            } else if let Some(first) = subprotocol.split(',').next() {
-                let _ = resp.insert_header("sec-websocket-protocol", first.trim());
-            }
-        }
-
-        session.write_response_header(Box::new(resp), false).await?;
-
-        let (ws_io, mut pingora_io) = tokio::io::duplex(64 * 1024);
-        let actor = crate::subscriptions::ConnectionActor::new(
+        crate::subscriptions::WebSocketHandler::handle(
+            session,
             self.subscription_hub.clone(),
-            self.subscriptions_config.topic_prefix.clone(),
-            self.subscriptions_config.keepalive_secs,
-            self.subscriptions_config.client_buffer_capacity,
-        );
-
-        let ws_stream = tokio_tungstenite::WebSocketStream::from_raw_socket(
-            ws_io,
-            tokio_tungstenite::tungstenite::protocol::Role::Server,
-            None,
-        ).await;
-
-        let mut actor_handle = tokio::spawn(async move {
-            let _ = actor.run(ws_stream).await;
-        });
-
-        let mut buf = [0u8; 8192];
-
-        loop {
-            tokio::select! {
-                read_res = session.as_downstream_mut().read_body_or_idle(false) => {
-                    match read_res {
-                        Ok(Some(bytes)) => {
-                            if bytes.is_empty() {
-                                break;
-                            }
-                            if let Err(e) = pingora_io.write_all(&bytes).await {
-                                log::debug!("WebSocket pump: write to ws_io failed: {}", e);
-                                break;
-                            }
-                        }
-                        Ok(None) => {
-                            break;
-                        }
-                        Err(e) => {
-                            log::debug!("WebSocket pump: downstream read error: {}", e);
-                            break;
-                        }
-                    }
-                }
-
-                duplex_read = pingora_io.read(&mut buf) => {
-                    match duplex_read {
-                        Ok(n) if n > 0 => {
-                            let chunk = bytes::Bytes::copy_from_slice(&buf[..n]);
-                            if let Err(e) = session.write_response_body(Some(chunk), false).await {
-                                log::debug!("WebSocket pump: downstream write error: {}", e);
-                                break;
-                            }
-                        }
-                        Ok(_) => {
-                            break;
-                        }
-                        Err(e) => {
-                            log::debug!("WebSocket pump: duplex read error: {}", e);
-                            break;
-                        }
-                    }
-                }
-
-                _ = &mut actor_handle => {
-                    break;
-                }
-            }
-        }
-
-        actor_handle.abort();
-        Ok(true)
+            &self.subscriptions_config,
+        )
+        .await
     }
+
+    /// Helper to record traffic events without boilerplate.
+    pub fn record_traffic_event(
+        &self,
+        session: &Session,
+        ctx: &CompositeServiceProxyCtx,
+        details: TrafficEventDetails,
+    ) {
+        let latency_ms = ctx.proxy_context.start_time.elapsed().as_secs_f64() * 1000.0;
+        let epoch_ms = crate::admin::now_epoch_ms();
+        let client_ip = crate::admin::extract_client_ip(session).to_string();
+
+        self.traffic_recorder.record(crate::admin::TrafficRecord {
+            id: ctx.proxy_context.request_id.to_string(),
+            hlc: ctx.proxy_context.hlc.to_compact_string(),
+            timestamp_epoch_ms: epoch_ms,
+            timestamp_formatted: crate::admin::format_timestamp(epoch_ms),
+            client_ip,
+            method: session.req_header().method.to_string(),
+            path: session.req_header().uri.path().to_string(),
+            app_id: ctx.proxy_context.app_id.clone(),
+            operation_name: details.operation_name,
+            operation_type: details.operation_type,
+            mode: details.mode,
+            status_code: details.status_code,
+            receipt_status: details.receipt_status,
+            latency_ms,
+            target: details.target,
+            query_preview: details.query_preview.or_else(|| ctx.proxy_context.query_preview.clone()),
+            variables_preview: details.variables_preview.or_else(|| ctx.proxy_context.variables_preview.clone()),
+            audit_tag: details.audit_tag.or_else(|| ctx.proxy_context.audit_tag.clone()),
+            audit_rule: details.audit_rule.or_else(|| ctx.proxy_context.audit_rule.clone()),
+            response_preview: details.response_preview.or_else(|| ctx.proxy_context.response_preview.clone()),
+            error_preview: details.error_preview.or_else(|| ctx.proxy_context.error_preview.clone()),
+        });
+    }
+}
+
+/// Parameters for recording a structured gateway traffic event.
+#[derive(Default)]
+pub struct TrafficEventDetails {
+    pub operation_name: Option<String>,
+    pub operation_type: String,
+    pub mode: String,
+    pub status_code: u16,
+    pub receipt_status: Option<String>,
+    pub target: String,
+    pub query_preview: Option<String>,
+    pub variables_preview: Option<String>,
+    pub audit_tag: Option<String>,
+    pub audit_rule: Option<String>,
+    pub response_preview: Option<String>,
+    pub error_preview: Option<String>,
 }
 
 // TODO: absorb SpectraProxyCtx
@@ -577,31 +526,19 @@ impl ProxyHttp for CompositeServiceProxy {
             IdempotencyInterceptResult::Conflict => return Ok(true),
             IdempotencyInterceptResult::Replay => {
                 ctx.proxy_context.is_replay = true;
-                let latency_ms = ctx.proxy_context.start_time.elapsed().as_secs_f64() * 1000.0;
-                let client_ip = crate::admin::extract_client_ip(session).to_string();
-                self.traffic_recorder.record(crate::admin::TrafficRecord {
-                    id: ctx.proxy_context.request_id.to_string(),
-                    hlc: ctx.proxy_context.hlc.to_compact_string(),
-                    timestamp_epoch_ms: crate::admin::now_epoch_ms(),
-                    timestamp_formatted: crate::admin::format_timestamp(crate::admin::now_epoch_ms()),
-                    client_ip,
-                    method: session.req_header().method.to_string(),
-                    path: session.req_header().uri.path().to_string(),
-                    app_id: ctx.proxy_context.app_id.clone(),
-                    operation_name: None,
-                    operation_type: "Mutation".to_string(),
-                    mode: "Replay (Idempotency)".to_string(),
-                    status_code: 200,
-                    receipt_status: Some("REPLAY".to_string()),
-                    latency_ms,
-                    target: "Idempotency Cache".to_string(),
-                    query_preview: None,
-                    variables_preview: None,
-                    audit_tag: None,
-                    audit_rule: None,
-                    response_preview: None,
-                    error_preview: None,
-                });
+                self.record_traffic_event(
+                    session,
+                    ctx,
+                    TrafficEventDetails {
+                        operation_name: None,
+                        operation_type: "Mutation".to_string(),
+                        mode: "Replay (Idempotency)".to_string(),
+                        status_code: 200,
+                        receipt_status: Some("REPLAY".to_string()),
+                        target: "Idempotency Cache".to_string(),
+                        ..Default::default()
+                    },
+                );
                 return Ok(true);
             }
             IdempotencyInterceptResult::NewKey(k) => {
@@ -770,7 +707,6 @@ impl ProxyHttp for CompositeServiceProxy {
                                     .write_response_body(Some(bytes::Bytes::from(err_body)), true)
                                     .await?;
 
-                            let latency_ms = ctx.proxy_context.start_time.elapsed().as_secs_f64() * 1000.0;
                             let client_ip = crate::admin::extract_client_ip(session).to_string();
 
                             // Emit edge rejection audit event to broker
@@ -780,7 +716,7 @@ impl ProxyHttp for CompositeServiceProxy {
                                 .and_then(|g| g.operation_name.clone())
                                 .unwrap_or_else(|| "anonymous".to_string())
                                 .to_ascii_lowercase();
-                            let rejection_topic = format!("interceptors.rejected.{}", op_clean);
+                            let rejection_topic = crate::telemetry::topic::TopicResolver::rejection_topic(&op_clean);
 
                             let rejection_payload = serde_json::json!({
                                 "requestId": ctx.proxy_context.request_id.to_string(),
@@ -803,29 +739,20 @@ impl ProxyHttp for CompositeServiceProxy {
                                 let _ = audit_handler.dispatch_payload(&audit_topic, &audit_payload).await;
                             });
 
-                            self.traffic_recorder.record(crate::admin::TrafficRecord {
-                                id: ctx.proxy_context.request_id.to_string(),
-                                hlc: ctx.proxy_context.hlc.to_compact_string(),
-                                timestamp_epoch_ms: crate::admin::now_epoch_ms(),
-                                timestamp_formatted: crate::admin::format_timestamp(crate::admin::now_epoch_ms()),
-                                client_ip,
-                                method: session.req_header().method.to_string(),
-                                path: session.req_header().uri.path().to_string(),
-                                app_id: ctx.proxy_context.app_id.clone(),
-                                operation_name: request_info.gql.as_ref().and_then(|g| g.operation_name.clone()),
-                                operation_type: request_info.gql.as_ref().map(|g| g.operation_type.to_string()).unwrap_or_else(|| "GQL".to_string()),
-                                mode: "Rejected (Edge)".to_string(),
-                                status_code: rejection.status_code.as_u16(),
-                                receipt_status: Some("REJECTED".to_string()),
-                                latency_ms,
-                                target: format!("Sink: {}", rejection_topic),
-                                query_preview: ctx.proxy_context.query_preview.clone(),
-                                variables_preview: ctx.proxy_context.variables_preview.clone(),
-                                audit_tag: None,
-                                audit_rule: None,
-                                response_preview: None,
-                                error_preview: Some(format!("{}: {}", rejection.code, rejection.message)),
-                            });
+                            self.record_traffic_event(
+                                session,
+                                ctx,
+                                TrafficEventDetails {
+                                    operation_name: request_info.gql.as_ref().and_then(|g| g.operation_name.clone()),
+                                    operation_type: request_info.gql.as_ref().map(|g| g.operation_type.to_string()).unwrap_or_else(|| "GQL".to_string()),
+                                    mode: "Rejected (Edge)".to_string(),
+                                    status_code: rejection.status_code.as_u16(),
+                                    receipt_status: Some("REJECTED".to_string()),
+                                    target: format!("Sink: {}", rejection_topic),
+                                    error_preview: Some(format!("{}: {}", rejection.code, rejection.message)),
+                                    ..Default::default()
+                                },
+                            );
 
                             return Ok(true);
                         }
@@ -882,31 +809,19 @@ impl ProxyHttp for CompositeServiceProxy {
                             IdempotencyInterceptResult::Conflict => return Ok(true),
                             IdempotencyInterceptResult::Replay => {
                                 ctx.proxy_context.is_replay = true;
-                                let latency_ms = ctx.proxy_context.start_time.elapsed().as_secs_f64() * 1000.0;
-                                let client_ip = crate::admin::extract_client_ip(session).to_string();
-                                self.traffic_recorder.record(crate::admin::TrafficRecord {
-                                    id: ctx.proxy_context.request_id.to_string(),
-                                    hlc: ctx.proxy_context.hlc.to_compact_string(),
-                                    timestamp_epoch_ms: crate::admin::now_epoch_ms(),
-                                    timestamp_formatted: crate::admin::format_timestamp(crate::admin::now_epoch_ms()),
-                                    client_ip,
-                                    method: session.req_header().method.to_string(),
-                                    path: session.req_header().uri.path().to_string(),
-                                    app_id: ctx.proxy_context.app_id.clone(),
-                                    operation_name: op_name.map(|s| s.to_string()),
-                                    operation_type: "Mutation".to_string(),
-                                    mode: "Replay (Fingerprint)".to_string(),
-                                    status_code: 200,
-                                    receipt_status: Some("REPLAY".to_string()),
-                                    latency_ms,
-                                    target: "Idempotency Cache".to_string(),
-                                    query_preview: ctx.proxy_context.query_preview.clone(),
-                                    variables_preview: ctx.proxy_context.variables_preview.clone(),
-                                    audit_tag: None,
-                                    audit_rule: None,
-                                    response_preview: None,
-                                    error_preview: None,
-                                });
+                                self.record_traffic_event(
+                                    session,
+                                    ctx,
+                                    TrafficEventDetails {
+                                        operation_name: op_name.map(|s| s.to_string()),
+                                        operation_type: "Mutation".to_string(),
+                                        mode: "Replay (Fingerprint)".to_string(),
+                                        status_code: 200,
+                                        receipt_status: Some("REPLAY".to_string()),
+                                        target: "Idempotency Cache".to_string(),
+                                        ..Default::default()
+                                    },
+                                );
                                 return Ok(true);
                             }
                             IdempotencyInterceptResult::NewKey(k) => {
@@ -919,8 +834,6 @@ impl ProxyHttp for CompositeServiceProxy {
                     // Check route overrides using StrategyRouter
                     if let Some(route) = StrategyRouter::match_route(&self.routes, &request_info) {
                         if !route.enabled {
-                            let latency_ms = ctx.proxy_context.start_time.elapsed().as_secs_f64() * 1000.0;
-                            let client_ip = crate::admin::extract_client_ip(session).to_string();
                             let op_name = request_info.gql.as_ref().and_then(|g| g.operation_name.clone());
                             let err_msg = format!("Operation '{}' is disabled by gateway policy", route.operation);
                             let err_json = serde_json::json!({
@@ -938,29 +851,20 @@ impl ProxyHttp for CompositeServiceProxy {
                             session.write_response_header(Box::new(header), false).await?;
                             session.write_response_body(Some(bytes::Bytes::from(err_json.to_string())), true).await?;
 
-                            self.traffic_recorder.record(crate::admin::TrafficRecord {
-                                id: ctx.proxy_context.request_id.to_string(),
-                                hlc: ctx.proxy_context.hlc.to_compact_string(),
-                                timestamp_epoch_ms: crate::admin::now_epoch_ms(),
-                                timestamp_formatted: crate::admin::format_timestamp(crate::admin::now_epoch_ms()),
-                                client_ip,
-                                method: session.req_header().method.to_string(),
-                                path: session.req_header().uri.path().to_string(),
-                                app_id: ctx.proxy_context.app_id.clone(),
-                                operation_name: op_name,
-                                operation_type: "Mutation".to_string(),
-                                mode: "Rejected (Disabled Route)".to_string(),
-                                status_code: 403,
-                                receipt_status: Some("DISABLED".to_string()),
-                                latency_ms,
-                                target: "Route Policy".to_string(),
-                                query_preview: ctx.proxy_context.query_preview.clone(),
-                                variables_preview: ctx.proxy_context.variables_preview.clone(),
-                                audit_tag: None,
-                                audit_rule: None,
-                                response_preview: None,
-                                error_preview: Some(err_msg),
-                            });
+                            self.record_traffic_event(
+                                session,
+                                ctx,
+                                TrafficEventDetails {
+                                    operation_name: op_name,
+                                    operation_type: "Mutation".to_string(),
+                                    mode: "Rejected (Disabled Route)".to_string(),
+                                    status_code: 403,
+                                    receipt_status: Some("DISABLED".to_string()),
+                                    target: "Route Policy".to_string(),
+                                    error_preview: Some(err_msg),
+                                    ..Default::default()
+                                },
+                            );
                             return Ok(true);
                         }
 
@@ -975,32 +879,19 @@ impl ProxyHttp for CompositeServiceProxy {
                             )
                             .await;
 
-                            let latency_ms = ctx.proxy_context.start_time.elapsed().as_secs_f64() * 1000.0;
-                            let client_ip = crate::admin::extract_client_ip(session).to_string();
-
-                            self.traffic_recorder.record(crate::admin::TrafficRecord {
-                                id: ctx.proxy_context.request_id.to_string(),
-                                hlc: ctx.proxy_context.hlc.to_compact_string(),
-                                timestamp_epoch_ms: crate::admin::now_epoch_ms(),
-                                timestamp_formatted: crate::admin::format_timestamp(crate::admin::now_epoch_ms()),
-                                client_ip,
-                                method: session.req_header().method.to_string(),
-                                path: session.req_header().uri.path().to_string(),
-                                app_id: ctx.proxy_context.app_id.clone(),
-                                operation_name: request_info.gql.as_ref().and_then(|g| g.operation_name.clone()),
-                                operation_type: "Mutation".to_string(),
-                                mode: "Async (Receipt)".to_string(),
-                                status_code: 200,
-                                receipt_status: Some(route.receipt_status.clone()),
-                                latency_ms,
-                                target: format!("NATS: {}", ctx.proxy_context.request_topic),
-                                query_preview: ctx.proxy_context.query_preview.clone(),
-                                variables_preview: ctx.proxy_context.variables_preview.clone(),
-                                audit_tag: None,
-                                audit_rule: None,
-                                response_preview: None,
-                                error_preview: None,
-                            });
+                            self.record_traffic_event(
+                                session,
+                                ctx,
+                                TrafficEventDetails {
+                                    operation_name: request_info.gql.as_ref().and_then(|g| g.operation_name.clone()),
+                                    operation_type: "Mutation".to_string(),
+                                    mode: "Async (Receipt)".to_string(),
+                                    status_code: 200,
+                                    receipt_status: Some(route.receipt_status.clone()),
+                                    target: format!("NATS: {}", ctx.proxy_context.request_topic),
+                                    ..Default::default()
+                                },
+                            );
 
                             return res;
                         }
@@ -1226,7 +1117,6 @@ impl ProxyHttp for CompositeServiceProxy {
         if !ctx.proxy_context.is_mode_b_terminated && !ctx.proxy_context.is_replay {
             let path = session.req_header().uri.path();
             if path.starts_with("/gql") || path.starts_with("/graphql") {
-                let latency_ms = ctx.proxy_context.start_time.elapsed().as_secs_f64() * 1000.0;
                 let status_code = ctx
                     .proxy_context
                     .response_parts
@@ -1282,29 +1172,21 @@ impl ProxyHttp for CompositeServiceProxy {
                     ctx.proxy_context.error_preview = Some(err.to_string());
                 }
 
-                self.traffic_recorder.record(crate::admin::TrafficRecord {
-                    id: ctx.proxy_context.request_id.to_string(),
-                    hlc: ctx.proxy_context.hlc.to_compact_string(),
-                    timestamp_epoch_ms: crate::admin::now_epoch_ms(),
-                    timestamp_formatted: crate::admin::format_timestamp(crate::admin::now_epoch_ms()),
-                    client_ip: crate::admin::extract_client_ip(session).to_string(),
-                    method: session.req_header().method.to_string(),
-                    path: path.to_string(),
-                    app_id: ctx.proxy_context.app_id.clone(),
-                    operation_name: op_name,
-                    operation_type: op_type,
-                    mode: "Sync (Proxy)".to_string(),
-                    status_code,
-                    receipt_status: None,
-                    latency_ms,
-                    target: target_str,
-                    query_preview,
-                    variables_preview,
-                    audit_tag: ctx.proxy_context.audit_tag.clone(),
-                    audit_rule: ctx.proxy_context.audit_rule.clone(),
-                    response_preview: ctx.proxy_context.response_preview.clone(),
-                    error_preview: ctx.proxy_context.error_preview.clone(),
-                });
+                self.record_traffic_event(
+                    session,
+                    ctx,
+                    TrafficEventDetails {
+                        operation_name: op_name,
+                        operation_type: op_type,
+                        mode: "Sync (Proxy)".to_string(),
+                        status_code,
+                        receipt_status: None,
+                        target: target_str,
+                        query_preview,
+                        variables_preview,
+                        ..Default::default()
+                    },
+                );
             }
         }
 
