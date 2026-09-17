@@ -566,14 +566,20 @@ impl ProxyHttp for CompositeServiceProxy {
                     "Request body exceeded {} bytes limit from client",
                     MAX_GATEWAY_BODY_BYTES
                 );
+                let err_body = r#"{"errors":[{"message":"Payload Too Large: request body exceeds 10MB limit"}]}"#;
                 let mut header = pingora::http::ResponseHeader::build(413, None)?;
                 let _ = header.insert_header("content-type", "application/json");
+                let _ = header.insert_header("content-length", err_body.len().to_string());
                 let _ = header.insert_header(REQUEST_ID_HEADER, ctx.proxy_context.request_id.to_string());
                 let _ = header.insert_header("x-spectra-hlc", ctx.proxy_context.hlc.to_compact_string());
-                let err_body = r#"{"errors":[{"message":"Payload Too Large: request body exceeds 10MB limit"}]}"#;
-                session.set_keepalive(None);
-                session.write_response_header(Box::new(header), false).await?;
-                session.write_response_body(Some(bytes::Bytes::from(err_body)), true).await?;
+                if let Err(e) = session.write_response_header(Box::new(header), false).await {
+                    log::debug!("Client disconnected before 413 header write: {}", e);
+                    return Ok(true);
+                }
+                if let Err(e) = session.write_response_body(Some(bytes::Bytes::from(err_body)), true).await {
+                    log::debug!("Client disconnected before 413 body write: {}", e);
+                    return Ok(true);
+                }
                 if let Some(key) = ctx.proxy_context.idempotency_key.take() {
                     self.idempotency_engine.remove(&key).await;
                 }
@@ -701,11 +707,19 @@ impl ProxyHttp for CompositeServiceProxy {
                                 ctx.proxy_context.hlc.to_compact_string(),
                             );
 
-                            session.set_keepalive(None);
-                            session.write_response_header(Box::new(header), false).await?;
-                            session
-                                    .write_response_body(Some(bytes::Bytes::from(err_body)), true)
-                                    .await?;
+                            let err_bytes = bytes::Bytes::from(err_body);
+                            let _ = header.insert_header("content-length", err_bytes.len().to_string());
+                            if let Err(e) = session.write_response_header(Box::new(header), false).await {
+                                log::debug!("Client disconnected before edge rejection header write: {}", e);
+                                return Ok(true);
+                            }
+                            if let Err(e) = session
+                                    .write_response_body(Some(err_bytes), true)
+                                    .await
+                            {
+                                log::debug!("Client disconnected before edge rejection body write: {}", e);
+                                return Ok(true);
+                            }
 
                             let client_ip = crate::admin::extract_client_ip(session).to_string();
 
@@ -845,11 +859,18 @@ impl ProxyHttp for CompositeServiceProxy {
                                     }
                                 }]
                             });
+                            let err_bytes = bytes::Bytes::from(err_json.to_string());
                             let mut header = pingora::http::ResponseHeader::build(403, None)?;
                             let _ = header.insert_header("content-type", "application/json");
-                            let _ = header.insert_header("content-length", err_json.to_string().len().to_string());
-                            session.write_response_header(Box::new(header), false).await?;
-                            session.write_response_body(Some(bytes::Bytes::from(err_json.to_string())), true).await?;
+                            let _ = header.insert_header("content-length", err_bytes.len().to_string());
+                            if let Err(e) = session.write_response_header(Box::new(header), false).await {
+                                log::debug!("Client disconnected before disabled route header write: {}", e);
+                                return Ok(true);
+                            }
+                            if let Err(e) = session.write_response_body(Some(err_bytes), true).await {
+                                log::debug!("Client disconnected before disabled route body write: {}", e);
+                                return Ok(true);
+                            }
 
                             self.record_traffic_event(
                                 session,

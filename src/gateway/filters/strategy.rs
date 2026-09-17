@@ -128,6 +128,7 @@ impl StrategyRouter {
 
         let mut header = pingora::http::ResponseHeader::build(200, None)?;
         let _ = header.insert_header("content-type", "application/json");
+        let _ = header.insert_header("content-length", receipt_body.len().to_string());
         let _ = header.insert_header("access-control-allow-origin", "*");
         let _ = header.insert_header(
             "access-control-expose-headers",
@@ -139,9 +140,14 @@ impl StrategyRouter {
             let _ = header.insert_header("x-spectra-dispatch", "failed");
         }
 
-        session.set_keepalive(None);
-        session.write_response_header(Box::new(header), false).await?;
-        session.write_response_body(Some(bytes::Bytes::from(receipt_body)), true).await?;
+        if let Err(e) = session.write_response_header(Box::new(header), false).await {
+            log::debug!("Client disconnected before Mode B receipt header write: {}", e);
+            return Ok(true);
+        }
+        if let Err(e) = session.write_response_body(Some(bytes::Bytes::from(receipt_body)), true).await {
+            log::debug!("Client disconnected before Mode B receipt body write: {}", e);
+            return Ok(true);
+        }
 
         Ok(true)
     }

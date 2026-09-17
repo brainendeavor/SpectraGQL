@@ -239,43 +239,36 @@ impl AdminEngine {
             "Admin access denied for client IP: {} (not in allowed_ips)",
             client_ip
         );
-        let mut header = ResponseHeader::build(403, None)?;
-        let _ = header.insert_header("content-type", "application/json");
-        session.set_keepalive(None);
-        session.write_response_header(Box::new(header), false).await?;
         let body = serde_json::json!({
             "error": "Forbidden",
             "message": format!("Access denied for IP '{}'. Configure allowed_ips in spectra.toml to grant access.", client_ip)
         });
-        session
-            .write_response_body(Some(bytes::Bytes::from(body.to_string())), true)
-            .await?;
-        Ok(true)
+        self.respond_json(session, 403, &body).await
     }
 
     async fn handle_dashboard(&self, session: &mut Session) -> pingora::Result<bool> {
         if self.config.enable_ui {
             let mut header = ResponseHeader::build(200, None)?;
             let _ = header.insert_header("content-type", "text/html; charset=utf-8");
-            session.set_keepalive(None);
-            session.write_response_header(Box::new(header), false).await?;
-            session
+            let _ = header.insert_header("content-length", ADMIN_HTML.len().to_string());
+            if let Err(e) = session.write_response_header(Box::new(header), false).await {
+                log::debug!("Client disconnected before dashboard header write: {}", e);
+                return Ok(true);
+            }
+            if let Err(e) = session
                 .write_response_body(Some(bytes::Bytes::from(ADMIN_HTML)), true)
-                .await?;
+                .await
+            {
+                log::debug!("Client disconnected before dashboard body write: {}", e);
+                return Ok(true);
+            }
             Ok(true)
         } else {
-            let mut header = ResponseHeader::build(404, None)?;
-            let _ = header.insert_header("content-type", "application/json");
-            session.set_keepalive(None);
-            session.write_response_header(Box::new(header), false).await?;
             let body = serde_json::json!({
                 "error": "Not Found",
                 "message": "Admin UI is disabled in spectra.toml (enable_ui = false)"
             });
-            session
-                .write_response_body(Some(bytes::Bytes::from(body.to_string())), true)
-                .await?;
-            Ok(true)
+            self.respond_json(session, 404, &body).await
         }
     }
 
@@ -564,10 +557,6 @@ impl AdminEngine {
     }
 
     async fn handle_not_found(&self, session: &mut Session, path: &str) -> pingora::Result<bool> {
-        let mut header = ResponseHeader::build(404, None)?;
-        let _ = header.insert_header("content-type", "application/json");
-        session.set_keepalive(None);
-        session.write_response_header(Box::new(header), false).await?;
         let body = serde_json::json!({
             "error": "Not Found",
             "path": path,
@@ -587,10 +576,7 @@ impl AdminEngine {
                 "/admin/api/v1/idempotency"
             ]
         });
-        session
-            .write_response_body(Some(bytes::Bytes::from(body.to_string())), true)
-            .await?;
-        Ok(true)
+        self.respond_json(session, 404, &body).await
     }
 
     async fn respond_json<T: serde::Serialize>(
@@ -599,16 +585,24 @@ impl AdminEngine {
         status: u16,
         data: &T,
     ) -> pingora::Result<bool> {
+        let body_bytes = serde_json::to_vec(data).unwrap_or_else(|_| b"{}".to_vec());
         let mut header = ResponseHeader::build(status, None)?;
         let _ = header.insert_header("content-type", "application/json");
+        let _ = header.insert_header("content-length", body_bytes.len().to_string());
         let _ = header.insert_header("cache-control", "no-store");
-        session.set_keepalive(None);
-        session.write_response_header(Box::new(header), false).await?;
 
-        let body_bytes = serde_json::to_vec(data).unwrap_or_else(|_| b"{}".to_vec());
-        session
+        if let Err(e) = session.write_response_header(Box::new(header), false).await {
+            log::debug!("Client disconnected before admin response header write: {}", e);
+            return Ok(true);
+        }
+
+        if let Err(e) = session
             .write_response_body(Some(bytes::Bytes::from(body_bytes)), true)
-            .await?;
+            .await
+        {
+            log::debug!("Client disconnected before admin response body write: {}", e);
+            return Ok(true);
+        }
         Ok(true)
     }
 }

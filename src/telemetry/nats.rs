@@ -86,14 +86,52 @@ impl NatsDispatch {
     }
 
     async fn ensure_default_streams(js: &async_nats::jetstream::Context) {
+        let target_subjects = vec![
+            "mutation.>".to_string(),
+            "query.>".to_string(),
+            "subscription.>".to_string(),
+            "spectra.>".to_string(),
+            "interceptors.>".to_string(),
+        ];
+
+        // 1. If stream already exists, dynamically update its subjects while preserving storage & config
+        if let Ok(stream) = js.get_stream("mutations").await {
+            if let Ok(info) = stream.get_info().await {
+                let mut updated_cfg = info.config.clone();
+                let mut needs_update = false;
+                for subj in &target_subjects {
+                    if !updated_cfg.subjects.contains(subj) {
+                        updated_cfg.subjects.push(subj.clone());
+                        needs_update = true;
+                    }
+                }
+                if needs_update {
+                    match js.update_stream(updated_cfg).await {
+                        Ok(_) => {
+                            log::info!(
+                                "NATS JetStream stream 'mutations' subjects updated to: {:?}",
+                                target_subjects
+                            );
+                        }
+                        Err(e) => {
+                            log::warn!("Failed to update NATS JetStream stream 'mutations': {}", e);
+                        }
+                    }
+                } else {
+                    log::info!(
+                        "NATS JetStream stream 'mutations' ready (subjects: {:?})",
+                        info.config.subjects
+                    );
+                }
+                return;
+            }
+        }
+
+        // 2. Stream does not exist: provision with standard defaults
         let stream_cfg = async_nats::jetstream::stream::Config {
             name: "mutations".to_string(),
             description: Some("SpectraGQL mutation and telemetry stream".to_string()),
-            subjects: vec![
-                "mutation.>".to_string(),
-                "spectra.>".to_string(),
-                "interceptors.>".to_string(),
-            ],
+            subjects: target_subjects.clone(),
             max_message_size: 4 * 1024 * 1024,
             ..Default::default()
         };
@@ -116,7 +154,7 @@ impl NatsDispatch {
                         stream_cfg.subjects
                     );
                 } else {
-                    log::debug!("NATS JetStream stream provisioning note: {}", e);
+                    log::warn!("NATS JetStream stream provisioning note: {}", e);
                 }
             }
         }

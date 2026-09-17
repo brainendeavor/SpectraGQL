@@ -13,34 +13,52 @@ impl HealthFilter {
         let path = session.req_header().uri.path();
 
         if path == "/healthz" {
-            let mut header = pingora::http::ResponseHeader::build(200, None).unwrap();
-            let _ = header.insert_header("content-type", "application/json");
-            session.set_keepalive(None);
-            session.write_response_header(Box::new(header), false).await?;
             let body = serde_json::json!({
                 "status": "ok",
                 "service": "spectragql",
                 "version": env!("CARGO_PKG_VERSION")
             });
-            session
-                .write_response_body(Some(bytes::Bytes::from(body.to_string())), true)
-                .await?;
+            let body_str = body.to_string();
+            let mut header = pingora::http::ResponseHeader::build(200, None)?;
+            let _ = header.insert_header("content-type", "application/json");
+            let _ = header.insert_header("content-length", body_str.len().to_string());
+            let _ = header.insert_header("cache-control", "no-store");
+            if let Err(e) = session.write_response_header(Box::new(header), false).await {
+                log::debug!("Client disconnected before /healthz header write: {}", e);
+                return Ok(true);
+            }
+            if let Err(e) = session
+                .write_response_body(Some(bytes::Bytes::from(body_str)), true)
+                .await
+            {
+                log::debug!("Client disconnected before /healthz body write: {}", e);
+                return Ok(true);
+            }
             return Ok(true);
         }
 
         if path == "/livez" {
-            let mut header = pingora::http::ResponseHeader::build(200, None).unwrap();
-            let _ = header.insert_header("content-type", "application/json");
-            session.set_keepalive(None);
-            session.write_response_header(Box::new(header), false).await?;
             let body = serde_json::json!({
                 "status": "live",
                 "gateway": "ready",
                 "broker": "connected"
             });
-            session
-                .write_response_body(Some(bytes::Bytes::from(body.to_string())), true)
-                .await?;
+            let body_str = body.to_string();
+            let mut header = pingora::http::ResponseHeader::build(200, None)?;
+            let _ = header.insert_header("content-type", "application/json");
+            let _ = header.insert_header("content-length", body_str.len().to_string());
+            let _ = header.insert_header("cache-control", "no-store");
+            if let Err(e) = session.write_response_header(Box::new(header), false).await {
+                log::debug!("Client disconnected before /livez header write: {}", e);
+                return Ok(true);
+            }
+            if let Err(e) = session
+                .write_response_body(Some(bytes::Bytes::from(body_str)), true)
+                .await
+            {
+                log::debug!("Client disconnected before /livez body write: {}", e);
+                return Ok(true);
+            }
             return Ok(true);
         }
 

@@ -71,6 +71,7 @@ pub struct EventSinkInspector {
     nats_client: Arc<ArcSwapOption<async_nats::Client>>,
     nats_jetstream: Arc<ArcSwapOption<async_nats::jetstream::Context>>,
     connect_lock: Arc<Mutex<()>>,
+    cached_response: Arc<ArcSwapOption<(Instant, EventSinkResponse)>>,
 }
 
 impl EventSinkInspector {
@@ -81,29 +82,63 @@ impl EventSinkInspector {
             nats_client: Arc::new(ArcSwapOption::empty()),
             nats_jetstream: Arc::new(ArcSwapOption::empty()),
             connect_lock: Arc::new(Mutex::new(())),
+            cached_response: Arc::new(ArcSwapOption::empty()),
         }
     }
 
     pub async fn inspect(&self) -> EventSinkResponse {
+        // Fast-path: Return cached response if within 1500ms TTL
+        if let Some(cached) = self.cached_response.load_full() {
+            if cached.0.elapsed() < Duration::from_millis(1500) {
+                return cached.1.clone();
+            }
+        }
+
         let m = self.broker_method.to_ascii_lowercase();
 
-        if m.contains("nats") {
-            self.inspect_nats().await
-        } else if m.contains("redis") || m.contains("valkey") || m.contains("dragonfly") {
-            self.inspect_redis().await
-        } else if m.contains("iggy") {
-            self.inspect_iggy().await
-        } else if m.contains("rabbit") || m.contains("amqp") {
-            self.inspect_rabbitmq().await
-        } else if m.contains("kafka") || m.contains("redpanda") {
-            self.inspect_kafka().await
-        } else if m.contains("sierra") {
-            self.inspect_sierradb().await
-        } else if m.contains("webhook") || m.contains("http") {
-            self.inspect_webhook().await
-        } else {
-            self.inspect_generic().await
-        }
+        let inspect_fut = async {
+            if m.contains("nats") {
+                self.inspect_nats().await
+            } else if m.contains("redis") || m.contains("valkey") || m.contains("dragonfly") {
+                self.inspect_redis().await
+            } else if m.contains("iggy") {
+                self.inspect_iggy().await
+            } else if m.contains("rabbit") || m.contains("amqp") {
+                self.inspect_rabbitmq().await
+            } else if m.contains("kafka") || m.contains("redpanda") {
+                self.inspect_kafka().await
+            } else if m.contains("sierra") {
+                self.inspect_sierradb().await
+            } else if m.contains("webhook") || m.contains("http") {
+                self.inspect_webhook().await
+            } else {
+                self.inspect_generic().await
+            }
+        };
+
+        let resp = match tokio::time::timeout(Duration::from_millis(2500), inspect_fut).await {
+            Ok(r) => r,
+            Err(_) => {
+                log::warn!(
+                    "Event sink inspection timed out after 2500ms for broker method '{}'",
+                    self.broker_method
+                );
+                EventSinkResponse {
+                    broker_type: self.broker_method.clone(),
+                    broker_addr: self.broker_addr.clone(),
+                    status: "timeout".to_string(),
+                    capabilities: vec![],
+                    stream: None,
+                    consumers: vec![],
+                    details: None,
+                    error: Some("Event sink inspection timed out after 2500ms".to_string()),
+                }
+            }
+        };
+
+        self.cached_response
+            .store(Some(Arc::new((Instant::now(), resp.clone()))));
+        resp
     }
 
     // 1. NATS JetStream Inspection
@@ -125,7 +160,11 @@ impl EventSinkInspector {
             }
         };
 
-        let stream = match js.get_stream("SPECTRA").await {
+        let stream = match js.get_stream("mutations").await {
+            Ok(s) => Ok(s),
+            Err(_) => js.get_stream("SPECTRA").await,
+        };
+        let stream = match stream {
             Ok(s) => s,
             Err(e) => {
                 let err_str = e.to_string();
@@ -140,7 +179,7 @@ impl EventSinkInspector {
                     stream: None,
                     consumers: vec![],
                     details: None,
-                    error: Some(format!("Stream 'SPECTRA' not found: {}", e)),
+                    error: Some(format!("Stream 'mutations' (or 'SPECTRA') not found: {}", e)),
                 };
             }
         };
@@ -243,6 +282,7 @@ impl EventSinkInspector {
         if self.nats_jetstream.swap(None).is_some() {
             evicted = true;
         }
+        self.cached_response.swap(None);
         if evicted {
             log::warn!("Evicted disconnected NATS client from admin inspector cache to release socket");
         }

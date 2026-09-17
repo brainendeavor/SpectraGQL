@@ -18,14 +18,21 @@ impl FaviconFilter {
             return Ok(false);
         }
 
-        let mut header = pingora::http::ResponseHeader::build(200, None).unwrap();
+        let mut header = pingora::http::ResponseHeader::build(200, None)?;
         let _ = header.insert_header("content-type", "image/svg+xml");
+        let _ = header.insert_header("content-length", FAVICON_SVG.len().to_string());
         let _ = header.insert_header("cache-control", "public, max-age=86400, immutable");
-        session.set_keepalive(None);
-        session.write_response_header(Box::new(header), false).await?;
-        session
+        if let Err(e) = session.write_response_header(Box::new(header), false).await {
+            log::debug!("Client disconnected before favicon header write: {}", e);
+            return Ok(true);
+        }
+        if let Err(e) = session
             .write_response_body(Some(bytes::Bytes::from_static(FAVICON_SVG.as_bytes())), true)
-            .await?;
+            .await
+        {
+            log::debug!("Client disconnected before favicon body write: {}", e);
+            return Ok(true);
+        }
         Ok(true)
     }
 }

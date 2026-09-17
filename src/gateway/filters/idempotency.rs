@@ -97,14 +97,20 @@ impl IdempotencyFilter {
         key: &str,
         conflict_hlc: HlcTimestamp,
     ) -> pingora::Result<()> {
+        let body = GraphQLErrorResponse::conflict(Some(key), conflict_hlc).to_json_string();
         let mut header = pingora::http::ResponseHeader::build(409, None)?;
         let _ = header.insert_header("content-type", "application/json");
+        let _ = header.insert_header("content-length", body.len().to_string());
         let _ = header.insert_header(REQUEST_ID_HEADER, request_id.to_string());
         let _ = header.insert_header("x-spectra-hlc", hlc.to_compact_string());
-        let body = GraphQLErrorResponse::conflict(Some(key), conflict_hlc).to_json_string();
-        session.set_keepalive(None);
-        session.write_response_header(Box::new(header), false).await?;
-        session.write_response_body(Some(bytes::Bytes::from(body)), true).await?;
+        if let Err(e) = session.write_response_header(Box::new(header), false).await {
+            log::debug!("Client disconnected before conflict response header write: {}", e);
+            return Ok(());
+        }
+        if let Err(e) = session.write_response_body(Some(bytes::Bytes::from(body)), true).await {
+            log::debug!("Client disconnected before conflict response body write: {}", e);
+            return Ok(());
+        }
         Ok(())
     }
 
@@ -114,14 +120,20 @@ impl IdempotencyFilter {
         hlc: HlcTimestamp,
         conflict_hlc: HlcTimestamp,
     ) -> pingora::Result<()> {
+        let body = GraphQLErrorResponse::conflict(None, conflict_hlc).to_json_string();
         let mut header = pingora::http::ResponseHeader::build(409, None)?;
         let _ = header.insert_header("content-type", "application/json");
+        let _ = header.insert_header("content-length", body.len().to_string());
         let _ = header.insert_header(REQUEST_ID_HEADER, request_id.to_string());
         let _ = header.insert_header("x-spectra-hlc", hlc.to_compact_string());
-        let body = GraphQLErrorResponse::conflict(None, conflict_hlc).to_json_string();
-        session.set_keepalive(None);
-        session.write_response_header(Box::new(header), false).await?;
-        session.write_response_body(Some(bytes::Bytes::from(body)), true).await?;
+        if let Err(e) = session.write_response_header(Box::new(header), false).await {
+            log::debug!("Client disconnected before fingerprint conflict header write: {}", e);
+            return Ok(());
+        }
+        if let Err(e) = session.write_response_body(Some(bytes::Bytes::from(body)), true).await {
+            log::debug!("Client disconnected before fingerprint conflict body write: {}", e);
+            return Ok(());
+        }
         Ok(())
     }
 
@@ -137,6 +149,8 @@ impl IdempotencyFilter {
         for (k, v) in headers {
             let _ = header.insert_header(k, v);
         }
+        let _ = header.insert_header("content-type", "application/json");
+        let _ = header.insert_header("content-length", body.len().to_string());
         let _ = header.insert_header("access-control-allow-origin", "*");
         let _ = header.insert_header(
             "access-control-expose-headers",
@@ -145,9 +159,14 @@ impl IdempotencyFilter {
         let _ = header.insert_header(REPLAY_HEADER, "true");
         let _ = header.insert_header(REQUEST_ID_HEADER, request_id.to_string());
         let _ = header.insert_header("x-spectra-hlc", hlc.to_compact_string());
-        session.set_keepalive(None);
-        session.write_response_header(Box::new(header), false).await?;
-        session.write_response_body(Some(bytes::Bytes::from(body)), true).await?;
+        if let Err(e) = session.write_response_header(Box::new(header), false).await {
+            log::debug!("Client disconnected before replay header write: {}", e);
+            return Ok(());
+        }
+        if let Err(e) = session.write_response_body(Some(bytes::Bytes::from(body)), true).await {
+            log::debug!("Client disconnected before replay body write: {}", e);
+            return Ok(());
+        }
         Ok(())
     }
 }
