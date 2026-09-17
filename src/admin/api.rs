@@ -37,6 +37,12 @@ pub struct AdminRouteEntry {
     pub receipt_status: String,
     #[serde(default = "default_true")]
     pub enabled: bool,
+    #[serde(default)]
+    pub dispatch_policy: String,
+    #[serde(default)]
+    pub is_policy_override: bool,
+    #[serde(default)]
+    pub interceptors: Vec<String>,
 }
 
 fn default_true() -> bool {
@@ -64,6 +70,12 @@ pub struct AdminMutationCoverageEntry {
     pub target_upstream: Option<String>,
     pub mode: Option<String>, // "Async", "Sync"
     pub receipt_status: Option<String>,
+    #[serde(default)]
+    pub route_name: Option<String>,
+    #[serde(default)]
+    pub dispatch_policy: Option<String>,
+    #[serde(default)]
+    pub is_policy_override: Option<bool>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

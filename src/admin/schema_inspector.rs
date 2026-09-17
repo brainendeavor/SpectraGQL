@@ -51,9 +51,9 @@ pub fn analyze_mutation_coverage(
         }
 
         // Check if there is a configured route matching this mutation field
-        let matched_route = routes.values().find(|r| r.operation == field_name);
+        let matched_route = routes.iter().find(|(_, r)| r.operation == field_name);
 
-        if let Some(route) = matched_route {
+        if let Some((route_name, route)) = matched_route {
             matched_route_ops.insert(field_name.clone());
             match route.mode {
                 ExecutionStrategy::AsyncCommandReceipt => {
@@ -64,9 +64,18 @@ pub fn analyze_mutation_coverage(
                         target_upstream: None,
                         mode: Some("Async".to_string()),
                         receipt_status: Some(route.receipt_status.clone()),
+                        route_name: Some(route_name.clone()),
+                        dispatch_policy: Some("event_sink".to_string()),
+                        is_policy_override: Some(false),
                     });
                 }
                 ExecutionStrategy::SyncUpstreamExecution => {
+                    let (policy_str, is_override) = if let Some(p) = route.dispatch_policy {
+                        (Some(p.as_str().to_string()), Some(true))
+                    } else {
+                        (None, Some(false))
+                    };
+
                     if let Some(upstream_name) = &route.upstream {
                         strangled_count += 1;
                         mutations.push(AdminMutationCoverageEntry {
@@ -75,6 +84,9 @@ pub fn analyze_mutation_coverage(
                             target_upstream: Some(upstream_name.clone()),
                             mode: Some("Sync".to_string()),
                             receipt_status: None,
+                            route_name: Some(route_name.clone()),
+                            dispatch_policy: policy_str,
+                            is_policy_override: is_override,
                         });
                     } else {
                         monolith_fallback_count += 1;
@@ -84,6 +96,9 @@ pub fn analyze_mutation_coverage(
                             target_upstream: Some("default".to_string()),
                             mode: Some("Sync".to_string()),
                             receipt_status: None,
+                            route_name: Some(route_name.clone()),
+                            dispatch_policy: policy_str,
+                            is_policy_override: is_override,
                         });
                     }
                 }
@@ -97,6 +112,9 @@ pub fn analyze_mutation_coverage(
                 target_upstream: Some("default".to_string()),
                 mode: Some("Sync".to_string()),
                 receipt_status: None,
+                route_name: None,
+                dispatch_policy: None,
+                is_policy_override: Some(false),
             });
         }
     }
@@ -305,6 +323,7 @@ mod tests {
             .unwrap();
         assert_eq!(adjust_mut.classification, "TargetedService");
         assert_eq!(adjust_mut.target_upstream, Some("inventory".to_string()));
+        assert_eq!(adjust_mut.route_name, Some("inventory_update".to_string()));
 
         let import_mut = coverage
             .mutations
@@ -312,6 +331,8 @@ mod tests {
             .find(|m| m.field_name == "importCatalog")
             .unwrap();
         assert_eq!(import_mut.classification, "AsyncReceipt");
+        assert_eq!(import_mut.route_name, Some("bulk_import".to_string()));
+        assert_eq!(import_mut.dispatch_policy, Some("event_sink".to_string()));
 
         let email_mut = coverage
             .mutations
@@ -320,5 +341,6 @@ mod tests {
             .unwrap();
         assert_eq!(email_mut.classification, "DefaultUpstream");
         assert_eq!(email_mut.target_upstream, Some("default".to_string()));
+        assert_eq!(email_mut.route_name, None);
     }
 }

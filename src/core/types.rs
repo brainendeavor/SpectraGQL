@@ -74,6 +74,17 @@ pub enum ModeADispatchPolicy {
     None,
 }
 
+impl ModeADispatchPolicy {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ModeADispatchPolicy::ResponseWithFailure => "response_with_failure",
+            ModeADispatchPolicy::ResponseOnly => "response_only",
+            ModeADispatchPolicy::RawAudit => "raw_audit",
+            ModeADispatchPolicy::None => "none",
+        }
+    }
+}
+
 pub type SyncDispatchPolicy = ModeADispatchPolicy;
 pub type DispatchPolicy = ModeADispatchPolicy;
 

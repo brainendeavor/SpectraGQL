@@ -176,7 +176,7 @@ impl AdminEngine {
             broker_method,
             broker_addr,
             mode_a_enabled: spectra_cfg.gql.mode_a.enabled,
-            mode_a_dispatch_policy: format!("{:?}", spectra_cfg.gql.mode_a.dispatch_policy),
+            mode_a_dispatch_policy: spectra_cfg.gql.mode_a.dispatch_policy.as_str().to_string(),
             mode_a_timeout_ms: spectra_cfg.gql.mode_a.timeout_ms,
             traffic_recorder,
             eventsink_inspector,
@@ -308,6 +308,19 @@ impl AdminEngine {
                 .map(|a| a.to_string())
                 .unwrap_or_else(|| self.default_upstream_addr.clone());
 
+            let (dispatch_policy, is_policy_override) = match r.mode {
+                crate::core::types::ExecutionStrategy::AsyncCommandReceipt => {
+                    ("event_sink".to_string(), false)
+                }
+                crate::core::types::ExecutionStrategy::SyncUpstreamExecution => {
+                    if let Some(policy) = r.dispatch_policy {
+                        (policy.as_str().to_string(), true)
+                    } else {
+                        (self.mode_a_dispatch_policy.clone(), false)
+                    }
+                }
+            };
+
             route_entries.push(AdminRouteEntry {
                 name: name.clone(),
                 operation: r.operation.clone(),
@@ -316,6 +329,9 @@ impl AdminEngine {
                 upstream_addr: target_addr,
                 receipt_status: r.receipt_status.clone(),
                 enabled: r.enabled,
+                dispatch_policy,
+                is_policy_override,
+                interceptors: r.interceptors.clone(),
             });
         }
         route_entries.sort_by(|a, b| a.name.cmp(&b.name));
@@ -730,11 +746,15 @@ mod tests {
                 upstream_addr: "127.0.0.1:5001".to_string(),
                 receipt_status: "ACCEPTED".to_string(),
                 enabled: true,
+                dispatch_policy: "response_with_failure".to_string(),
+                is_policy_override: false,
+                interceptors: vec![],
             }],
         };
         let routes_json = serde_json::to_string(&routes).unwrap();
         assert!(routes_json.contains("\"adjustInventory\""));
         assert!(routes_json.contains("\"inventory\""));
+        assert!(routes_json.contains("\"dispatch_policy\":\"response_with_failure\""));
 
         let idemp = AdminIdempotencyResponse {
             backend: "memory".to_string(),
