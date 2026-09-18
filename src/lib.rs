@@ -40,9 +40,24 @@ use std::sync::Arc;
 /// This allows tests to construct the gateway pipeline directly without starting Pingora's full process.
 pub fn build_composite_service(spectra_configuration: &SpectraConfig) -> Result<CompositeService> {
     // 1 & 2. Initialize persistent config store and hydrate/seed configuration
-    let default_raw = spectra_configuration
-        .to_toml_string()
-        .unwrap_or_default();
+    // Prefer preserving original file content with comments if available
+    let default_raw = std::env::var("SPECTRA_CONFIG_CONTENT")
+        .or_else(|_| std::env::var("SPECTRAGQL_CONFIG_CONTENT"))
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| {
+            let path_to_read = std::env::var("SPECTRA_CONFIG")
+                .or_else(|_| std::env::var("SPECTRAGQL_CONFIG"))
+                .unwrap_or_else(|_| "spectra.toml".to_string());
+            std::fs::read_to_string(&path_to_read)
+                .ok()
+                .filter(|s| !s.trim().is_empty())
+        })
+        .unwrap_or_else(|| {
+            spectra_configuration
+                .to_toml_string()
+                .unwrap_or_default()
+        });
 
     let (config_store, effective_cfg, active_raw) = {
         let runner = async {

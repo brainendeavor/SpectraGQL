@@ -472,11 +472,11 @@ pub struct SpectraConfig {
     pub gql: SpectraGqlConfig,
     pub rest: SpectraRestConfig,
     pub upstream: SpectraUpstreamConfig,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub upstreams: HashMap<String, SpectraUpstreamConfig>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub apps: Vec<SpectraAppConfig>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_app: Option<String>,
     pub dispatch: SpectraDispatchConfig,
     #[serde(default)]
@@ -485,7 +485,7 @@ pub struct SpectraConfig {
     pub subscriptions: SpectraSubscriptionsConfig,
     #[serde(default)]
     pub admin: SpectraAdminConfig,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub interceptors: HashMap<String, InterceptorConfig>,
     #[serde(default)]
     pub wasm: SpectraWasmConfig,
