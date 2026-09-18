@@ -28,7 +28,7 @@ This document defines the operational architecture supported by **SpectraGQL Pro
 ### The Concept
 Mode A is the **flagship mode** of SpectraGQL. It acts as an intelligent Layer 7 reverse proxy sitting in front of your primary GraphQL service. 
 
-It preserves synchronous client expectations (and automatic Apollo/Relay cache normalization) while using the mutation response to emit a rich, reliable domain event to your broker (NATS JetStream, Apache Iggy, SierraDB, Kafka). Downstream subsystems (loyalty, inventory, notifications, search indexing) consume this event **choreographically** rather than forcing the core resolver into a brittle, synchronous fan-out.
+It preserves synchronous client expectations (and automatic Apollo/Relay cache normalization) while using the mutation response to emit a rich, reliable domain event to your broker (NATS JetStream, Apache Kafka, Redis Streams, or Apache Iggy). Downstream subsystems (loyalty, inventory, notifications, search indexing) consume this event **choreographically** rather than forcing the core resolver into a brittle, synchronous fan-out.
 
 ### Sequence Flow (Post-Response Gateway Outbox)
 ```
@@ -197,6 +197,30 @@ method = "NATS"
 addr = "127.0.0.1:4222"
 topic_prefix = "spectra.events"
 ```
+
+---
+
+## Edge Interceptor Rejection Audit Convention
+
+When an incoming request is rejected at the gateway edge prior to upstream forwarding or command receipt emission (e.g. by a declarative CEL rule, WASM interceptor, depth limit, or payload sanitization failure), SpectraGQL publishes a structured audit event directly to the active event broker:
+
+- **Topic Pattern:** `interceptors.rejected.<operation_name>` (e.g. `interceptors.rejected.submitorder`, `interceptors.rejected.anonymous`).
+- **Audit Payload Structure:**
+  ```json
+  {
+    "eventId": "0191b2c4-8840-7ac3-8a02-0e9f1a0e882a",
+    "hlc": "1789151435592.000001",
+    "operationName": "submitOrder",
+    "operationType": "mutation",
+    "rejectionCode": "RULE_EVALUATION_FAILED",
+    "statusCode": 400,
+    "reason": "Order value exceeds unauthenticated threshold",
+    "clientIp": "198.51.100.42",
+    "queryPreview": "mutation submitOrder($amount: Int!) { ... }",
+    "variables": "{\"amount\": 50000}"
+  }
+  ```
+This allows security and audit pipelines to capture malicious or invalid traffic in real time without passing any load to upstream servers.
 
 ---
 

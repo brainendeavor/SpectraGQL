@@ -48,8 +48,7 @@ GraphQL inherently provides the architectural boundary needed for **Command Quer
                                                     ┌───────────────────┐
                                                     │ Event Backbone    │
                                                     │ NATS / Kafka /    │
-                                                    │ Redis / Iggy /    │
-                                                    │ SierraDB / Rabbit │
+                                                    │ Redis / Iggy      │
                                                     └─────────┬─────────┘
                                                               │
                                                               ▼
@@ -61,7 +60,7 @@ GraphQL inherently provides the architectural boundary needed for **Command Quer
 
 **SpectraGQL** is a high-performance reverse proxy built on Cloudflare's **Pingora** that sits at the network boundary, intercepting GraphQL traffic at wire speed:
 1. Routing **Queries** directly to existing backends, read replicas, or caches.
-2. Intercepting **Mutations**, **ratifying** them (enforcing idempotency, versioning rules, and governance policies), and **dispatching** them as immutable Commands to an event backbone (NATS JetStream, Apache Iggy, SierraDB, Kafka).
+2. Intercepting **Mutations**, **ratifying** them (enforcing idempotency, versioning rules, and governance policies), and **dispatching** them as immutable Commands to an event backbone (NATS JetStream, Apache Kafka, Redis Streams, or Apache Iggy).
 3. Empowering teams to build **mutation resolvers as event-sourced consumers** rather than synchronous HTTP handlers locked into a request/response cycle.
 
 ---
@@ -170,7 +169,7 @@ To bridge the gap between legacy systems and this event-driven future, SpectraGQ
 ### Mode A: The Workhorse Gateway (`ExecutionStrategy::SyncUpstreamExecution` — Flagship)
 - **Mechanism:** SpectraGQL intercepts the mutation, forwards the HTTP request to the primary backend service for synchronous local execution, and—upon receiving an HTTP 2xx response—dispatches the completed domain event (`CompletionEvent` with stashed request arguments + response data) to the event backbone.
 - **Client Experience:** 100% transparent. The client sends a traditional GraphQL mutation, receives its expected synchronous response, and enjoys automatic Apollo/Relay cache normalization.
-- **Value Proposition:** **Zero code changes required.** Allows core resolvers to do one fast write and eliminates synchronous cross-service fan-out. Downstream subsystems (loyalty, notifications, search indexing) react choreographically off NATS/Iggy/SierraDB.
+- **Value Proposition:** **Zero code changes required.** Allows core resolvers to do one fast write and eliminates synchronous cross-service fan-out. Downstream subsystems (loyalty, notifications, search indexing) react choreographically off NATS, Kafka, Redis, or Iggy.
 - **Dispatch Policies:** Supports `response_only` (default: 1 event per success, zero phantom writes), `response_with_failure` (emits stashed request on timeout/error), and `raw_audit` (dual ingress/egress).
 
 ### Mode B: The Event-Native Gateway (`ExecutionStrategy::AsyncEdgeCommand` — Pure Asynchronous CQRS)
@@ -269,11 +268,14 @@ pub trait EventEncoder: Send + Sync {
 #### Supported Broker Adapters:
 1. **NATS JetStream:** Cloud-native streaming and pub/sub with built-in persistence.
 2. **Apache Kafka / Redpanda:** Enterprise standard event streaming platform.
-3. **Redis Streams / Dragonfly / Valkey:** Lightweight in-memory streaming with persistent consumer groups.
-4. **RabbitMQ:** AMQP message broker integration.
-5. **Apache Iggy:** Pure-Rust, cache-friendly streaming broker delivering sub-millisecond tail latencies.
-6. **SierraDB:** Native event-sourcing database engineered specifically for immutable event streams.
-7. **Webhook Dispatch (`WebhookDispatch`):** Outbound HTTP POST dispatch for server-to-server integrations.
+3. **Redis Streams (Valkey):** Lightweight in-memory streaming with persistent consumer groups.
+4. **Apache Iggy:** Pure-Rust, cache-friendly streaming broker delivering sub-millisecond tail latencies.
+
+> **Candidate / Future Adapters:**
+> - **RabbitMQ (AMQP):** Message broker integration deferred to prioritize streaming and event-sourcing models.
+> - **SierraDB:** Native event-sourcing and stream database cataloged for future evaluation.
+>
+> **Webhooks Note:** Outbound webhooks are supported downstream via SpectraFlux fluxcells (`fluxcells/rust/webhook` or custom workers). They are intentionally not implemented as direct edge sinks in SpectraGQL to prevent synchronous third-party HTTP latency from blocking edge line-rate throughput; webhooks always consume asynchronously from an intermediate event sink / broker.
 
 ---
 
@@ -292,9 +294,13 @@ The codebase has undergone a complete architectural modernization:
 5. **Strongly Typed Serde Error Envelopes (`src/protocol/error.rs`):**
    - Replaced all string-interpolated JSON format strings with strongly-typed `GraphQLErrorResponse` and `CommandReceipt` models.
 6. **Automated Integration Test Matrix:**
-   - Expanded test suite to **114 tests** across 9 dedicated test files under `tests/` with 100% pass rate and 0 warnings.
-
----
+   - Expanded adversarial test suite across dedicated test files under `tests/` with 100% pass rate and zero warnings.
+7. **Pluggable Persistent ConfigStore & ArcSwap Hot-Reloading (`src/core/config_store.rs`):**
+   - Implemented zero-downtime configuration hot-reloading with atomic pointer swaps (`ArcSwap`). Added support for `SPECTRA_CONFIG_CONTENT` 12-factor deployment and interactive control plane drawer editing.
+8. **Dynamic Upstream DNS Re-Resolution Engine (`src/admin/dns_rescan.rs`):**
+   - Added `POST /admin/api/v1/dns/rescan` with token authorization and normalized `SPECTRA_ADMIN_URL` base origin resolution to handle cloud container ephemeral IP allocations seamlessly.
+9. **Elimination of Obsolete Lua Dependencies:**
+   - Purged `mlua` and 11 transitive crates to streamline the interceptor pipeline exclusively onto pure declarative CEL rules (`cel-rust`) and sandboxed WebAssembly modules (`wasmtime`).
 
 ---
 
@@ -313,8 +319,8 @@ A crucial insight for developer adoption is that **the Kafka wire protocol is ub
 | **`spectragql/appliance:nats`** | **NATS JetStream** | NATS protocol | **The Swiss Army Knife:** Single static Go binary (<30MB), ultra-low memory, pub/sub, KV, and multi-language client SDKs. |
 | **`spectragql/appliance:nisshi`** | **Nisshi (Rust Kafka)** | Kafka wire protocol | **Lightweight Kafka DX:** Pure-Rust Kafka-compatible broker backed by SQLite or in-memory storage. Zero JVM, instant startup. |
 | **`spectragql/appliance:redpanda`** | **Redpanda (C++)** | Kafka wire protocol | **Enterprise Kafka Parity:** Production-grade Kafka API compatibility in C++ Seastar dev-container mode. |
+| **`spectragql/appliance:redis`** | **Redis / Valkey** | Redis Streams | **In-Memory Buffer:** Append-only streaming (`XADD`), consumer groups (`XREADGROUP`), and shared idempotency cache. |
 | **`spectragql/appliance:iggy`** | **Apache Iggy** | Iggy binary / TCP / QUIC | **Pure Rust Speed:** Byte-level streaming engine built for high-throughput NVMe drives, cache locality, and sub-millisecond tail latencies. |
-| **`spectragql/appliance:sierradb`** | **SierraDB** | SierraDB event stream | **The Event-Store Specialist:** Immutable event sourcing, built-in aggregate reconstruction, temporal projections, and database queries. |
 
 > **Emerging & Experimental Log Engines Evaluated:**
 > - **Walrus (`nubskr/walrus`):** A high-throughput, io_uring-based streaming log written in Rust. Features segment-based sharding and metadata-only Raft (>1M writes/sec). High potential as an embedded storage core for extreme NVMe performance.
@@ -410,7 +416,7 @@ A rigorous product strategy requires acknowledging where a technology fits and w
 | :--- | :--- | :--- |
 | **Microservices with GraphQL API (3+ services)** | **Flagship (High)** | Solves synchronous resolver fan-out; gives new services instant event streams via Mode A with zero frontend changes. |
 | **High-Volume Ingestion / Long-Running Sagas** | **Ideal (High)** | Mode B provides true async CQRS, edge ratification, and broker queue buffering for telemetry, IoT, and heavy batch jobs. |
-| **Rapid Prototyping / Local Dev** | **High** | Dev Appliances (`:nats`, `:nisshi`, `:redpanda`, `:iggy`, `:sierradb`) spin up a complete CQRS gateway in one command. |
+| **Rapid Prototyping / Local Dev** | **High** | Dev Appliances (`:nats`, `:nisshi`, `:redpanda`, `:redis`, `:iggy`) spin up a complete CQRS gateway in one command. |
 | **Single Monolith + Single Relational DB** | **Zero (Overkill)** | ACID transactions already solve the write path natively. |
 | **Full Apollo Federation v2 Subgraph Mesh** | **Low / Niche** | Requires federated entity resolution and distributed query planning across subgraphs. |
 | **Public / Partner GraphQL APIs** | **Moderate (Mode A only)** | Third-party clients require synchronous spec contracts. Mode A works for internal side-effects; Mode B cannot be used. |
@@ -429,14 +435,14 @@ Milestone 1: Core Engine Modernization
 Milestone 2: Pluggable Dispatch Architecture
 ├── Abstract DispatchAdapter trait
 ├── Implement Apache Iggy native Rust adapter
-├── Implement SierraDB native event-store adapter
+├── Implement Redis Streams native async adapter
 ├── Implement Arroyo stream-processing integration
 └── Maintain NATS JetStream & Kafka adapters
 
 Milestone 3: Ratification & Governance Layer
 ├── Implement Idempotency filter (in-flight stash & hash tracking)
 ├── Schema drift & deprecation detector
-└── WASM plugin runtime (Extism / Wasmtime) alongside Lua
+└── WASM plugin runtime (Wasmtime) & Declarative CEL Evaluator (Purged obsolete Lua)
 
 Milestone 4: Operational Modes & Dispatch Policies
 ├── Mode A: Workhorse Gateway with configurable dispatch policies:
@@ -451,9 +457,10 @@ Milestone 5: Developer Appliances & Ecosystem
 │   ├── spectragql/appliance:nats (NATS JetStream)
 │   ├── spectragql/appliance:nisshi (Rust-native Kafka protocol + SQLite)
 │   ├── spectragql/appliance:redpanda (Enterprise Kafka protocol)
-│   ├── spectragql/appliance:iggy (Apache Iggy pure-Rust)
-│   └── spectragql/appliance:sierradb (SierraDB event-sourcing)
-├── Beast GUI (Tauri / Svelte dashboard for observing mutation streams)
+│   ├── spectragql/appliance:redis (Redis Streams / Valkey)
+│   └── spectragql/appliance:iggy (Apache Iggy pure-Rust)
+├── Embedded Pingora Admin Dashboard & Interactive Control Plane Drawer
+├── Dynamic Upstream DNS Re-Resolution Engine (POST /admin/api/v1/dns/rescan)
 └── End-to-end integration test harness with mock brokers
 ```
 
@@ -463,4 +470,4 @@ Milestone 5: Developer Appliances & Ecosystem
 
 SpectraGQL does not need to compete with Apollo or Cosmo on complex federated query planning. 
 
-Its true wedge is **solving the Write side of GraphQL**: transforming GraphQL mutations into a robust, high-performance, event-sourced CQRS command engine. By focusing on **Mode A for pragmatic microservice event choreography** and **Mode B for pure asynchronous CQRS**, paired with modern lightweight engines like NATS JetStream, Apache Iggy, and SierraDB, SpectraGQL provides the missing architectural backbone that enterprise GraphQL has needed for years.
+Its true wedge is **solving the Write side of GraphQL**: transforming GraphQL mutations into a robust, high-performance, event-sourced CQRS command engine. By focusing on **Mode A for pragmatic microservice event choreography** and **Mode B for pure asynchronous CQRS**, paired with modern lightweight streaming engines like NATS JetStream, Apache Kafka, Redis Streams, and Apache Iggy, SpectraGQL provides the missing architectural backbone that enterprise GraphQL has needed for years.

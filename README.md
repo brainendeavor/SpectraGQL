@@ -57,16 +57,13 @@ GraphQL gives frontend teams expressive control over data retrieval. However, in
                                      └────────────────────────┬────────────────────────┘
                                                               │ Atomic EventSink
                                                               ▼
-                                                    ┌───────────────────┐
-                                                    │   Event Sinks     │
-                                                    │   - Kafka / Redp. │
-                                                    │   - NATS JetStream│
-                                                    │   - Redis Streams │
-                                                    │   - RabbitMQ      │
-                                                    │   - Apache Iggy   │
-                                                    │   - SierraDB      │
-                                                    │   - Webhook HTTP  │
-                                                    └───────────────────┘
+                                                     ┌───────────────────┐
+                                                     │   Event Sinks     │
+                                                     │   - Kafka / Redp. │
+                                                     │   - NATS JetStream│
+                                                     │   - Redis Streams │
+                                                     │   - Apache Iggy   │
+                                                     └───────────────────┘
                                                               │
                                                               ▼
                                                     ┌───────────────────┐
@@ -115,7 +112,9 @@ SpectraGQL enforces sensitive data redaction at compile time using Rust's type-s
 
 ### 4. Atomic EventSink Decoupling
 Network transports and message brokers implement the atomic [`EventSink`](file:///Users/bmo/code/SpectraGQL/src/telemetry/sink.rs) port:
-- Adapters focus strictly on connection lifecycle and byte transport: NATS JetStream, Apache Kafka, Redis Streams, RabbitMQ, Apache Iggy, SierraDB, and HTTP Webhooks.
+- **Active Streaming Sinks:** **Apache Kafka / Redpanda**, **NATS JetStream**, **Redis Streams (Valkey)**, and **Apache Iggy**.
+- **Future / Candidate Adapters:** **RabbitMQ (AMQP)** and **SierraDB** are cataloged as candidate adapters for future evaluation.
+- **Webhooks Note:** Outbound webhooks are supported downstream via SpectraFlux fluxcells (`fluxcells/rust/webhook` or custom workers). They are intentionally not implemented as direct edge sinks in SpectraGQL to prevent third-party HTTP latency from blocking edge line-rate throughput; webhooks always consume asynchronously from an intermediate event sink / broker.
 - Serialization is completely decoupled via [`JsonEventEncoder`](file:///Users/bmo/code/SpectraGQL/src/telemetry/sink.rs).
 
 ### 5. Deterministic Causal Ordering
@@ -130,6 +129,7 @@ Every operation is tagged with:
 - **[Philosophy & Core Thesis](docs/philosophy.md)**: Deconstructing the mutation debate, CQRS, and durable event sourcing across microservices.
 - **[Architecture & Strategy](docs/architecture-and-strategy.md)**: Deep dive into the Pingora pipeline, filter architecture, and design patterns.
 - **[Modes of Operation](docs/modes-of-operation.md)**: Sequence diagrams and failure policies for Mode A and Mode B.
+- **[Application Integration Guide](docs/app-integration.md)**: Upstream service integration patterns, dynamic DNS re-resolution hooks, and typed context helpers.
 - **[Subscriptions & Realtime](docs/subscriptions-and-realtime.md)**: Reverse event queues, WebSocket (`graphql-ws`) termination, and live updates.
 - **[Local Appliance Setup](docs/dev-appliances.md)**: Quick-start Docker Compose environments for local NATS, Kafka, Redis, and Iggy brokers.
 
@@ -220,14 +220,60 @@ curl -X POST http://127.0.0.1:8000/graphql \
 
 ---
 
-## Downstream Appliance: Spectral Flux & Fluxcells
+## Admin Console & Configuration Drawer ("Edit & Go")
 
-SpectraGQL is paired with **Spectral Flux** (`spectral-flux/`), an ultra-lightweight downstream execution chassis that subscribes to mutation events and executes sandboxed WebAssembly **Fluxcells** with embedded in-process Redis-compatible storage (**`kevy-embedded`**):
+SpectraGQL includes an embedded administrative control plane at `http://localhost:8000/admin`. Routing, upstream mappings, and gateway policies can be inspected and updated dynamically through the UI drawer:
 
-* **Zero-Compiler Appliance Tenet:** Downstream runtime containers remain $<25\text{ MB}$, with zero `rustc`, `cargo`, or `git` bloat.
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ ⚡ SpectraGQL Control Plane (http://localhost:8000/admin)                   │
+│                                                                             │
+│  [ Operations & Route Matrix ]     [ BYOW Workers & Lag ]    [ Settings ]   │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│  • Operations & Route Matrix: Status list (Monolith, Strangled, Mode B)     │
+│  • "Edit & Go" Config Drawer: In-browser TOML editor with syntax validation │
+│  • Zero-Downtime Hot-Reload: Instant lock-free state swaps via ArcSwap      │
+│  • BYOW Discovery: Real-time consumer lag & metrics from NATS, Kafka, Redis │
+│  • Upstream Diagnostics: In-browser health testing & dynamic DNS re-scan    │
+│  • Keyboard shortcuts and navigation supported                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Admin Console Capabilities
+* **Configuration Drawer:** Edit routes, upstreams, or timeouts in the browser. Saving updates `ConfigStore` and atomically swaps runtime routing tables via `ArcSwap` with zero downtime.
+* **Operations & Route Matrix:** Inspect and filter operations by classification (`Monolith`, `Strangled`, `Mode B Edge Command`, or `Custom Upstream`).
+* **BYOW Worker Discovery:** Real-time visibility into downstream mutation workers, reporting consumer lag, pending deliveries, and redelivery counts directly from broker consumer groups (NATS JetStream, Kafka, and Redis Streams).
+* **Upstream Diagnostics & DNS Rescan:** Test network connectivity to upstream microservices and trigger dynamic DNS re-resolution directly from the interface.
+
+---
+
+## Downstream Appliance: SpectraFlux & Fluxcells
+
+SpectraGQL pairs seamlessly with **[SpectraFlux](https://github.com/brainendeavor/SpectraFlux)**, an ultra-lightweight downstream WebAssembly execution chassis that subscribes to mutation events and executes sandboxed **Fluxcells** with embedded database connections and monotonic causality guards:
+
+* **Zero-Compiler Appliance Tenet:** Downstream runtime containers remain $< 25\text{ MB}$, with zero `rustc`, `cargo`, or `git` bloat.
 * **Remote Fluxcell Ingress:** Deployments are initiated via Mode B mutations (`deployFluxcell`, `activateFluxcell`, `removeFluxcell`) returning sub-millisecond command receipts.
 * **SSRF Shield:** Artifact URLs are validated against HTTPS, host allowlists, and DNS pre-resolution blocking loopbacks, private subnets, and cloud instance metadata (`169.254.169.254`).
-* **Two-Phase Governance:** Downloaded `.wasm` modules enter `Staged` state without mounting routes until explicitly activated in the SpectraHub Admin UI.
+* **Two-Phase Governance:** Downloaded `.wasm` modules enter `Staged` state without mounting routes until explicitly activated via admin control plane or CLI.
+
+### Dynamic Upstream DNS Re-Resolution (`POST /admin/api/v1/dns/rescan`)
+
+In modern cloud container environments (Railway, Fly.io, AWS ECS), upstream redeployments allocate new ephemeral private IP addresses. SpectraGQL includes a dynamic DNS re-resolution engine allowing upstream services or CI/CD pipelines to trigger instant pool refreshes:
+
+```bash
+curl -X POST http://localhost:8000/admin/api/v1/dns/rescan \
+  -H "Authorization: Bearer ${SPECTRA_ADMIN_TOKEN}"
+```
+
+> [!IMPORTANT]
+> **Base Origin Standard:** `SPECTRA_ADMIN_URL` must specify the **base server origin and port** (e.g. `http://spectragql.railway.internal:8000`), and must **NEVER** include the `/admin` path suffix. See [Application Integration Guide](docs/app-integration.md) for details and client snippets (`spectra.ts`).
+
+### Lock-Free Dynamic Configuration Hot-Reloading (`ArcSwap`)
+
+SpectraGQL supports zero-downtime configuration updates using `ArcSwap` and pluggable `ConfigStore` persistence:
+- **Environment Variable Configuration:** Supply raw TOML directly via `SPECTRA_CONFIG_CONTENT`.
+- **Interactive Control Plane Drawer:** Edit and reload routes, upstreams, and interceptors live from the `/admin` drawer.
+- **REST API:** `POST /admin/api/v1/config` safely parses, validates, and atomically swaps active routing state across worker threads.
 
 ### Configuring the Deployment Authentication Token (`SPECTRA_DEPLOY_TOKEN`)
 
@@ -271,29 +317,24 @@ When submitting deployment operations, pass the token via standard HTTP headers:
 SpectraGQL maintains an adversarial, comprehensive test suite spanning unit tests, chaos fuzzing, concurrency raceways, and end-to-end CQRS sagas:
 
 ```bash
-cargo test --workspace
+cargo test --lib
+cargo test --test '*'
 ```
 
 ```
-test result: ok. 89 passed (spectragql core lib)
-test result: ok. 52 passed (spectral-flux engine, wasm, storage, deployer)
+test result: ok. 92 passed (spectragql core lib)
 test result: ok.  6 passed (tests/admin_security.rs)
 test result: ok.  5 passed (tests/deployer_governance.rs)
 test result: ok.  3 passed (tests/dispatch_failure.rs)
-test result: ok.  3 passed (tests/e2e_dual_pillar_saga.rs)
 test result: ok.  1 passed (tests/e2e_gateway.rs)
 test result: ok.  3 passed (tests/gateway_interceptors.rs)
+test result: ok.  4 passed (tests/graphql_parser_edge_cases.rs)
 test result: ok.  5 passed (tests/idempotency_concurrency.rs)
 test result: ok. 10 passed (tests/interceptor_pipeline.rs)
 test result: ok.  4 passed (tests/sanitizer_edge_cases.rs)
 test result: ok.  5 passed (tests/subscription_protocol.rs)
 test result: ok.  6 passed (tests/typestate_sanitization.rs)
 test result: ok.  9 passed (tests/wasm_interceptor.rs)
-test result: ok.  7 passed (fluxcells/magic-link)
-test result: ok.  7 passed (fluxcells/webhook)
-test result: ok.  2 passed (templates/fluxcell-seed)
-
-Grand Total: 218 passed; 0 failed; 0 ignored; 0 warnings
 ```
 
 ---

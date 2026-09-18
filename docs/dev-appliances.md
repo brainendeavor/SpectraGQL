@@ -7,7 +7,7 @@ SpectraGQL Dev Appliances are **single-container turnkey environments** designed
 ## 1. Architectural Model
 
 Each appliance runs as a self-contained container with **`oxmgr`** (a lightweight pure-Rust process manager) as PID 1, supervising:
-1. **The Broker Daemon** (NATS JetStream, Nisshi Kafka, Redis/Valkey, Apache Iggy, Redpanda, or SierraDB).
+1. **The Broker Daemon** (NATS JetStream, Nisshi Kafka, Redis/Valkey, Apache Iggy, or Redpanda).
 2. **The SpectraGQL Gateway** running Cloudflare Pingora with Dual-Pillar routing (Modes A & B), distributed idempotency, realtime subscriptions, and an administrative control plane.
 
 ```
@@ -65,11 +65,6 @@ docker run -p 8000:8000 -p 8090:8090 -p 3000:3000 spectragql/appliance:iggy
 ### 🏢 Redpanda Kafka (Enterprise Kafka)
 ```bash
 docker run -p 8000:8000 -p 9092:9092 spectragql/appliance:redpanda
-```
-
-### 📦 SierraDB (Native Event Sourcing via RESP3 EAPPEND)
-```bash
-docker run -p 8000:8000 -p 7379:7379 spectragql/appliance:sierradb
 ```
 
 ---
@@ -133,10 +128,14 @@ Administrative endpoints are designed as clean, zero-overhead REST APIs:
 | `/admin` | `GET` | Single-page visual admin dashboard (HTML/JS) |
 | `/admin/api/v1/status` | `GET` | Gateway version, uptime, active operational modes, and broker status |
 | `/admin/api/v1/routes` | `GET` | Configured routes, targets, operational modes, and upstream addresses |
+| `/admin/api/v1/config` | `GET` / `POST` | Inspects or hot-reloads runtime configuration with `ArcSwap` |
+| `/admin/api/v1/dns/rescan` | `POST` | Triggers dynamic upstream DNS re-resolution and socket pool refresh |
+| `/admin/api/v1/workers` | `GET` | Discovers downstream consumers, broker consumer lag, and worker telemetry |
 | `/admin/api/v1/schema` | `GET` | Introspected upstream GraphQL schema with **Strangler-Fig Coverage Analysis** |
 | `/admin/api/v1/schema/refresh` | `POST` | Triggers an immediate re-fetch of upstream GraphQL introspection |
 | `/admin/api/v1/subscriptions` | `GET` | Active WebSocket client connections and registered topic subscriptions |
 | `/admin/api/v1/idempotency` | `GET` | In-flight idempotency locks, LRU capacity, and active record count |
+| `/admin/api/v1/security/lockdown`| `POST` | Emergency security lockdown; flips atomic killswitches cluster-wide |
 | `/healthz` | `GET` | Instant HTTP 200 liveness probe (does not touch upstream) |
 | `/livez` | `GET` | Broker readiness check probe |
 
