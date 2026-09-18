@@ -13,6 +13,7 @@ pub enum ExecutionStrategy {
         alias = "proxy",
         alias = "upstream",
         alias = "UPSTREAM",
+        alias = "SyncUpstreamExecution",
         alias = "A",
         alias = "a"
     )]
@@ -21,6 +22,7 @@ pub enum ExecutionStrategy {
     #[serde(
         rename = "async",
         alias = "ASYNC",
+        alias = "AsyncCommandReceipt",
         alias = "async_command_receipt",
         alias = "ASYNC_COMMAND_RECEIPT",
         alias = "async_edge_command",

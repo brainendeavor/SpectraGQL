@@ -184,5 +184,21 @@ expr = "!body.contains('internal_secret_key')"
 # fail_mode = "fail_closed"
 # circuit_breaker_failures = 5
 # circuit_breaker_reset_ms = 30000
-
-
+# =============================================================================
+# Persistent Configuration Store & Admin Control Plane
+# =============================================================================
+# Configure where active gateway configuration is stored and hot-reloaded from.
+# Supported backends: "memory", "file" (volume mount), "postgres" (RDBMS), "redis"
+# Configuration can also be supplied via 12-factor environment variables:
+#   SPECTRA_CONFIG_STORE_BACKEND="postgres" | "file" | "redis" | "memory"
+#   SPECTRA_DATABASE_URL="postgres://user:pass@host:5432/dbname"
+#   SPECTRA_REDIS_URL="redis://127.0.0.1:6379"
+#   SPECTRA_CONFIG_FILE_PATH="/data/spectra.toml"
+#
+[config_store]
+backend = "memory"
+table_name = "spectragql_config"
+key = "active"
+# file_path = "/data/spectra.toml"
+# database_url = "postgres://user:password@localhost:5432/spectragql"
+# redis_url = "redis://127.0.0.1:6379"

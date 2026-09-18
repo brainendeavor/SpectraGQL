@@ -43,7 +43,7 @@ serde_json = { version = "1.0.140", features = ["raw_value"] }
 strum = "0.27.1"
 strum_macros = "0.27.1"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
-tokio = { version = "1", features = ["sync", "io-util"] }
+tokio = { version = "1", features = ["sync", "io-util", "rt", "macros"] }
 uuid = { version = "1.16.0", features = ["v4", "v7", "serde"] }
 sha2 = "0.10"
 regex = "1"
@@ -56,6 +56,25 @@ futures-util = { version = "0.3", default-features = false, features = ["sink", 
 cel = { version = "0.14.5", features = ["json", "regex", "chrono"] }
 wasmtime = { version = "48.0.2", default-features = false, features = ["cranelift", "pooling-allocator", "wat", "async", "runtime", "parallel-compilation"] }
 wat = "1.259.0"
+chrono = "0.4"
+toml = "0.8"
+
+# Optional / Default Feature: PostgreSQL Persistence
+deadpool-postgres = { version = "0.14", optional = true }
+tokio-postgres = { version = "0.7", optional = true, features = ["with-chrono-0_4"] }
+tokio-postgres-rustls = { version = "0.13", optional = true }
+rustls = { version = "0.23", optional = true, default-features = false, features = ["ring", "std"] }
+webpki-roots = { version = "0.26", optional = true }
+
+[features]
+default = ["postgres"]
+postgres = [
+    "dep:deadpool-postgres",
+    "dep:tokio-postgres",
+    "dep:tokio-postgres-rustls",
+    "dep:rustls",
+    "dep:webpki-roots",
+]
 
 [dev-dependencies]
 hyper = { version = "1", features = ["http1", "server"] }

@@ -311,7 +311,7 @@ impl SpectraDispatchConfig {
     }
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct SpectraGqlConfig {
     pub paths: String,
     pub ops_to_dispatch: String,
@@ -325,7 +325,7 @@ pub struct SpectraGqlConfig {
     pub interceptors: Vec<String>,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[allow(unused)]
 pub struct SpectraRestConfig {
     pub paths: String,
@@ -407,7 +407,45 @@ impl SpectraAppConfig {
     }
 }
 
-#[derive(Debug, Deserialize, Clone)]
+fn default_store_backend() -> String {
+    "memory".to_string()
+}
+
+fn default_table_name() -> String {
+    "spectragql_config".to_string()
+}
+
+fn default_config_key() -> String {
+    "active".to_string()
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct SpectraConfigStoreConfig {
+    #[serde(default = "default_store_backend")]
+    pub backend: String,
+    pub database_url: Option<String>,
+    pub redis_url: Option<String>,
+    pub file_path: Option<String>,
+    #[serde(default = "default_table_name")]
+    pub table_name: String,
+    #[serde(default = "default_config_key")]
+    pub key: String,
+}
+
+impl Default for SpectraConfigStoreConfig {
+    fn default() -> Self {
+        SpectraConfigStoreConfig {
+            backend: default_store_backend(),
+            database_url: None,
+            redis_url: None,
+            file_path: None,
+            table_name: default_table_name(),
+            key: default_config_key(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct SpectraConfig {
     pub bind_addr: String,
     pub gql: SpectraGqlConfig,
@@ -432,15 +470,13 @@ pub struct SpectraConfig {
     pub wasm: SpectraWasmConfig,
     #[serde(default)]
     pub telemetry: SpectraTelemetryConfig,
+    #[serde(default)]
+    pub config_store: SpectraConfigStoreConfig,
 }
 
 impl SpectraConfig {
-    pub fn new() -> Result<Self, ConfigError> {
-        let spectra_env = env::var("SPECTRA_ENV")
-            .or_else(|_| env::var("SPECTRAGQL_ENV"))
-            .unwrap_or_else(|_| "development".into());
-
-        let mut builder = Config::builder()
+    pub fn base_builder() -> Result<config::ConfigBuilder<config::builder::DefaultState>, ConfigError> {
+        Config::builder()
             .set_default("bind_addr", "0.0.0.0:8000")?
             .set_default("upstream.addr", "localhost:4000")?
             .set_default("upstream.name", "default")?
@@ -466,7 +502,18 @@ impl SpectraConfig {
             .set_default("wasm.default_timeout_ms", 25)?
             .set_default("rest.paths", "/api,/api/{*path}")?
             .set_default("telemetry.error_capture.enabled", true)?
-            .set_default("telemetry.error_capture.max_body_bytes", 4096)?;
+            .set_default("telemetry.error_capture.max_body_bytes", 4096)?
+            .set_default("config_store.backend", "memory")?
+            .set_default("config_store.table_name", "spectragql_config")?
+            .set_default("config_store.key", "active")
+    }
+
+    pub fn new() -> Result<Self, ConfigError> {
+        let spectra_env = env::var("SPECTRA_ENV")
+            .or_else(|_| env::var("SPECTRAGQL_ENV"))
+            .unwrap_or_else(|_| "development".into());
+
+        let mut builder = Self::base_builder()?;
 
         // 1. Explicit config content or file via SPECTRA_CONFIG_CONTENT / SPECTRA_CONFIG takes top precedence
         if let Ok(config_str) = env::var("SPECTRA_CONFIG_CONTENT").or_else(|_| env::var("SPECTRAGQL_CONFIG_CONTENT")) {
@@ -505,6 +552,27 @@ impl SpectraConfig {
 
         let config_builder = builder.build()?;
         config_builder.try_deserialize()
+    }
+
+    pub fn from_toml_str(content: &str) -> Result<Self, ConfigError> {
+        let mut builder = Self::base_builder()?;
+        builder = builder.add_source(File::from_str(content, config::FileFormat::Toml));
+        builder = builder
+            .add_source(Environment::with_prefix("spectra").separator("_"))
+            .add_source(Environment::with_prefix("spectragql").separator("_"));
+
+        let builder = if let Ok(bind) = env::var("SPECTRA_BIND_ADDR").or_else(|_| env::var("SPECTRAGQL_BIND_ADDR")) {
+            builder.set_override("bind_addr", bind)?
+        } else {
+            builder
+        };
+
+        let config_builder = builder.build()?;
+        config_builder.try_deserialize()
+    }
+
+    pub fn to_toml_string(&self) -> Result<String, toml::ser::Error> {
+        toml::to_string_pretty(self)
     }
 
     pub fn gql_upstream(&self) -> &SpectraUpstreamConfig {
@@ -1048,5 +1116,42 @@ mod tests {
         cfg.reconnect_max_ms = Some(1500);
         assert_eq!(cfg.initial_reconnect_ms(), 50);
         assert_eq!(cfg.max_reconnect_ms(), 1500);
+    }
+
+    #[test]
+    fn test_spectra_config_from_toml_str_and_to_toml_string_roundtrip() {
+        let sample_toml = r#"
+bind_addr = "0.0.0.0:8000"
+
+[upstream]
+name = "default"
+addr = "127.0.0.1:4000"
+
+[dispatch]
+method = "nats"
+addr = "127.0.0.1:4222"
+name = "default"
+
+[config_store]
+backend = "memory"
+key = "active"
+
+[gql.routes.submitFeedback]
+operation = "submitFeedback"
+mode = "AsyncCommandReceipt"
+enabled = true
+"#;
+        let cfg = SpectraConfig::from_toml_str(sample_toml).expect("Parsing sample TOML should succeed");
+        assert_eq!(cfg.bind_addr, "0.0.0.0:8000");
+        assert_eq!(cfg.config_store.backend, "memory");
+        assert!(cfg.gql.routes.contains_key("submitFeedback"));
+
+        let serialized = cfg.to_toml_string().expect("Serializing to TOML should succeed");
+        assert!(serialized.contains("0.0.0.0:8000"));
+        assert!(serialized.contains("submitFeedback"));
+
+        let roundtripped = SpectraConfig::from_toml_str(&serialized).expect("Roundtrip parsing should succeed");
+        assert_eq!(roundtripped.bind_addr, "0.0.0.0:8000");
+        assert!(roundtripped.gql.routes.contains_key("submitFeedback"));
     }
 }
