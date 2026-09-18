@@ -109,3 +109,32 @@ pub fn new_proxy_service(
         _ => Err(anyhow!("Unsupported service type: {}", service_type)),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_path_router_with_root_and_catchall() {
+        let mut router = PathRouter::new();
+        // 0: gql service
+        router.add_service_handle("/gql", 0).unwrap();
+        router.add_service_handle("/graphql", 0).unwrap();
+
+        // 1: http service
+        router.add_service_handle("/", 1).unwrap();
+        router.add_service_handle("/{*path}", 1).unwrap();
+        router.add_service_handle("/api", 1).unwrap();
+        router.add_service_handle("/api/{*path}", 1).unwrap();
+
+        // Check gql
+        assert_eq!(router.get_service_handle("/gql"), Some(0));
+        assert_eq!(router.get_service_handle("/graphql"), Some(0));
+
+        // Check root and paths
+        assert_eq!(router.get_service_handle("/"), Some(1));
+        assert_eq!(router.get_service_handle("/public/table.js"), Some(1));
+        assert_eq!(router.get_service_handle("/api"), Some(1));
+        assert_eq!(router.get_service_handle("/api/v1/status"), Some(1));
+    }
+}

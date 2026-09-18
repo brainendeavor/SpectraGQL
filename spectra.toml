@@ -180,6 +180,10 @@ allowed_ips = [
 # deploy_token = "sk_deploy_change_this_token_in_production"
 
 [rest]
+# Default API gateway routing.
+# If proxying a full upstream web application or single-page app (e.g. OpenCoEval),
+# configure root and catch-all pass-through:
+# paths = "/,/{*path},/api,/api/{*path}"
 paths = "/api,/api/{*path}"
 
 # WASM Interceptor Runtime Engine

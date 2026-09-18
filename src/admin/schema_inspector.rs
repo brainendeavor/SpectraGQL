@@ -77,22 +77,34 @@ pub fn analyze_mutation_coverage(
                     };
 
                     if let Some(upstream_name) = &route.upstream {
-                        strangled_count += 1;
-                        mutations.push(AdminMutationCoverageEntry {
-                            field_name,
-                            classification: "TargetedService".to_string(),
-                            target_upstream: Some(upstream_name.clone()),
-                            mode: Some("Sync".to_string()),
-                            receipt_status: None,
-                            route_name: Some(route_name.clone()),
-                            dispatch_policy: policy_str,
-                            is_policy_override: is_override,
-                        });
+                        if upstream_name != "default" {
+                            strangled_count += 1;
+                            mutations.push(AdminMutationCoverageEntry {
+                                field_name,
+                                classification: "TargetedService".to_string(),
+                                target_upstream: Some(upstream_name.clone()),
+                                mode: Some("Sync".to_string()),
+                                receipt_status: None,
+                                route_name: Some(route_name.clone()),
+                                dispatch_policy: policy_str,
+                                is_policy_override: is_override,
+                            });
+                        } else {
+                            mutations.push(AdminMutationCoverageEntry {
+                                field_name,
+                                classification: "ConfiguredRoute".to_string(),
+                                target_upstream: Some("default".to_string()),
+                                mode: Some("Sync".to_string()),
+                                receipt_status: None,
+                                route_name: Some(route_name.clone()),
+                                dispatch_policy: policy_str,
+                                is_policy_override: is_override,
+                            });
+                        }
                     } else {
-                        monolith_fallback_count += 1;
                         mutations.push(AdminMutationCoverageEntry {
                             field_name,
-                            classification: "DefaultUpstream".to_string(),
+                            classification: "ConfiguredRoute".to_string(),
                             target_upstream: Some("default".to_string()),
                             mode: Some("Sync".to_string()),
                             receipt_status: None,
