@@ -724,7 +724,8 @@ mod tests {
     fn test_admin_html_embedding() {
         assert!(ADMIN_HTML.contains("<!DOCTYPE html>"));
         assert!(ADMIN_HTML.contains("SpectraGQL"));
-        assert!(ADMIN_HTML.contains("Appliance Gateway Admin"));
+        assert!(ADMIN_HTML.contains("SPECTRA"));
+        assert!(ADMIN_HTML.contains("GQL"));
         assert!(ADMIN_HTML.contains("Mutation Routing Breakdown"));
         assert!(ADMIN_HTML.contains("/admin/api/v1/status"));
         assert!(ADMIN_HTML.contains("/admin/api/v1/schema"));

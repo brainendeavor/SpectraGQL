@@ -26,25 +26,25 @@
     .container { max-width: 1300px; margin: 0 auto; }
     
     /* Header */
-    header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 16px; margin-bottom: 24px; }
-    .logo-group { display: flex; align-items: center; gap: 12px; }
+    header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 16px; margin-bottom: 24px; flex-wrap: wrap; gap: 16px; }
+    .logo-group { display: flex; align-items: center; gap: 12px; white-space: nowrap; flex-shrink: 0; }
     .logo-badge { background: linear-gradient(135deg, #1f6feb, #8957e5); color: white; padding: 6px 14px; border-radius: 6px; font-weight: bold; font-size: 14px; letter-spacing: 0.5px; }
-    h1 { font-size: 22px; color: var(--text-bright); }
-    .status-badge { display: inline-flex; align-items: center; gap: 6px; padding: 4px 12px; border-radius: 12px; font-size: 13px; font-weight: 600; }
+    h1 { font-size: 22px; color: var(--text-bright); white-space: nowrap; display: inline-flex; align-items: baseline; gap: 8px; }
+    .status-badge { display: inline-flex; align-items: center; gap: 6px; padding: 4px 12px; border-radius: 12px; font-size: 13px; font-weight: 600; white-space: nowrap; }
     .status-live { background: rgba(63, 185, 80, 0.15); color: var(--success); border: 1px solid rgba(63, 185, 80, 0.4); }
     .status-dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
 
     /* Grid */
     .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 24px; }
-    .card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; padding: 18px; }
-    .card-title { font-size: 12px; text-transform: uppercase; letter-spacing: 0.6px; color: var(--text-muted); margin-bottom: 6px; font-weight: 600; }
-    .card-value { font-size: 22px; font-weight: bold; color: var(--text-bright); }
-    .card-meta { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
+    .card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; padding: 18px; min-width: 0; }
+    .card-title { font-size: 12px; text-transform: uppercase; letter-spacing: 0.6px; color: var(--text-muted); margin-bottom: 6px; font-weight: 600; white-space: nowrap; }
+    .card-value { font-size: 22px; font-weight: bold; color: var(--text-bright); white-space: nowrap; }
+    .card-meta { font-size: 12px; color: var(--text-muted); margin-top: 4px; white-space: nowrap; }
 
     /* Section Cards */
     .section-card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; padding: 20px; margin-bottom: 24px; }
     .section-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; flex-wrap: wrap; gap: 10px; }
-    .section-title { font-size: 16px; font-weight: 600; color: var(--text-bright); }
+    .section-title { font-size: 16px; font-weight: 600; color: var(--text-bright); white-space: nowrap; }
 
     /* Progress Bar */
     .progress-track { height: 16px; background: #21262d; border-radius: 8px; overflow: hidden; display: flex; margin-bottom: 12px; }
@@ -53,7 +53,7 @@
     .seg-mode-b { background: var(--primary); }
     .seg-monolith { background: #484f58; }
     .progress-legend { display: flex; gap: 20px; font-size: 13px; flex-wrap: wrap; }
-    .legend-item { display: flex; align-items: center; gap: 6px; }
+    .legend-item { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
     .legend-box { width: 12px; height: 12px; border-radius: 3px; }
 
     /* Alerts */
@@ -61,8 +61,9 @@
     .drift-alert ul { margin-left: 20px; margin-top: 6px; }
 
     /* Tables */
+    .table-container { width: 100%; overflow-x: auto; }
     table { width: 100%; border-collapse: collapse; font-size: 13px; text-align: left; }
-    th { padding: 10px 12px; background: #21262d; color: var(--text-muted); font-weight: 600; border-bottom: 1px solid var(--border); }
+    th { padding: 10px 12px; background: #21262d; color: var(--text-muted); font-weight: 600; border-bottom: 1px solid var(--border); white-space: nowrap; }
     td { padding: 10px 12px; border-bottom: 1px solid var(--border); }
     tr:last-child td { border-bottom: none; }
     
@@ -88,7 +89,7 @@
     .app-select-dropdown:focus { border-color: var(--primary); }
 
     /* Buttons & Controls */
-    .btn { background: #21262d; border: 1px solid var(--border); color: var(--text-bright); padding: 6px 12px; border-radius: 6px; font-size: 12px; cursor: pointer; transition: 0.2s; }
+    .btn { background: #21262d; border: 1px solid var(--border); color: var(--text-bright); padding: 6px 12px; border-radius: 6px; font-size: 12px; cursor: pointer; transition: 0.2s; white-space: nowrap; }
     .btn:hover { background: #30363d; border-color: #8b949e; }
     .btn-primary { background: #1f6feb; border-color: #1f6feb; color: white; }
     .btn-primary:hover { background: #388bfd; }
@@ -105,26 +106,38 @@
     .code-box { background: #050911; border: 1px solid var(--border); border-radius: 6px; padding: 10px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px; color: #7ee787; max-height: 140px; overflow-y: auto; white-space: pre-wrap; word-break: break-all; }
     .meta-key { color: var(--text-muted); font-size: 12px; }
     .meta-val { color: var(--text-bright); font-family: ui-monospace, monospace; font-size: 12px; }
+
+    /* Help & Shortcuts Modal Styles */
+    .modal-tab-btn { background: transparent; border: none; border-bottom: 2px solid transparent; color: var(--text-muted); font-size: 13px; font-weight: 600; padding: 8px 16px; cursor: pointer; transition: 0.2s; }
+    .modal-tab-btn:hover { color: var(--text-bright); }
+    .modal-tab-btn.active { color: var(--primary); border-bottom-color: var(--primary); }
   </style>
 </head>
 <body>
   <div class="container">
     <header>
       <div class="logo-group">
-        <div class="logo-badge">SpectraGQL</div>
-        <h1>Appliance Gateway Admin</h1>
+        <svg viewBox="0 0 512 512" width="32" height="32" style="filter: drop-shadow(0 0 8px rgba(0, 240, 255, 0.45)); flex-shrink: 0;">
+          <g id="mark">
+            <polygon points="158.9,51 429.8,51 336.2,153 206.3,153 285.6,205 203.7,286.9 75,205" fill="#FFFFFF"/>
+            <polygon points="312.9,221.9 437,302.5 349.2,461 87.4,461 181,356.4 310.9,356.4 233.6,302.5" fill="#00F0FF"/>
+          </g>
+        </svg>
+        <div style="display: flex; align-items: center; font-size: 20px; font-weight: 800; letter-spacing: 0.05em; font-family: system-ui, -apple-system, sans-serif;">
+          <span style="color: #ffffff;">SPECTRA</span><span style="color: #00F0FF; margin-left: 2px;">GQL</span>
+        </div>
       </div>
-      <div style="display: flex; align-items: center; gap: 12px;">
-        <button class="btn" onclick="openShortcutsModal()" style="font-size: 12px; padding: 4px 10px; display: flex; align-items: center; gap: 6px;" title="View Keyboard Shortcuts (?)">
-          ⌨️ Shortcuts <kbd>?</kbd>
+      <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
+        <button class="btn" onclick="openHelpModal()" style="font-size: 12px; padding: 4px 10px; display: flex; align-items: center; gap: 6px;" title="Appliance Help &amp; Shortcuts (?)">
+          Help <kbd>?</kbd>
         </button>
         <div style="display: flex; align-items: center; gap: 8px;">
-          <label for="app-select" style="font-size: 13px; color: var(--text-muted); font-weight: 500;">Application:</label>
+          <label for="app-select" style="font-size: 13px; color: var(--text-muted); font-weight: 500; white-space: nowrap;">Application:</label>
           <select id="app-select" class="app-select-dropdown" onchange="onAppFilterChange(this.value)">
             <option value="all">🏢 All Applications</option>
           </select>
         </div>
-        <span id="uptime-display" style="font-size: 13px; color: var(--text-muted);">Uptime: --</span>
+        <span id="uptime-display" style="font-size: 13px; color: var(--text-muted); white-space: nowrap;">Uptime: --</span>
         <div class="status-badge status-live">
           <span class="status-dot"></span>
           <span id="gateway-status">ONLINE</span>
@@ -141,7 +154,7 @@
       </div>
       <div class="card">
         <div class="card-title">Default Dispatch Policy</div>
-        <div class="card-value" id="kpi-dispatch-policy" style="font-size: 18px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--accent-cyan);">--</div>
+        <div class="card-value" id="kpi-dispatch-policy" style="font-size: 14.5px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--accent-cyan); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="Mode A Dispatch Policy">--</div>
         <div class="card-meta" id="kpi-dispatch-meta">Mode A Proxy Baseline</div>
       </div>
       <div class="card">
@@ -211,24 +224,26 @@
         <div style="font-size: 14px; font-weight: 600; margin-bottom: 8px; color: var(--text-bright);">
           Stream Consumers & Lag Monitoring
         </div>
-        <table>
-          <thead>
-            <tr>
-              <th>Consumer Name</th>
-              <th>App</th>
-              <th>Filter Subject</th>
-              <th>Lag (Pending)</th>
-              <th>Unacknowledged</th>
-              <th>Redelivered</th>
-              <th>Stream Seq (Delivered / Ack Floor)</th>
-              <th>Worker Connection</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody id="table-consumers">
-            <tr><td colspan="9" style="text-align: center; color: var(--text-muted);">Querying NATS JetStream consumers...</td></tr>
-          </tbody>
-        </table>
+        <div class="table-container">
+          <table>
+            <thead>
+              <tr>
+                <th>Consumer Name</th>
+                <th>App</th>
+                <th>Filter Subject</th>
+                <th>Lag (Pending)</th>
+                <th>Unacknowledged</th>
+                <th>Redelivered</th>
+                <th>Stream Seq (Delivered / Ack Floor)</th>
+                <th>Worker Connection</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="table-consumers">
+              <tr><td colspan="9" style="text-align: center; color: var(--text-muted);">Querying NATS JetStream consumers...</td></tr>
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
 
@@ -264,24 +279,26 @@
       </div>
 
       <!-- Traffic Stream Table -->
-      <table>
-        <thead>
-          <tr>
-            <th>Time (UTC)</th>
-            <th>App</th>
-            <th>Method</th>
-            <th>Operation Name</th>
-            <th>Type</th>
-            <th>Execution Mode</th>
-            <th>Target / Sink</th>
-            <th>Status</th>
-            <th>Latency</th>
-          </tr>
-        </thead>
-        <tbody id="table-traffic">
-          <tr><td colspan="9" style="text-align: center; color: var(--text-muted);">Listening for GraphQL traffic on port 8000...</td></tr>
-        </tbody>
-      </table>
+      <div class="table-container">
+        <table>
+          <thead>
+            <tr>
+              <th>Time (UTC)</th>
+              <th>App</th>
+              <th>Method</th>
+              <th>Operation Name</th>
+              <th>Type</th>
+              <th>Execution Mode</th>
+              <th>Target / Sink</th>
+              <th>Status</th>
+              <th>Latency</th>
+            </tr>
+          </thead>
+          <tbody id="table-traffic">
+            <tr><td colspan="9" style="text-align: center; color: var(--text-muted);">Listening for GraphQL traffic on port 8000...</td></tr>
+          </tbody>
+        </table>
+      </div>
     </div>
 
     <!-- 3. GraphQL Mutation Routing Breakdown -->
@@ -324,7 +341,7 @@
           </div>
         </div>
         <div style="display: flex; gap: 8px; align-items: center;">
-          <button class="btn btn-sm" onclick="openShortcutsModal()" title="View Keyboard Shortcuts (?)">⌨️ Shortcuts <kbd>?</kbd></button>
+          <button class="btn btn-sm" onclick="openHelpModal('shortcuts')" title="View Keyboard Shortcuts (?)">⌨️ Shortcuts <kbd>?</kbd></button>
           <button class="btn btn-sm btn-primary" onclick="refreshSchema()" id="btn-refresh-schema-matrix">🔄 Refresh Schema</button>
         </div>
       </div>
@@ -349,87 +366,21 @@
       </div>
 
       <!-- Unified Matrix Table -->
-      <table>
-        <thead>
-          <tr>
-            <th>GraphQL Operation</th>
-            <th>Gateway Route ID</th>
-            <th>Strategy / Mode</th>
-            <th>Target Upstream / Socket</th>
-            <th>Dispatch Policy</th>
-            <th>Status / Health</th>
-            <th>Interceptors & Guards</th>
-          </tr>
-        </thead>
-        <tbody id="table-matrix-operations">
-          <tr><td colspan="7" style="text-align: center; color: var(--text-muted);">Loading unified route & schema matrix...</td></tr>
-        </tbody>
-      </table>
-    </div>
-
-    <!-- 6. Fluxcell Governance & Staged Deployment Panel -->
-    <div class="section-card" id="fluxcell-governance-panel">
-      <div class="section-header">
-        <div>
-          <div class="section-title">Fluxcell Deployment Governance & Staged Activation</div>
-          <div style="font-size: 13px; color: var(--text-muted); margin-top: 4px;">
-            Dual-killswitch controls, staged artifact inspection, and one-click emergency lockdown.
-          </div>
-        </div>
-        <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
-          <span id="badge-external-deploy" class="pill pill-success">External CI/CD: ACTIVE</span>
-          <span id="badge-dev-upload" class="pill pill-warning">Dev Upload: ACTIVE</span>
-          <button class="btn" onclick="triggerEmergencyLockdown()" style="background: rgba(248, 81, 73, 0.2); color: var(--danger); border: 1px solid var(--danger); font-weight: 700;">
-            🛑 Instant Lockdown
-          </button>
-          <button class="btn btn-primary" onclick="openDevUploadModal()">+ Dev Upload</button>
-        </div>
-      </div>
-
-      <!-- Staged Fluxcells (Human-in-the-Loop Activation) -->
-      <div style="margin-top: 14px; margin-bottom: 20px;">
-        <div style="font-size: 14px; font-weight: 600; margin-bottom: 8px; color: var(--text-bright); display: flex; align-items: center; gap: 8px;">
-          <span>Staged Fluxcells (Awaiting Production Activation)</span>
-          <span id="staged-count-pill" class="pill pill-warning">0 Pending</span>
-        </div>
+      <div class="table-container">
         <table>
           <thead>
             <tr>
-              <th>Cell Name</th>
-              <th>Version / Git</th>
-              <th>SHA-256 Checksum</th>
-              <th>Mount Path</th>
-              <th>Status</th>
-              <th>Installed At</th>
-              <th>Actions</th>
+              <th>GraphQL Operation</th>
+              <th>Gateway Route ID</th>
+              <th>Strategy / Mode</th>
+              <th>Target Upstream / Socket</th>
+              <th>Dispatch Policy</th>
+              <th>Status / Health</th>
+              <th>Interceptors & Guards</th>
             </tr>
           </thead>
-          <tbody id="table-staged-fluxcells">
-            <tr><td colspan="7" style="text-align: center; color: var(--text-muted);">No fluxcells currently staged. New artifacts will appear here before serving live traffic.</td></tr>
-          </tbody>
-        </table>
-      </div>
-
-      <!-- Active Fluxcells Registry -->
-      <div style="margin-top: 14px;">
-        <div style="font-size: 14px; font-weight: 600; margin-bottom: 8px; color: var(--text-bright);">
-          Active Fluxcells Registry
-        </div>
-        <table>
-          <thead>
-            <tr>
-              <th>Cell Name</th>
-              <th>Version / Git</th>
-              <th>SHA-256 Checksum</th>
-              <th>Mount Path</th>
-              <th>Declared Routes</th>
-              <th>Event Subscriptions</th>
-              <th>Status</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody id="table-active-fluxcells">
-            <tr><td colspan="8" style="text-align: center; color: var(--text-muted);">Loading active fluxcells from Spectral Flux...</td></tr>
+          <tbody id="table-matrix-operations">
+            <tr><td colspan="7" style="text-align: center; color: var(--text-muted);">Loading unified route & schema matrix...</td></tr>
           </tbody>
         </table>
       </div>
@@ -866,163 +817,6 @@
       renderMatrix();
     }
 
-    async function loadFluxcells() {
-      let data = null;
-      try {
-        const res = await fetch('http://localhost:8081/_flux/deployer/status');
-        if (res.ok) data = await res.json();
-      } catch (e) {}
-
-      const extBadge = document.getElementById('badge-external-deploy');
-      const devBadge = document.getElementById('badge-dev-upload');
-      if (data) {
-        extBadge.className = `pill ${data.external_deploy_enabled ? 'pill-success' : 'pill-danger'}`;
-        extBadge.innerText = `External CI/CD: ${data.external_deploy_enabled ? 'ACTIVE' : 'LOCKED'}`;
-        devBadge.className = `pill ${data.dev_upload_enabled ? 'pill-success' : 'pill-danger'}`;
-        devBadge.innerText = `Dev Upload: ${data.dev_upload_enabled ? 'ACTIVE' : 'LOCKED'}`;
-
-        const stagedTable = document.getElementById('table-staged-fluxcells');
-        const activeTable = document.getElementById('table-active-fluxcells');
-        const stagedList = (data.fluxcells || []).filter(c => c.status === 'Staged');
-        const activeList = (data.fluxcells || []).filter(c => c.status === 'Active');
-
-        document.getElementById('staged-count-pill').innerText = `${stagedList.length} Pending`;
-
-        if (stagedList.length === 0) {
-          stagedTable.innerHTML = '<tr><td colspan="7" style="text-align: center; color: var(--text-muted);">No fluxcells currently staged. New artifacts will appear here before serving live traffic.</td></tr>';
-        } else {
-          stagedTable.innerHTML = stagedList.map(c => `
-            <tr>
-              <td><code>${c.name}</code></td>
-              <td>${c.version} ${c.git_hash ? `<span style="color:var(--text-muted)">(${c.git_hash.slice(0, 7)})</span>` : ''}</td>
-              <td><code>${c.sha256.slice(0, 12)}...</code></td>
-              <td><code>${c.mount_path}</code></td>
-              <td><span class="pill pill-warning">STAGED</span></td>
-              <td>${new Date(c.installed_at * 1000).toLocaleTimeString()}</td>
-              <td>
-                <button class="btn btn-sm btn-primary" onclick="activateFluxcell('${c.name}', '${c.sha256}')">🚀 Activate</button>
-                <button class="btn btn-sm" onclick="removeFluxcell('${c.name}')" style="color:var(--danger)">✕ Discard</button>
-              </td>
-            </tr>
-          `).join('');
-        }
-
-        if (activeList.length === 0) {
-          activeTable.innerHTML = '<tr><td colspan="8" style="text-align: center; color: var(--text-muted);">No dynamically deployed fluxcells registered yet.</td></tr>';
-        } else {
-          activeTable.innerHTML = activeList.map(c => `
-            <tr>
-              <td><code>${c.name}</code></td>
-              <td>${c.version} ${c.git_hash ? `<span style="color:var(--text-muted)">(${c.git_hash.slice(0, 7)})</span>` : ''}</td>
-              <td><code>${c.sha256.slice(0, 12)}...</code></td>
-              <td><code>${c.mount_path}</code></td>
-              <td><code>${(c.routes || []).length} routes</code></td>
-              <td><code>${(c.subscriptions || []).length} events</code></td>
-              <td><span class="pill pill-success">ACTIVE</span></td>
-              <td>
-                <button class="btn btn-sm" onclick="removeFluxcell('${c.name}')" style="color:var(--danger)">Unmount</button>
-              </td>
-            </tr>
-          `).join('');
-        }
-      } else {
-        extBadge.className = 'pill pill-monolith';
-        extBadge.innerText = 'Spectral Flux: Standalone';
-        devBadge.className = 'pill pill-monolith';
-        devBadge.innerText = 'Dev Upload: Standalone';
-      }
-    }
-
-    async function triggerEmergencyLockdown() {
-      if (!confirm("EMERGENCY LOCKDOWN: Freeze all incoming Fluxcell deployments immediately? Running production traffic will not be affected.")) return;
-      try {
-        const res = await fetch('http://localhost:8081/admin/api/v1/security/lockdown', { method: 'POST' });
-        if (res.ok) {
-          alert("Lockdown successful! All deployment ingestion is frozen.");
-          loadFluxcells();
-        } else {
-          alert("Lockdown failed with status " + res.status);
-        }
-      } catch (e) {
-        alert("Lockdown request failed: " + e.message);
-      }
-    }
-
-    async function activateFluxcell(name, sha256) {
-      if (!confirm(`Activate fluxcell '${name}' into live production traffic?`)) return;
-      try {
-        const res = await fetch('http://localhost:8081/_flux/deployer/activate', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name, sha256 }),
-        });
-        if (res.ok) {
-          alert(`Fluxcell '${name}' activated successfully!`);
-          loadFluxcells();
-        } else {
-          const err = await res.json();
-          alert(`Activation failed: ${err.message || res.statusText}`);
-        }
-      } catch (e) {
-        alert("Activation error: " + e.message);
-      }
-    }
-
-    async function removeFluxcell(name) {
-      if (!confirm(`Remove fluxcell '${name}' from chassis?`)) return;
-      try {
-        const res = await fetch(`http://localhost:8081/_flux/deployer/fluxcells/${encodeURIComponent(name)}`, { method: 'DELETE' });
-        if (res.ok) {
-          alert(`Fluxcell '${name}' removed successfully.`);
-          loadFluxcells();
-        } else {
-          alert("Removal failed with status " + res.status);
-        }
-      } catch (e) {
-        alert("Removal error: " + e.message);
-      }
-    }
-
-    function openDevUploadModal() {
-      document.getElementById('dev-upload-modal').style.display = 'flex';
-    }
-
-    function closeDevUploadModal() {
-      document.getElementById('dev-upload-modal').style.display = 'none';
-    }
-
-    async function submitDevUpload() {
-      const name = document.getElementById('upload-cell-name').value.trim();
-      const mount = document.getElementById('upload-cell-mount').value.trim();
-      const fileInput = document.getElementById('upload-cell-file');
-
-      if (!name) { alert("Please provide a Fluxcell Name"); return; }
-      if (!fileInput.files || fileInput.files.length === 0) { alert("Please select a .wasm file"); return; }
-
-      const file = fileInput.files[0];
-      const buffer = await file.arrayBuffer();
-
-      try {
-        const url = `http://localhost:8081/_flux/deployer/upload?name=${encodeURIComponent(name)}&mount=${encodeURIComponent(mount || '/api/' + name)}`;
-        const res = await fetch(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/wasm' },
-          body: buffer,
-        });
-
-        if (res.ok) {
-          alert(`Fluxcell '${name}' uploaded and staged successfully!`);
-          closeDevUploadModal();
-          loadFluxcells();
-        } else {
-          const err = await res.json();
-          alert(`Upload failed: ${err.message || res.statusText}`);
-        }
-      } catch (e) {
-        alert("Upload error: " + e.message);
-      }
-    }
-
     async function loadSchema() {
       const data = await fetchJSON('/admin/api/v1/schema');
       if (!data) return;
@@ -1277,16 +1071,16 @@
 
         return `
           <tr>
-            <td>
-              <div style="font-weight: 700; color: var(--text-bright); font-size: 13.5px;">${escapeHtml(r.operation)}</div>
+            <td style="white-space: nowrap;">
+              <div style="font-weight: 700; color: var(--text-bright); font-size: 13.5px; white-space: nowrap;">${escapeHtml(r.operation)}</div>
               ${aliasBadge}
             </td>
-            <td>${routeHtml}</td>
-            <td>${modePill}</td>
-            <td>${targetHtml}</td>
-            <td>${policyPill}</td>
-            <td>${statusPill}</td>
-            <td>${interceptorsHtml}</td>
+            <td style="white-space: nowrap;">${routeHtml}</td>
+            <td style="white-space: nowrap;">${modePill}</td>
+            <td style="white-space: nowrap;">${targetHtml}</td>
+            <td style="white-space: nowrap;">${policyPill}</td>
+            <td style="white-space: nowrap;">${statusPill}</td>
+            <td style="white-space: nowrap;">${interceptorsHtml}</td>
           </tr>
         `;
       }).join('');
@@ -1314,19 +1108,47 @@
       }
     }
 
-    function openShortcutsModal() {
-      document.getElementById('shortcuts-modal').style.display = 'flex';
-    }
-
-    function closeShortcutsModal() {
-      document.getElementById('shortcuts-modal').style.display = 'none';
-    }
-
-    function toggleShortcutsModal() {
-      const m = document.getElementById('shortcuts-modal');
+    function openHelpModal(tab) {
+      const m = document.getElementById('help-modal');
       if (!m) return;
-      m.style.display = m.style.display === 'flex' ? 'none' : 'flex';
+      m.style.display = 'flex';
+      if (tab) switchHelpTab(tab);
     }
+
+    function closeHelpModal() {
+      const m = document.getElementById('help-modal');
+      if (m) m.style.display = 'none';
+    }
+
+    function toggleHelpModal() {
+      const m = document.getElementById('help-modal');
+      if (!m) return;
+      if (m.style.display === 'flex') closeHelpModal();
+      else openHelpModal();
+    }
+
+    function switchHelpTab(tab) {
+      const btnOverview = document.getElementById('help-tab-btn-overview');
+      const btnShortcuts = document.getElementById('help-tab-btn-shortcuts');
+      const paneOverview = document.getElementById('help-pane-overview');
+      const paneShortcuts = document.getElementById('help-pane-shortcuts');
+      if (tab === 'overview') {
+        if (btnOverview) btnOverview.classList.add('active');
+        if (btnShortcuts) btnShortcuts.classList.remove('active');
+        if (paneOverview) paneOverview.style.display = 'flex';
+        if (paneShortcuts) paneShortcuts.style.display = 'none';
+      } else {
+        if (btnOverview) btnOverview.classList.remove('active');
+        if (btnShortcuts) btnShortcuts.classList.add('active');
+        if (paneOverview) paneOverview.style.display = 'none';
+        if (paneShortcuts) paneShortcuts.style.display = 'grid';
+      }
+    }
+
+    // Compatibility aliases
+    function openShortcutsModal() { openHelpModal('shortcuts'); }
+    function closeShortcutsModal() { closeHelpModal(); }
+    function toggleShortcutsModal() { toggleHelpModal(); }
 
     window.addEventListener('keydown', (e) => {
       const activeEl = document.activeElement;
@@ -1338,19 +1160,14 @@
       );
 
       if (e.key === 'Escape') {
-        const shortcutsModal = document.getElementById('shortcuts-modal');
+        const helpModal = document.getElementById('help-modal');
         const workerLogsModal = document.getElementById('worker-logs-modal');
-        const devUploadModal = document.getElementById('dev-upload-modal');
-        if (shortcutsModal && shortcutsModal.style.display === 'flex') {
-          closeShortcutsModal();
+        if (helpModal && helpModal.style.display === 'flex') {
+          closeHelpModal();
           return;
         }
         if (workerLogsModal && workerLogsModal.style.display === 'flex') {
           closeWorkerLogsModal();
-          return;
-        }
-        if (devUploadModal && devUploadModal.style.display === 'flex') {
-          closeDevUploadModal();
           return;
         }
         if (isInput) {
@@ -1375,7 +1192,7 @@
         }
       } else if (e.key === '?') {
         e.preventDefault();
-        toggleShortcutsModal();
+        toggleHelpModal();
       } else if (e.key === 'r') {
         e.preventDefault();
         refreshAll();
@@ -1391,9 +1208,6 @@
       } else if (e.key === 'm') {
         e.preventDefault();
         document.getElementById('section-matrix')?.scrollIntoView({ behavior: 'smooth' });
-      } else if (e.key === 'f') {
-        e.preventDefault();
-        document.getElementById('fluxcell-governance-panel')?.scrollIntoView({ behavior: 'smooth' });
       } else if (e.key === 'e') {
         e.preventDefault();
         document.getElementById('section-eventsink')?.scrollIntoView({ behavior: 'smooth' });
@@ -1402,7 +1216,7 @@
 
     async function refreshAll() {
       if (!autoRefreshActive) return;
-      await Promise.all([loadStatus(), loadEventSink(), loadTraffic(), loadRoutes(), loadFluxcells(), loadSchema(), loadIdemp()]);
+      await Promise.all([loadStatus(), loadEventSink(), loadTraffic(), loadRoutes(), loadSchema(), loadIdemp()]);
     }
 
     let currentWorkerId = null;
@@ -1527,62 +1341,93 @@
     </div>
   </div>
 
-  <!-- Direct WASM Dev Upload Modal -->
-  <div id="dev-upload-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.75); z-index:9999; justify-content:center; align-items:center; backdrop-filter:blur(3px);">
-    <div style="width: 520px; max-width: 94vw; background: #0f172a; border: 1px solid #334155; border-radius: 10px; box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.7); overflow: hidden;">
-      <div style="padding: 16px 20px; border-bottom: 1px solid #334155; display: flex; justify-content: space-between; align-items: center; background: #1e293b;">
-        <h3 style="margin: 0; font-size: 16px; color: #f8fafc;">Deploy Fluxcell (Dev Upload)</h3>
-        <button class="btn btn-sm" onclick="closeDevUploadModal()" style="background:#334155; color:#cbd5e1; border: 1px solid #475569;">✕</button>
-      </div>
-      <div style="padding: 20px; display: flex; flex-direction: column; gap: 14px; font-size: 13px;">
-        <div>
-          <label style="display:block; margin-bottom:4px; font-weight:600; color:#f8fafc;">Fluxcell Name</label>
-          <input id="upload-cell-name" type="text" placeholder="e.g. invoice-mailer" style="width:100%; padding:8px 10px; background:#1e293b; border:1px solid #334155; border-radius:6px; color:#f8fafc;">
-        </div>
-        <div>
-          <label style="display:block; margin-bottom:4px; font-weight:600; color:#f8fafc;">Mount Path</label>
-          <input id="upload-cell-mount" type="text" placeholder="e.g. /api/invoices" style="width:100%; padding:8px 10px; background:#1e293b; border:1px solid #334155; border-radius:6px; color:#f8fafc;">
-        </div>
-        <div>
-          <label style="display:block; margin-bottom:4px; font-weight:600; color:#f8fafc;">Compiled .wasm Binary File</label>
-          <input id="upload-cell-file" type="file" accept=".wasm" style="width:100%; padding:8px; background:#1e293b; border:1px solid #334155; border-radius:6px; color:#f8fafc;">
-        </div>
-        <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:8px;">
-          <button class="btn" onclick="closeDevUploadModal()" style="background:#334155; color:#cbd5e1;">Cancel</button>
-          <button class="btn btn-primary" onclick="submitDevUpload()">Stage Artifact</button>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <!-- Keyboard Shortcuts Cheat Sheet Modal -->
-  <div id="shortcuts-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.75); z-index:9999; justify-content:center; align-items:center; backdrop-filter:blur(3px);" onclick="if(event.target===this) closeShortcutsModal()">
-    <div style="width: 580px; max-width: 94vw; background: #0f172a; border: 1px solid #334155; border-radius: 10px; box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.7); overflow: hidden;">
-      <div style="padding: 16px 20px; border-bottom: 1px solid #334155; display: flex; justify-content: space-between; align-items: center; background: #1e293b;">
+  <!-- Help & Shortcuts Modal -->
+  <div id="help-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.75); z-index:9999; justify-content:center; align-items:center; backdrop-filter:blur(3px);" onclick="if(event.target===this) closeHelpModal()">
+    <div style="width: 720px; height: 560px; max-width: 94vw; max-height: 88vh; display: flex; flex-direction: column; background: #0f172a; border: 1px solid #334155; border-radius: 10px; box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.7); overflow: hidden; box-sizing: border-box;">
+      <!-- Header -->
+      <div style="padding: 16px 20px; border-bottom: 1px solid #334155; display: flex; justify-content: space-between; align-items: center; background: #1e293b; flex-shrink: 0;">
         <div style="display: flex; align-items: center; gap: 8px;">
-          <span style="font-size: 18px;">⌨️</span>
-          <h3 style="margin: 0; font-size: 16px; color: #f8fafc;">Admin Keyboard Shortcuts</h3>
+          <span style="font-size: 18px;">❓</span>
+          <h3 style="margin: 0; font-size: 16px; color: #f8fafc;">SpectraGQL Gateway Help &amp; Overview</h3>
         </div>
-        <button class="btn btn-sm" onclick="closeShortcutsModal()" style="background:#334155; color:#cbd5e1; border: 1px solid #475569;">✕</button>
+        <button class="btn btn-sm" onclick="closeHelpModal()" style="background:#334155; color:#cbd5e1; border: 1px solid #475569;">✕</button>
       </div>
-      <div style="padding: 20px; display: grid; grid-template-columns: 1fr 1fr; gap: 16px; font-size: 13px;">
+
+      <!-- Navigation Tabs -->
+      <div style="display: flex; gap: 4px; padding: 0 20px; border-bottom: 1px solid #334155; background: #141f32; flex-shrink: 0;">
+        <button class="modal-tab-btn active" id="help-tab-btn-overview" onclick="switchHelpTab('overview')">System Architecture</button>
+        <button class="modal-tab-btn" id="help-tab-btn-shortcuts" onclick="switchHelpTab('shortcuts')">Keyboard Shortcuts</button>
+      </div>
+
+      <!-- Tab: Architecture Overview -->
+      <div id="help-pane-overview" style="padding: 20px; overflow-y: auto; flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 14px; font-size: 13px; line-height: 1.5; color: var(--text);">
+        <div style="background: rgba(56, 189, 248, 0.08); border: 1px solid rgba(56, 189, 248, 0.25); border-radius: 8px; padding: 14px;">
+          <div style="font-weight: 700; color: var(--accent-cyan); font-size: 14px; margin-bottom: 4px;">🚀 What is SpectraGQL?</div>
+          <div>
+            SpectraGQL is an ultra-high-performance <strong>wire-speed API gateway and event-driven appliance</strong> built on Cloudflare's Pingora engine in Rust.
+          </div>
+        </div>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+          <div style="background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 12px;">
+            <div style="font-weight: 700; color: #bc8cff; margin-bottom: 4px;">🔀 Mode A (Sync Proxy / Reads)</div>
+            <div style="font-size: 12px; color: var(--text-muted);">
+              Reverse-proxies GraphQL queries and REST reads to upstream monoliths or microservices with connection pooling, retries, and passive telemetry logging.
+            </div>
+          </div>
+          <div style="background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 12px;">
+            <div style="font-weight: 700; color: var(--primary); margin-bottom: 4px;">⚡ Mode B (Async Edge / Writes)</div>
+            <div style="font-size: 12px; color: var(--text-muted);">
+              Terminates GraphQL mutations at the gateway edge: generates monotonic UUIDv7 Command IDs + HLC timestamps, dispatches raw payloads into append-only event sinks, and returns HTTP 200 ACCEPTED in &lt;1ms.
+            </div>
+          </div>
+        </div>
+
+        <div style="background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 12px;">
+          <div style="font-weight: 700; color: #3fb950; margin-bottom: 6px;">🏎️ Hot-Path Invariants (Zero Bloat)</div>
+          <ul style="padding-left: 18px; font-size: 12px; color: var(--text-muted); display: flex; flex-direction: column; gap: 4px;">
+            <li><strong>Zero Redundant Deserialization:</strong> Reuses initial protocol decoded representation.</li>
+            <li><strong>Zero Formatting on Hot Path:</strong> Unindented JSON only; pretty-printing shifted out-of-band to browser.</li>
+            <li><strong>Lock-Free Atomics:</strong> Real client traffic never blocks on telemetry or observability locks.</li>
+            <li><strong>Fail-Safe Propagation:</strong> Strict typed error handling with zero edge panics.</li>
+          </ul>
+        </div>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+          <div style="background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 12px;">
+            <div style="font-weight: 700; color: #e3b341; margin-bottom: 4px;">📡 Supported Event Sinks</div>
+            <div style="font-size: 12px; color: var(--text-muted);">
+              First-class tier-1 support for <strong>NATS JetStream</strong>, <strong>Redis Streams (Valkey)</strong>, <strong>Apache Kafka / Redpanda</strong>, <strong>Apache Iggy</strong>, and <strong>SierraDB</strong>.
+            </div>
+          </div>
+          <div style="background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 12px;">
+            <div style="font-weight: 700; color: #38bdf8; margin-bottom: 4px;">👷 BYOW Worker Discovery</div>
+            <div style="font-size: 12px; color: var(--text-muted);">
+              Zero worker code required: downstream workers in Go, Node, Python, or Rust are discovered natively via consumer group lag and partition telemetry.
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Tab: Keyboard Shortcuts -->
+      <div id="help-pane-shortcuts" style="padding: 20px; overflow-y: auto; flex: 1; min-height: 0; display: none; grid-template-columns: 1fr 1fr; gap: 16px; font-size: 13px;">
         <div>
-          <div style="font-weight: 700; color: var(--text-muted); font-size: 11px; text-transform: uppercase; margin-bottom: 10px;">Navigation & Search</div>
+          <div style="font-weight: 700; color: var(--text-muted); font-size: 11px; text-transform: uppercase; margin-bottom: 10px;">Navigation &amp; Search</div>
           <div style="display: flex; justify-content: space-between; margin-bottom: 9px;"><span style="color: var(--text-bright);">Focus Matrix Search</span> <span><kbd>/</kbd> or <kbd>s</kbd></span></div>
           <div style="display: flex; justify-content: space-between; margin-bottom: 9px;"><span style="color: var(--text-bright);">Jump to Live Traffic</span> <kbd>t</kbd></div>
           <div style="display: flex; justify-content: space-between; margin-bottom: 9px;"><span style="color: var(--text-bright);">Jump to Route Matrix</span> <kbd>m</kbd></div>
-          <div style="display: flex; justify-content: space-between; margin-bottom: 9px;"><span style="color: var(--text-bright);">Jump to Fluxcells</span> <kbd>f</kbd></div>
           <div style="display: flex; justify-content: space-between;"><span style="color: var(--text-bright);">Jump to Event Sink</span> <kbd>e</kbd></div>
         </div>
         <div>
-          <div style="font-weight: 700; color: var(--text-muted); font-size: 11px; text-transform: uppercase; margin-bottom: 10px;">Actions & Controls</div>
+          <div style="font-weight: 700; color: var(--text-muted); font-size: 11px; text-transform: uppercase; margin-bottom: 10px;">Actions &amp; Controls</div>
           <div style="display: flex; justify-content: space-between; margin-bottom: 9px;"><span style="color: var(--text-bright);">Refresh All Data</span> <kbd>r</kbd></div>
           <div style="display: flex; justify-content: space-between; margin-bottom: 9px;"><span style="color: var(--text-bright);">Play / Pause Polling</span> <span><kbd>p</kbd> or <kbd>Space</kbd></span></div>
           <div style="display: flex; justify-content: space-between; margin-bottom: 9px;"><span style="color: var(--text-bright);">Clear Traffic Log</span> <kbd>c</kbd></div>
           <div style="display: flex; justify-content: space-between; margin-bottom: 9px;"><span style="color: var(--text-bright);">Close Modals / Blur</span> <kbd>Esc</kbd></div>
-          <div style="display: flex; justify-content: space-between;"><span style="color: var(--text-bright);">Show Cheat Sheet</span> <kbd>?</kbd></div>
+          <div style="display: flex; justify-content: space-between;"><span style="color: var(--text-bright);">Show Help Dialog</span> <kbd>?</kbd></div>
         </div>
       </div>
+
       <div style="padding: 12px 20px; background: #182234; border-top: 1px solid #334155; font-size: 12px; color: var(--text-muted); text-align: right;">
         Press <kbd>Esc</kbd> anytime to dismiss
       </div>
