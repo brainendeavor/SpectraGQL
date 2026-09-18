@@ -607,7 +607,14 @@ impl ProxyHttp for CompositeServiceProxy {
                 let base_topic = dispatch_method.get_dispatch_topic(&request_info);
                 let app_prefix = self.apps.iter()
                     .find(|a| a.id == ctx.proxy_context.app_id)
-                    .map(|a| a.effective_subject_prefix());
+                    .map(|a| a.effective_subject_prefix())
+                    .or_else(|| {
+                        if !ctx.proxy_context.app_id.is_empty() {
+                            Some(format!("mutation.{}", ctx.proxy_context.app_id))
+                        } else {
+                            None
+                        }
+                    });
                 ctx.proxy_context.request_topic = if let Some(prefix) = app_prefix {
                     if let Some((kind, op)) = base_topic.split_once('.') {
                         if kind == "query" && prefix.starts_with("mutation.") {

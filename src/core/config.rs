@@ -468,8 +468,10 @@ impl SpectraConfig {
             .set_default("telemetry.error_capture.enabled", true)?
             .set_default("telemetry.error_capture.max_body_bytes", 4096)?;
 
-        // 1. Explicit config file via SPECTRA_CONFIG or SPECTRAGQL_CONFIG takes top precedence
-        if let Ok(config_path) = env::var("SPECTRA_CONFIG").or_else(|_| env::var("SPECTRAGQL_CONFIG")) {
+        // 1. Explicit config content or file via SPECTRA_CONFIG_CONTENT / SPECTRA_CONFIG takes top precedence
+        if let Ok(config_str) = env::var("SPECTRA_CONFIG_CONTENT").or_else(|_| env::var("SPECTRAGQL_CONFIG_CONTENT")) {
+            builder = builder.add_source(File::from_str(&config_str, config::FileFormat::Toml));
+        } else if let Ok(config_path) = env::var("SPECTRA_CONFIG").or_else(|_| env::var("SPECTRAGQL_CONFIG")) {
             builder = builder.add_source(File::with_name(&config_path));
         } else if spectra_env != "development" {
             // Non-default environment (e.g. coeval, production, staging).

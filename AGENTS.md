@@ -115,10 +115,10 @@ SpectraGQL is **broker-first and framework-agnostic**. Downstream mutation write
 
 ## 6. Remote Fluxcell Deployment & Security Governance Standards
 
-SpectraGQL supports remote, dynamic deployment and hot-swapping of WebAssembly **Fluxcells** into the downstream `spectral-flux` chassis. Autonomous agents and developers must strictly follow these invariants:
+SpectraGQL supports remote, dynamic deployment and hot-swapping of WebAssembly **Fluxcells** into the downstream `spectra-flux` chassis. Autonomous agents and developers must strictly follow these invariants:
 
 ### Zero-Compiler Downstream Container Invariant
-* **Rule:** `spectral-flux` runtime containers must NEVER bundle `rustc`, `cargo`, or `git`. Container images must remain ultra-lean ($< 25\text{ MB}$).
+* **Rule:** `spectra-flux` runtime containers must NEVER bundle `rustc`, `cargo`, or `git`. Container images must remain ultra-lean ($< 25\text{ MB}$).
 * **Build Pattern:** Compilation occurs in external CI/CD pipelines (e.g. GitHub Actions, Docker multi-stage builds). The gateway/chassis operates exclusively on immutable pre-compiled `.wasm` binaries published to remote HTTPS object stores (GitHub Releases, AWS S3, Cloudflare R2).
 
 ### Deployment Authentication & Token Configuration Hierarchy
@@ -137,4 +137,17 @@ All deployment operations (`deployFluxcell`, `activateFluxcell`, `removeFluxcell
 2. **Downstream SSRF Shield:** Remote artifact URLs must use `https://`, match configured host allowlists, and pass pre-connect DNS inspection blocking loopback, private RFC 1918 subnets, and cloud instance metadata (`169.254.169.254`).
 3. **Atomic Dual Killswitches:** `external_deploy_enabled` and `dev_upload_enabled` must use lock-free atomics and be instantly killable via `POST /admin/api/v1/security/lockdown`.
 4. **Two-Phase Staging:** Deployments default to `auto_activate = false`. Cells remain in `Staged` state without mounting routes into the Radix tree until explicit administrator approval or `activateFluxcell`.
+
+---
+
+## 7. Public Open-Source Repository Invariant (Zero Application Pollution)
+
+`SpectraGQL` and `SpectraFlux` are public, generic infrastructure appliances and open-source engine frameworks.
+
+* **Strict Invariant:** Application-specific domain names (e.g., `*.coeval.bio`, `db.coeval.us`), application IDs (`coeval`, `humanbase`), application-specific GraphQL operations (`recordVote`), business schemas, or proprietary fluxcell `.wasm` binaries must **NEVER** be hardcoded or committed into `SpectraGQL` or `SpectraFlux` repository files (including `spectra.toml`, `spectra-flux.toml`, or default source code).
+* **Configuration Mechanism:** All application-specific routes, apps, upstreams, domains, and tokens must be supplied dynamically at deployment runtime via:
+  1. **12-Factor Environment Variables:** Configured via the hosting platform (e.g., Railway, Kubernetes ConfigMaps, Docker compose env files).
+  2. **External Volume-Mounted Configuration:** Production deployments mount custom `spectra.toml` or `spectra-flux.toml` files at container launch.
+  3. **Dynamic Deployer APIs:** Uploading and activating compiled application fluxcell `.wasm` binaries via `POST /_flux/deployer/upload`.
+
 
