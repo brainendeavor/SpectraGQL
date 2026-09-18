@@ -3,8 +3,10 @@ mod composite_service;
 mod gql_service;
 mod http_service;
 
-pub use composite_service::CompositeServiceProxy as CompositeService;
-pub use composite_service::ServiceConfig;
+pub use composite_service::{
+    CompositeServiceProxy, CompositeServiceProxy as CompositeService, DynamicGatewayState,
+    ServiceConfig,
+};
 pub use filters::generate_command_receipt;
 pub use gql_service::GraphQLServiceProxy as GraphQLService;
 pub use http_service::HttpServiceProxy as HttpService;

@@ -35,6 +35,70 @@ pub struct ServiceConfig {
 }
 
 #[derive(Clone)]
+pub struct DynamicGatewayState {
+    pub named_upstreams: Arc<HashMap<String, std::net::SocketAddr>>,
+    pub mode_a: SpectraModeAConfig,
+    pub routes: Arc<HashMap<String, SpectraRouteConfig>>,
+    pub apps: Arc<Vec<crate::core::SpectraAppConfig>>,
+    pub default_app: Option<String>,
+    pub interceptor_manager: Arc<crate::interceptors::InterceptorManager>,
+    pub telemetry_config: crate::core::config::SpectraTelemetryConfig,
+    pub raw_config: Arc<String>,
+    pub version: u64,
+    pub updated_at_epoch_ms: u64,
+    pub config_hash: String,
+}
+
+impl Default for DynamicGatewayState {
+    fn default() -> Self {
+        Self {
+            named_upstreams: Arc::new(HashMap::new()),
+            mode_a: SpectraModeAConfig::default(),
+            routes: Arc::new(HashMap::new()),
+            apps: Arc::new(vec![]),
+            default_app: None,
+            interceptor_manager: Arc::new(crate::interceptors::InterceptorManager::empty()),
+            telemetry_config: crate::core::config::SpectraTelemetryConfig::default(),
+            raw_config: Arc::new(String::new()),
+            version: 1,
+            updated_at_epoch_ms: 0,
+            config_hash: String::new(),
+        }
+    }
+}
+
+impl DynamicGatewayState {
+    pub fn new_from_config(
+        new_cfg: &crate::core::SpectraConfig,
+        raw_content: String,
+        version: u64,
+    ) -> Result<Self> {
+        use sha2::Digest;
+        let named_upstreams = new_cfg.resolve_all_upstreams()?;
+        let interceptor_manager = crate::interceptors::InterceptorManager::from_config(new_cfg)?;
+        let hash = format!("{:x}", sha2::Sha256::digest(raw_content.as_bytes()));
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+
+        Ok(Self {
+            named_upstreams: Arc::new(named_upstreams),
+            mode_a: new_cfg.gql.mode_a.clone(),
+            routes: Arc::new(new_cfg.gql.routes.clone()),
+            apps: Arc::new(new_cfg.apps.clone()),
+            default_app: new_cfg.default_app.clone(),
+            interceptor_manager: Arc::new(interceptor_manager),
+            telemetry_config: new_cfg.telemetry.clone(),
+            raw_config: Arc::new(raw_content),
+            version,
+            updated_at_epoch_ms: now_ms,
+            config_hash: hash,
+        })
+    }
+}
+
+#[derive(Clone)]
 pub struct CompositeServiceProxy {
     upstream_services: Vec<ServiceConfig>,
     router: PathRouter,
@@ -50,6 +114,7 @@ pub struct CompositeServiceProxy {
     pub apps: Arc<Vec<crate::core::SpectraAppConfig>>,
     pub default_app: Option<String>,
     pub telemetry_config: crate::core::config::SpectraTelemetryConfig,
+    pub dynamic_state: Arc<arc_swap::ArcSwap<DynamicGatewayState>>,
 }
 
 impl ServiceConfig {
@@ -99,6 +164,7 @@ impl ServiceConfig {
 
 impl CompositeServiceProxy {
     pub fn new() -> Self {
+        let dynamic_state = Arc::new(arc_swap::ArcSwap::from_pointee(DynamicGatewayState::default()));
         CompositeServiceProxy {
             upstream_services: vec![],
             router: PathRouter::new(),
@@ -114,7 +180,42 @@ impl CompositeServiceProxy {
             apps: Arc::new(vec![]),
             default_app: None,
             telemetry_config: crate::core::config::SpectraTelemetryConfig::default(),
+            dynamic_state,
         }
+    }
+
+    pub fn with_dynamic_state(
+        mut self,
+        dynamic_state: Arc<arc_swap::ArcSwap<DynamicGatewayState>>,
+    ) -> Self {
+        let loaded = dynamic_state.load();
+        self.named_upstreams = loaded.named_upstreams.clone();
+        self.mode_a = loaded.mode_a.clone();
+        self.routes = loaded.routes.clone();
+        self.apps = loaded.apps.clone();
+        self.default_app = loaded.default_app.clone();
+        self.interceptor_manager = loaded.interceptor_manager.clone();
+        self.telemetry_config = loaded.telemetry_config.clone();
+        self.dynamic_state = dynamic_state;
+        self
+    }
+
+    fn sync_dynamic_state(&self) {
+        let prev = self.dynamic_state.load();
+        let new_state = DynamicGatewayState {
+            named_upstreams: self.named_upstreams.clone(),
+            mode_a: self.mode_a.clone(),
+            routes: self.routes.clone(),
+            apps: self.apps.clone(),
+            default_app: self.default_app.clone(),
+            interceptor_manager: self.interceptor_manager.clone(),
+            telemetry_config: self.telemetry_config.clone(),
+            raw_config: prev.raw_config.clone(),
+            version: prev.version,
+            updated_at_epoch_ms: prev.updated_at_epoch_ms,
+            config_hash: prev.config_hash.clone(),
+        };
+        self.dynamic_state.store(Arc::new(new_state));
     }
 
     pub fn with_telemetry(
@@ -122,6 +223,7 @@ impl CompositeServiceProxy {
         telemetry: crate::core::config::SpectraTelemetryConfig,
     ) -> Self {
         self.telemetry_config = telemetry;
+        self.sync_dynamic_state();
         self
     }
 
@@ -134,6 +236,7 @@ impl CompositeServiceProxy {
         self.named_upstreams = Arc::new(named_upstreams);
         self.mode_a = mode_a;
         self.routes = Arc::new(routes);
+        self.sync_dynamic_state();
         self
     }
 
@@ -144,23 +247,34 @@ impl CompositeServiceProxy {
     ) -> Self {
         self.apps = Arc::new(apps);
         self.default_app = default_app;
+        self.sync_dynamic_state();
         self
     }
 
-    pub fn resolve_app<'a>(
-        &'a self,
+    pub fn reload_config(&self, new_cfg: &crate::core::SpectraConfig, raw_content: String) -> Result<Arc<DynamicGatewayState>> {
+        let prev = self.dynamic_state.load();
+        let new_version = prev.version + 1;
+        let new_state = Arc::new(DynamicGatewayState::new_from_config(new_cfg, raw_content, new_version)?);
+        self.dynamic_state.store(new_state.clone());
+        log::info!("CompositeServiceProxy: Configuration successfully hot-reloaded to version #{}", new_version);
+        Ok(new_state)
+    }
+
+    pub fn resolve_app_with_apps<'a>(
+        apps: &'a [crate::core::SpectraAppConfig],
+        default_app: Option<&'a str>,
         host: Option<&str>,
         header_app: Option<&str>,
         path: &str,
     ) -> Option<&'a crate::core::SpectraAppConfig> {
         if let Some(h_app) = header_app {
-            if let Some(app) = self.apps.iter().find(|a| a.id.eq_ignore_ascii_case(h_app)) {
+            if let Some(app) = apps.iter().find(|a| a.id.eq_ignore_ascii_case(h_app)) {
                 return Some(app);
             }
         }
         if let Some(h) = host {
             let clean_host = h.split(':').next().unwrap_or(h).trim();
-            if let Some(app) = self.apps.iter().find(|a| {
+            if let Some(app) = apps.iter().find(|a| {
                 a.domains.iter().any(|d| {
                     let clean_d = d.split(':').next().unwrap_or(d).trim();
                     clean_d.eq_ignore_ascii_case(clean_host)
@@ -169,7 +283,7 @@ impl CompositeServiceProxy {
                 return Some(app);
             }
         }
-        if let Some(app) = self.apps.iter().find(|a| {
+        if let Some(app) = apps.iter().find(|a| {
             a.path_prefixes.iter().any(|prefix| {
                 let clean_prefix = prefix.trim_end_matches('/');
                 path == clean_prefix || path.starts_with(&format!("{}/", clean_prefix))
@@ -177,12 +291,21 @@ impl CompositeServiceProxy {
         }) {
             return Some(app);
         }
-        if let Some(ref def_id) = self.default_app {
-            if let Some(app) = self.apps.iter().find(|a| a.id.eq_ignore_ascii_case(def_id)) {
+        if let Some(def_id) = default_app {
+            if let Some(app) = apps.iter().find(|a| a.id.eq_ignore_ascii_case(def_id)) {
                 return Some(app);
             }
         }
-        self.apps.first()
+        apps.first()
+    }
+
+    pub fn resolve_app<'a>(
+        &'a self,
+        host: Option<&str>,
+        header_app: Option<&str>,
+        path: &str,
+    ) -> Option<&'a crate::core::SpectraAppConfig> {
+        Self::resolve_app_with_apps(&self.apps, self.default_app.as_deref(), host, header_app, path)
     }
 
     pub fn with_idempotency_engine(
@@ -213,6 +336,7 @@ impl CompositeServiceProxy {
         interceptor_manager: Arc<crate::interceptors::InterceptorManager>,
     ) -> Self {
         self.interceptor_manager = interceptor_manager;
+        self.sync_dynamic_state();
         self
     }
 
@@ -336,6 +460,7 @@ pub struct CompositeServiceProxyCtx {
 impl ProxyHttp for CompositeServiceProxy {
     type CTX = CompositeServiceProxyCtx;
     fn new_ctx(&self) -> Self::CTX {
+        let dynamic = self.dynamic_state.load();
         let (request_id, hlc) = HlcClock::global().now_uuidv7();
         let proxy_context = SpectraProxyCtx {
             request_id,
@@ -350,12 +475,12 @@ impl ProxyHttp for CompositeServiceProxy {
             is_replay: false,
             target_upstream_addr: None,
             is_mode_b_terminated: false,
-            dispatch_policy: self.mode_a.dispatch_policy,
+            dispatch_policy: dynamic.mode_a.dispatch_policy,
             active_operation: None,
             has_response_interception: false,
             query_preview: None,
             variables_preview: None,
-            app_id: self.default_app.clone().unwrap_or_else(|| "default".to_string()),
+            app_id: dynamic.default_app.clone().unwrap_or_else(|| "default".to_string()),
             audit_tag: None,
             audit_rule: None,
             response_preview: None,
@@ -394,20 +519,22 @@ impl ProxyHttp for CompositeServiceProxy {
             return Ok(());
         }
 
+        let dynamic = self.dynamic_state.load();
+
         // 3. Resolve app based on Host, X-App-ID / X-Tenant-ID header, or path
         let host = req.headers.get("host").and_then(|v| v.to_str().ok());
         let header_app = req.headers.get("x-app-id")
             .or_else(|| req.headers.get("x-tenant-id"))
             .and_then(|v| v.to_str().ok());
-        if let Some(app) = self.resolve_app(host, header_app, path) {
+        if let Some(app) = Self::resolve_app_with_apps(&dynamic.apps, dynamic.default_app.as_deref(), host, header_app, path) {
             ctx.proxy_context.app_id = app.id.clone();
-            if let Some(addr) = self.named_upstreams.get(&app.upstream) {
+            if let Some(addr) = dynamic.named_upstreams.get(&app.upstream) {
                 ctx.proxy_context.target_upstream_addr = Some(*addr);
             }
-        } else if let Some(ref def_id) = self.default_app {
+        } else if let Some(ref def_id) = dynamic.default_app {
             ctx.proxy_context.app_id = def_id.clone();
-            if let Some(app) = self.apps.iter().find(|a| a.id == *def_id) {
-                if let Some(addr) = self.named_upstreams.get(&app.upstream) {
+            if let Some(app) = dynamic.apps.iter().find(|a| a.id == *def_id) {
+                if let Some(addr) = dynamic.named_upstreams.get(&app.upstream) {
                     ctx.proxy_context.target_upstream_addr = Some(*addr);
                 }
             }
@@ -489,6 +616,8 @@ impl ProxyHttp for CompositeServiceProxy {
                 return self.handle_websocket_subscription(session).await;
             }
         }
+
+        let dynamic = self.dynamic_state.load();
 
         log::info!(
             "request_filter uuid: {} hlc: {}",
@@ -605,7 +734,7 @@ impl ProxyHttp for CompositeServiceProxy {
                 &body_str,
             ) {
                 let base_topic = dispatch_method.get_dispatch_topic(&request_info);
-                let app_prefix = self.apps.iter()
+                let app_prefix = dynamic.apps.iter()
                     .find(|a| a.id == ctx.proxy_context.app_id)
                     .map(|a| a.effective_subject_prefix())
                     .or_else(|| {
@@ -662,7 +791,7 @@ impl ProxyHttp for CompositeServiceProxy {
                 ctx.proxy_context.variables_preview = vp;
 
                 // Evaluate Request Interceptors (global + route-specific)
-                let req_pipeline = self
+                let req_pipeline = dynamic
                     .interceptor_manager
                     .get_request_pipeline(operation_name.as_deref());
                 if !req_pipeline.is_empty() {
@@ -853,7 +982,7 @@ impl ProxyHttp for CompositeServiceProxy {
                     }
 
                     // Check route overrides using StrategyRouter
-                    if let Some(route) = StrategyRouter::match_route(&self.routes, &request_info) {
+                    if let Some(route) = StrategyRouter::match_route(&dynamic.routes, &request_info) {
                         if !route.enabled {
                             let op_name = request_info.gql.as_ref().and_then(|g| g.operation_name.clone());
                             let err_msg = format!("Operation '{}' is disabled by gateway policy", route.operation);
@@ -925,7 +1054,7 @@ impl ProxyHttp for CompositeServiceProxy {
                         }
 
                         if let Some(addr) =
-                            StrategyRouter::resolve_mode_a_upstream(route, &self.named_upstreams)
+                            StrategyRouter::resolve_mode_a_upstream(route, &dynamic.named_upstreams)
                         {
                             ctx.proxy_context.target_upstream_addr = Some(addr);
                         }
@@ -992,7 +1121,8 @@ impl ProxyHttp for CompositeServiceProxy {
         ctx.proxy_context.response_parts = Some(resp.as_owned_parts());
 
         // Check if response interceptors are registered for this operation
-        if self.interceptor_manager.has_response_interceptors(ctx.proxy_context.active_operation.as_deref()) {
+        let dynamic = self.dynamic_state.load();
+        if dynamic.interceptor_manager.has_response_interceptors(ctx.proxy_context.active_operation.as_deref()) {
             ctx.proxy_context.has_response_interception = true;
             // Remove content-length so downstream HTTP framing uses chunked encoding,
             // avoiding framing corruption if the payload is resized or transformed.
@@ -1012,14 +1142,16 @@ impl ProxyHttp for CompositeServiceProxy {
     where
         Self::CTX: Send + Sync,
     {
+        let dynamic = self.dynamic_state.load();
+
         // 1. Fast path: If no response interceptors are registered, stream chunks through with zero buffering!
         if !ctx.proxy_context.has_response_interception {
             let status = ctx.proxy_context.response_parts.as_ref().map(|p| p.status);
             let is_err = status.map(|s| s.is_client_error() || s.is_server_error()).unwrap_or(false);
 
             if let Some(b) = body {
-                let max_bytes = self.telemetry_config.error_capture.max_body_bytes;
-                if is_err && self.telemetry_config.error_capture.enabled {
+                let max_bytes = dynamic.telemetry_config.error_capture.max_body_bytes;
+                if is_err && dynamic.telemetry_config.error_capture.enabled {
                     if ctx.proxy_context.buffer.len() < max_bytes {
                         let to_take = (max_bytes - ctx.proxy_context.buffer.len()).min(b.len());
                         ctx.proxy_context.buffer.extend_from_slice(&b[..to_take]);
@@ -1037,7 +1169,7 @@ impl ProxyHttp for CompositeServiceProxy {
 
             if end_of_stream {
                 let body_str = std::str::from_utf8(&ctx.proxy_context.buffer).unwrap_or_default();
-                if is_err && self.telemetry_config.error_capture.enabled {
+                if is_err && dynamic.telemetry_config.error_capture.enabled {
                     ctx.proxy_context.error_preview = Some(body_str.to_string());
                 }
                 let response_body = match ctx.proxy_context.response_parts.as_ref() {
@@ -1057,7 +1189,7 @@ impl ProxyHttp for CompositeServiceProxy {
         }
 
         if end_of_stream {
-            let resp_pipeline = self
+            let resp_pipeline = dynamic
                 .interceptor_manager
                 .get_response_pipeline(ctx.proxy_context.active_operation.as_deref());
             let mut interceptor_ctx = crate::interceptors::InterceptorContext::new(
@@ -1389,6 +1521,66 @@ mod tests {
         // Fallback to default
         let resolved_default = proxy.resolve_app(Some("other.internal"), None, "/graphql").unwrap();
         assert_eq!(resolved_default.id, "coeval");
+    }
+
+    #[test]
+    fn test_dynamic_gateway_state_and_hot_reload() {
+        let initial_toml = r#"
+bind_addr = "0.0.0.0:8000"
+
+[upstream]
+name = "default"
+addr = "127.0.0.1:4000"
+
+[dispatch]
+method = "nats"
+addr = "127.0.0.1:4222"
+name = "default"
+
+[gql.routes.initialOp]
+operation = "initialOp"
+mode = "AsyncCommandReceipt"
+enabled = true
+"#;
+        let cfg1 = crate::core::SpectraConfig::from_toml_str(initial_toml).unwrap();
+        let dynamic_state_obj = DynamicGatewayState::new_from_config(&cfg1, initial_toml.to_string(), 1).unwrap();
+        assert_eq!(dynamic_state_obj.version, 1);
+        assert!(dynamic_state_obj.routes.contains_key("initialOp"));
+
+        let arc_swap_state = Arc::new(arc_swap::ArcSwap::from_pointee(dynamic_state_obj));
+        let proxy = CompositeServiceProxy::new().with_dynamic_state(arc_swap_state.clone());
+
+        let loaded1 = proxy.dynamic_state.load();
+        assert_eq!(loaded1.version, 1);
+        assert!(loaded1.routes.contains_key("initialOp"));
+
+        let updated_toml = r#"
+bind_addr = "0.0.0.0:8000"
+
+[upstream]
+name = "default"
+addr = "127.0.0.1:4000"
+
+[dispatch]
+method = "nats"
+addr = "127.0.0.1:4222"
+name = "default"
+
+[gql.routes.updatedOp]
+operation = "updatedOp"
+mode = "SyncUpstreamExecution"
+enabled = true
+"#;
+        let cfg2 = crate::core::SpectraConfig::from_toml_str(updated_toml).unwrap();
+        let new_state = proxy.reload_config(&cfg2, updated_toml.to_string()).unwrap();
+
+        assert_eq!(new_state.version, 2);
+        assert!(new_state.routes.contains_key("updatedOp"));
+        assert!(!new_state.routes.contains_key("initialOp"));
+
+        let loaded2 = arc_swap_state.load();
+        assert_eq!(loaded2.version, 2);
+        assert!(loaded2.routes.contains_key("updatedOp"));
     }
 }
 
