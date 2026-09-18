@@ -122,6 +122,17 @@ pub fn analyze_mutation_coverage(
     // Detect schema mismatch: routes defined in config whose operations were not in the schema
     let mut drifted_routes = Vec::new();
     for (route_name, route) in routes {
+        // 1. Inactive/disabled routes do not accept traffic and cannot drift
+        if !route.enabled {
+            continue;
+        }
+
+        // 2. Chassis management operations (e.g. SpectraFlux fluxcell deployment) are edge-terminated
+        // infrastructure operations, not upstream application domain mutations.
+        if is_chassis_operation(route) {
+            continue;
+        }
+
         if !matched_route_ops.contains(&route.operation) {
             // Only flag mismatch if the schema actually had mutation fields defined
             if !mutation_fields.is_empty() {
@@ -158,6 +169,17 @@ pub fn analyze_mutation_coverage(
         drifted_routes,
         last_refreshed_utc: now_utc,
     })
+}
+
+/// Identifies internal chassis and appliance management operations
+/// (such as SpectraFlux remote fluxcell deployments) that are terminated at the edge
+/// and should not be expected in the upstream application domain schema.
+pub fn is_chassis_operation(route: &SpectraRouteConfig) -> bool {
+    route.interceptors.iter().any(|i| i == "deploy_guard")
+        || matches!(
+            route.operation.as_str(),
+            "deployFluxcell" | "activateFluxcell" | "removeFluxcell"
+        )
 }
 
 fn chrono_or_simple_timestamp() -> String {
@@ -342,5 +364,80 @@ mod tests {
         assert_eq!(email_mut.classification, "DefaultUpstream");
         assert_eq!(email_mut.target_upstream, Some("default".to_string()));
         assert_eq!(email_mut.route_name, None);
+    }
+
+    #[test]
+    fn test_analyze_mutation_coverage_skips_disabled_and_chassis_routes() {
+        let introspection_json = serde_json::json!({
+            "data": {
+                "__schema": {
+                    "mutationType": {
+                        "fields": [
+                            { "name": "appMutation", "description": "Regular app mutation" }
+                        ]
+                    }
+                }
+            }
+        });
+
+        let mut routes = HashMap::new();
+        // 1. Regular route matching upstream
+        routes.insert(
+            "app_route".to_string(),
+            SpectraRouteConfig {
+                operation: "appMutation".to_string(),
+                mode: ExecutionStrategy::AsyncCommandReceipt,
+                enabled: true,
+                upstream: None,
+                receipt_status: "ACCEPTED".to_string(),
+                interceptors: vec![],
+                dispatch_policy: None,
+            },
+        );
+        // 2. Inactive route (disabled) -> should NOT be flagged as drift
+        routes.insert(
+            "disabled_route".to_string(),
+            SpectraRouteConfig {
+                operation: "oldDisabledMutation".to_string(),
+                mode: ExecutionStrategy::SyncUpstreamExecution,
+                enabled: false,
+                upstream: Some("default".to_string()),
+                receipt_status: "ACCEPTED".to_string(),
+                interceptors: vec![],
+                dispatch_policy: None,
+            },
+        );
+        // 3. Chassis deployment routes -> should NOT be flagged as drift even when enabled
+        routes.insert(
+            "fluxcell_deploy".to_string(),
+            SpectraRouteConfig {
+                operation: "deployFluxcell".to_string(),
+                mode: ExecutionStrategy::AsyncCommandReceipt,
+                enabled: true,
+                upstream: None,
+                receipt_status: "ACCEPTED".to_string(),
+                interceptors: vec!["deploy_guard".to_string()],
+                dispatch_policy: None,
+            },
+        );
+        routes.insert(
+            "fluxcell_activate".to_string(),
+            SpectraRouteConfig {
+                operation: "activateFluxcell".to_string(),
+                mode: ExecutionStrategy::AsyncCommandReceipt,
+                enabled: false,
+                upstream: None,
+                receipt_status: "ACCEPTED".to_string(),
+                interceptors: vec!["deploy_guard".to_string()],
+                dispatch_policy: None,
+            },
+        );
+
+        let coverage = analyze_mutation_coverage(&introspection_json, &routes).unwrap();
+
+        // Only appMutation should be counted, and drift_count must be 0!
+        assert_eq!(coverage.total_mutations, 1);
+        assert_eq!(coverage.drift_count, 0);
+        assert!(coverage.drifted_routes.is_empty());
     }
 }
