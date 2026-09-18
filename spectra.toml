@@ -164,6 +164,9 @@ client_buffer_capacity = 256
 [admin]
 enabled = true
 bind_addr = "0.0.0.0:8000"
+# Path prefix for admin routes (default "/admin").
+# Client SDKs and upstream appliances configuring SPECTRA_ADMIN_URL should provide the base
+# origin with scheme and port (e.g. "http://spectragql.railway.internal:8000") without the "/admin" prefix.
 path_prefix = "/admin"
 enable_ui = true
 allowed_ips = [

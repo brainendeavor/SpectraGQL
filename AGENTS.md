@@ -102,6 +102,14 @@ SpectraGQL is **broker-first and framework-agnostic**. Downstream mutation write
 * **Use Case:** Opt-in for embedded edge appliances (e.g. SpectraFlux instances) or local development when in-memory log rollups inside the gateway drawer are desired.
 * **Bounded Registry:** `WorkerRegistry` (`src/admin/registry.rs`) caps history to 200 log entries per worker with a 15-second liveness timeout.
 
+### Option C: Administrative API URL & Port Resolution Standard (`SPECTRA_ADMIN_URL`)
+* **Base Origin Invariant:** When downstream services, upstream applications (e.g., OpenCoEval), CI/CD pipelines, or deployment hooks connect to SpectraGQL's administrative APIs (e.g., `POST /admin/api/v1/dns/rescan`, `POST /admin/api/v1/telemetry/report`), the environment variable `SPECTRA_ADMIN_URL` must specify the **base server origin and port**, and must **NEVER** include the `/admin` path prefix:
+  * **Correct:** `SPECTRA_ADMIN_URL=http://spectragql.railway.internal:8000` or `http://localhost:8000`
+  * **Incorrect:** `SPECTRA_ADMIN_URL=http://spectragql.railway.internal:8000/admin` (causes duplicate pathing such as `/admin/admin/api/...`)
+  * **Incorrect:** `SPECTRA_ADMIN_URL=spectragql.railway.internal` (missing scheme `http://` and listening port `:8000`)
+* **Railway Private Networking:** In Railway, `${{SpectraGQL.RAILWAY_PRIVATE_DOMAIN}}` resolves strictly to the internal DNS hostname without protocol or port. Upstream services must configure:
+  `SPECTRA_ADMIN_URL=http://${{SpectraGQL.RAILWAY_PRIVATE_DOMAIN}}:8000` (or `:${{SpectraGQL.PORT}}`).
+
 ---
 
 ## 5. Development & Testing Conventions
