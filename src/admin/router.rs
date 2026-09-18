@@ -21,6 +21,8 @@ pub enum AdminRoute {
     ConfigValidate,
     ConfigUpdate,
     ConfigReload,
+    DnsStatus,
+    DnsRescan,
 }
 
 #[derive(Clone)]
@@ -83,6 +85,8 @@ impl AdminRouter {
             ("/admin/api/workers/{id}/logs", AdminRoute::WorkerLogs),
             ("/admin/api/v1/config", AdminRoute::ConfigGet),
             ("/admin/api/config", AdminRoute::ConfigGet),
+            ("/admin/api/v1/dns", AdminRoute::DnsStatus),
+            ("/admin/api/dns", AdminRoute::DnsStatus),
         ];
 
         for (pattern, route) in get_routes {
@@ -107,6 +111,8 @@ impl AdminRouter {
             ("/admin/api/config/reload", AdminRoute::ConfigReload),
             ("/admin/api/v1/config", AdminRoute::ConfigUpdate),
             ("/admin/api/config", AdminRoute::ConfigUpdate),
+            ("/admin/api/v1/dns/rescan", AdminRoute::DnsRescan),
+            ("/admin/api/dns/rescan", AdminRoute::DnsRescan),
         ];
 
         for (pattern, route) in post_routes {
@@ -313,6 +319,16 @@ mod tests {
         assert_eq!(
             router.match_route(&Method::POST, "/admin/api/v1/config/reload").map(|(r, _)| r),
             Some(AdminRoute::ConfigReload)
+        );
+
+        // DNS routes
+        assert_eq!(
+            router.match_route(&Method::GET, "/admin/api/v1/dns").map(|(r, _)| r),
+            Some(AdminRoute::DnsStatus)
+        );
+        assert_eq!(
+            router.match_route(&Method::POST, "/admin/api/v1/dns/rescan").map(|(r, _)| r),
+            Some(AdminRoute::DnsRescan)
         );
 
         // Unknown

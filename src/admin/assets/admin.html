@@ -345,6 +345,7 @@
         </div>
         <div style="display: flex; gap: 8px; align-items: center;">
           <button class="btn btn-sm" onclick="openHelpModal('shortcuts')" title="View Keyboard Shortcuts (?)">⌨️ Shortcuts <kbd>?</kbd></button>
+          <button class="btn btn-sm" onclick="rescanDns()" id="btn-rescan-dns" title="Rescan upstream DNS resolutions">🌐 Rescan DNS</button>
           <button class="btn btn-sm btn-primary" onclick="refreshSchema()" id="btn-refresh-schema-matrix">🔄 Refresh Schema</button>
         </div>
       </div>
@@ -1142,6 +1143,83 @@
       }
     }
 
+    function showToast(msg, type = 'info') {
+      const toast = document.getElementById('toast-notification');
+      if (!toast) return;
+      toast.innerText = msg;
+      toast.style.display = 'block';
+      toast.style.opacity = '1';
+      if (type === 'success') {
+        toast.style.background = '#1b4729';
+        toast.style.color = '#3fb950';
+        toast.style.border = '1px solid #3fb950';
+      } else if (type === 'error') {
+        toast.style.background = '#4e1c1c';
+        toast.style.color = '#f85149';
+        toast.style.border = '1px solid #f85149';
+      } else {
+        toast.style.background = '#1b2d47';
+        toast.style.color = '#58a6ff';
+        toast.style.border = '1px solid #58a6ff';
+      }
+      setTimeout(() => {
+        toast.style.opacity = '0';
+        setTimeout(() => { toast.style.display = 'none'; }, 300);
+      }, 3500);
+    }
+
+    async function rescanDns() {
+      const btn = document.getElementById('btn-rescan-dns');
+      if (btn) {
+        btn.innerText = '⏳ Scanning...';
+        btn.disabled = true;
+      }
+      try {
+        const resp = await fetch('/admin/api/v1/dns/rescan', { method: 'POST' });
+        const data = await resp.json();
+        if (resp.ok) {
+          const changed = data.changed_count || 0;
+          const total = data.total_upstreams || 0;
+          const duration = (data.duration_ms || 0).toFixed(1);
+          if (btn) {
+            btn.innerText = changed > 0 ? `✅ Updated (${changed}/${total})` : `✅ Up to date (${total})`;
+            btn.style.borderColor = 'var(--success)';
+            btn.style.color = '#3fb950';
+          }
+          showToast(
+            changed > 0
+              ? `🌐 DNS Rescanned: ${changed} of ${total} upstreams updated (${duration}ms)`
+              : `🌐 DNS Rescanned: all ${total} upstreams up to date (${duration}ms)`,
+            changed > 0 ? 'success' : 'info'
+          );
+          await Promise.all([loadRoutes(), loadStatus()]);
+        } else {
+          if (btn) {
+            btn.innerText = '❌ Failed';
+            btn.style.borderColor = 'var(--danger)';
+            btn.style.color = '#f85149';
+          }
+          showToast(`DNS Rescan failed: ${data.message || data.error}`, 'error');
+        }
+      } catch (err) {
+        if (btn) {
+          btn.innerText = '❌ Error';
+          btn.style.borderColor = 'var(--danger)';
+          btn.style.color = '#f85149';
+        }
+        showToast(`DNS Rescan network error: ${err.message}`, 'error');
+      } finally {
+        setTimeout(() => {
+          if (btn) {
+            btn.innerText = '🌐 Rescan DNS';
+            btn.disabled = false;
+            btn.style.borderColor = '';
+            btn.style.color = '';
+          }
+        }, 3000);
+      }
+    }
+
     async function loadConfigData() {
       const banner = document.getElementById('config-alert-banner');
       if (banner) banner.style.display = 'none';
@@ -1694,5 +1772,7 @@
       </div>
     </div>
   </div>
+
+  <div id="toast-notification" style="display: none; position: fixed; bottom: 24px; right: 24px; z-index: 99999; padding: 10px 18px; border-radius: 6px; font-size: 13px; font-weight: 500; box-shadow: 0 8px 24px rgba(0,0,0,0.6); transition: opacity 0.3s ease; pointer-events: none;"></div>
 </body>
 </html>

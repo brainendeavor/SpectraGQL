@@ -173,5 +173,31 @@ pub struct AdminConfigReloadResponse {
     pub message: String,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AdminDnsUpstreamEntry {
+    pub name: String,
+    pub target: String,
+    pub current_addr: String,
+    pub previous_addr: Option<String>,
+    pub changed: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AdminDnsRescanResponse {
+    pub status: String,
+    pub total_upstreams: usize,
+    pub changed_count: usize,
+    pub duration_ms: f64,
+    pub upstreams: Vec<AdminDnsUpstreamEntry>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AdminDnsStatusResponse {
+    pub enabled: bool,
+    pub interval_secs: u64,
+    pub total_upstreams: usize,
+    pub upstreams: Vec<AdminDnsUpstreamEntry>,
+}
+
 pub use crate::admin::eventsink::{ConsumerMetrics, EventSinkResponse, StreamMetrics};
 pub use crate::admin::traffic::{TrafficRecord, TrafficResponse, TrafficStats};

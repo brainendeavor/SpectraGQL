@@ -37,6 +37,8 @@ pub struct ServiceConfig {
 #[derive(Clone)]
 pub struct DynamicGatewayState {
     pub named_upstreams: Arc<HashMap<String, std::net::SocketAddr>>,
+    pub upstream_targets: Arc<HashMap<String, String>>,
+    pub dns_config: crate::core::config::SpectraDnsConfig,
     pub mode_a: SpectraModeAConfig,
     pub routes: Arc<HashMap<String, SpectraRouteConfig>>,
     pub apps: Arc<Vec<crate::core::SpectraAppConfig>>,
@@ -53,6 +55,8 @@ impl Default for DynamicGatewayState {
     fn default() -> Self {
         Self {
             named_upstreams: Arc::new(HashMap::new()),
+            upstream_targets: Arc::new(HashMap::new()),
+            dns_config: crate::core::config::SpectraDnsConfig::default(),
             mode_a: SpectraModeAConfig::default(),
             routes: Arc::new(HashMap::new()),
             apps: Arc::new(vec![]),
@@ -74,7 +78,7 @@ impl DynamicGatewayState {
         version: u64,
     ) -> Result<Self> {
         use sha2::Digest;
-        let named_upstreams = new_cfg.resolve_all_upstreams()?;
+        let (named_upstreams, upstream_targets) = new_cfg.resolve_all_upstreams_with_targets()?;
         let interceptor_manager = crate::interceptors::InterceptorManager::from_config(new_cfg)?;
         let hash = format!("{:x}", sha2::Sha256::digest(raw_content.as_bytes()));
         let now_ms = std::time::SystemTime::now()
@@ -84,6 +88,8 @@ impl DynamicGatewayState {
 
         Ok(Self {
             named_upstreams: Arc::new(named_upstreams),
+            upstream_targets: Arc::new(upstream_targets),
+            dns_config: new_cfg.dns.clone(),
             mode_a: new_cfg.gql.mode_a.clone(),
             routes: Arc::new(new_cfg.gql.routes.clone()),
             apps: Arc::new(new_cfg.apps.clone()),
@@ -96,6 +102,165 @@ impl DynamicGatewayState {
             config_hash: hash,
         })
     }
+
+    /// Rescans DNS for all configured upstream hostnames and atomically updates dynamic state if changed.
+    pub fn rescan_dns(
+        dynamic_state: &Arc<arc_swap::ArcSwap<DynamicGatewayState>>,
+    ) -> Result<crate::admin::api::AdminDnsRescanResponse> {
+        let start = std::time::Instant::now();
+        let current_state = dynamic_state.load();
+        let targets = &current_state.upstream_targets;
+        let prev_upstreams = &current_state.named_upstreams;
+
+        let mut new_upstreams = (**prev_upstreams).clone();
+        let mut upstream_entries = Vec::new();
+        let mut changed_count = 0;
+
+        for (name, target) in targets.iter() {
+            let prev_addr = prev_upstreams.get(name).cloned();
+            use std::net::ToSocketAddrs;
+            match target.to_socket_addrs() {
+                Ok(mut iter) => {
+                    if let Some(new_addr) = iter.next() {
+                        let is_changed = prev_addr.map(|a| a != new_addr).unwrap_or(true);
+                        if is_changed {
+                            changed_count += 1;
+                            log::info!(
+                                "DNS rescan: upstream '{}' ({}) updated from {:?} to {}",
+                                name,
+                                target,
+                                prev_addr,
+                                new_addr
+                            );
+                        }
+                        new_upstreams.insert(name.clone(), new_addr);
+                        upstream_entries.push(crate::admin::api::AdminDnsUpstreamEntry {
+                            name: name.clone(),
+                            target: target.clone(),
+                            current_addr: new_addr.to_string(),
+                            previous_addr: prev_addr.map(|a| a.to_string()),
+                            changed: is_changed,
+                        });
+                    } else {
+                        log::warn!(
+                            "DNS rescan: no addresses resolved for upstream '{}' ({})",
+                            name,
+                            target
+                        );
+                        if let Some(pa) = prev_addr {
+                            upstream_entries.push(crate::admin::api::AdminDnsUpstreamEntry {
+                                name: name.clone(),
+                                target: target.clone(),
+                                current_addr: pa.to_string(),
+                                previous_addr: Some(pa.to_string()),
+                                changed: false,
+                            });
+                        }
+                    }
+                }
+                Err(err) => {
+                    log::warn!(
+                        "DNS rescan: failed to resolve upstream '{}' ({}): {}. Retaining previous address {:?}",
+                        name,
+                        target,
+                        err,
+                        prev_addr
+                    );
+                    if let Some(pa) = prev_addr {
+                        upstream_entries.push(crate::admin::api::AdminDnsUpstreamEntry {
+                            name: name.clone(),
+                            target: target.clone(),
+                            current_addr: pa.to_string(),
+                            previous_addr: Some(pa.to_string()),
+                            changed: false,
+                        });
+                    }
+                }
+            }
+        }
+
+        if changed_count > 0 {
+            let mut updated_state = (**current_state).clone();
+            updated_state.named_upstreams = Arc::new(new_upstreams);
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0);
+            updated_state.updated_at_epoch_ms = now_ms;
+            dynamic_state.store(Arc::new(updated_state));
+        }
+
+        upstream_entries.sort_by(|a, b| a.name.cmp(&b.name));
+        let duration_ms = start.elapsed().as_secs_f64() * 1000.0;
+
+        Ok(crate::admin::api::AdminDnsRescanResponse {
+            status: "success".to_string(),
+            total_upstreams: targets.len(),
+            changed_count,
+            duration_ms,
+            upstreams: upstream_entries,
+        })
+    }
+
+    /// Returns current DNS status and upstream target mappings.
+    pub fn get_dns_status(
+        dynamic_state: &Arc<arc_swap::ArcSwap<DynamicGatewayState>>,
+    ) -> crate::admin::api::AdminDnsStatusResponse {
+        let current_state = dynamic_state.load();
+        let mut upstream_entries = Vec::new();
+        for (name, target) in current_state.upstream_targets.iter() {
+            let current_addr = current_state
+                .named_upstreams
+                .get(name)
+                .map(|a| a.to_string())
+                .unwrap_or_else(|| "unresolved".to_string());
+            upstream_entries.push(crate::admin::api::AdminDnsUpstreamEntry {
+                name: name.clone(),
+                target: target.clone(),
+                current_addr,
+                previous_addr: None,
+                changed: false,
+            });
+        }
+        upstream_entries.sort_by(|a, b| a.name.cmp(&b.name));
+        crate::admin::api::AdminDnsStatusResponse {
+            enabled: current_state.dns_config.enabled,
+            interval_secs: current_state.dns_config.interval_secs,
+            total_upstreams: current_state.upstream_targets.len(),
+            upstreams: upstream_entries,
+        }
+    }
+}
+
+/// Spawns a background OS thread that periodically rescans DNS for all configured upstreams
+/// when dynamic DNS re-resolution is enabled.
+pub fn spawn_dns_refresher(
+    dynamic_state: Arc<arc_swap::ArcSwap<DynamicGatewayState>>,
+) -> std::thread::JoinHandle<()> {
+    std::thread::Builder::new()
+        .name("spectra-dns-refresher".to_string())
+        .spawn(move || {
+            log::info!("Dynamic DNS background refresher thread started");
+            loop {
+                let current_state = dynamic_state.load();
+                let dns_cfg = current_state.dns_config.clone();
+                let interval_secs = if dns_cfg.interval_secs == 0 {
+                    15
+                } else {
+                    dns_cfg.interval_secs
+                };
+
+                std::thread::sleep(std::time::Duration::from_secs(interval_secs));
+
+                let current_state = dynamic_state.load();
+                if current_state.dns_config.enabled {
+                    if let Err(e) = DynamicGatewayState::rescan_dns(&dynamic_state) {
+                        log::warn!("Dynamic DNS background rescan error: {}", e);
+                    }
+                }
+            }
+        })
+        .expect("Failed to spawn spectra-dns-refresher thread")
 }
 
 #[derive(Clone)]
@@ -104,6 +269,7 @@ pub struct CompositeServiceProxy {
     router: PathRouter,
     pub idempotency_engine: Arc<IdempotencyEngine>,
     pub named_upstreams: Arc<HashMap<String, std::net::SocketAddr>>,
+    pub upstream_targets: Arc<HashMap<String, String>>,
     pub mode_a: SpectraModeAConfig,
     pub routes: Arc<HashMap<String, SpectraRouteConfig>>,
     pub subscription_hub: Arc<crate::subscriptions::SubscriptionHub>,
@@ -170,6 +336,7 @@ impl CompositeServiceProxy {
             router: PathRouter::new(),
             idempotency_engine: Arc::new(IdempotencyEngine::default()),
             named_upstreams: Arc::new(HashMap::new()),
+            upstream_targets: Arc::new(HashMap::new()),
             mode_a: SpectraModeAConfig::default(),
             routes: Arc::new(HashMap::new()),
             subscription_hub: Arc::new(crate::subscriptions::SubscriptionHub::new()),
@@ -190,6 +357,7 @@ impl CompositeServiceProxy {
     ) -> Self {
         let loaded = dynamic_state.load();
         self.named_upstreams = loaded.named_upstreams.clone();
+        self.upstream_targets = loaded.upstream_targets.clone();
         self.mode_a = loaded.mode_a.clone();
         self.routes = loaded.routes.clone();
         self.apps = loaded.apps.clone();
@@ -204,6 +372,8 @@ impl CompositeServiceProxy {
         let prev = self.dynamic_state.load();
         let new_state = DynamicGatewayState {
             named_upstreams: self.named_upstreams.clone(),
+            upstream_targets: self.upstream_targets.clone(),
+            dns_config: prev.dns_config.clone(),
             mode_a: self.mode_a.clone(),
             routes: self.routes.clone(),
             apps: self.apps.clone(),
@@ -227,16 +397,42 @@ impl CompositeServiceProxy {
         self
     }
 
-    pub fn with_routing(
+    pub fn with_routing_with_targets(
         mut self,
         named_upstreams: HashMap<String, std::net::SocketAddr>,
+        upstream_targets: HashMap<String, String>,
         mode_a: SpectraModeAConfig,
         routes: HashMap<String, SpectraRouteConfig>,
     ) -> Self {
         self.named_upstreams = Arc::new(named_upstreams);
+        self.upstream_targets = Arc::new(upstream_targets);
         self.mode_a = mode_a;
         self.routes = Arc::new(routes);
         self.sync_dynamic_state();
+        self
+    }
+
+    pub fn with_routing(
+        self,
+        named_upstreams: HashMap<String, std::net::SocketAddr>,
+        mode_a: SpectraModeAConfig,
+        routes: HashMap<String, SpectraRouteConfig>,
+    ) -> Self {
+        let targets: HashMap<String, String> = named_upstreams
+            .iter()
+            .map(|(k, v)| (k.clone(), v.to_string()))
+            .collect();
+        self.with_routing_with_targets(named_upstreams, targets, mode_a, routes)
+    }
+
+    pub fn with_dns_config(
+        self,
+        dns: crate::core::config::SpectraDnsConfig,
+    ) -> Self {
+        let prev = self.dynamic_state.load();
+        let mut new_state = (**prev).clone();
+        new_state.dns_config = dns;
+        self.dynamic_state.store(Arc::new(new_state));
         self
     }
 
@@ -249,6 +445,11 @@ impl CompositeServiceProxy {
         self.default_app = default_app;
         self.sync_dynamic_state();
         self
+    }
+
+    /// Spawns a background OS thread for dynamic DNS re-resolution.
+    pub fn spawn_dns_refresher(&self) -> std::thread::JoinHandle<()> {
+        spawn_dns_refresher(self.dynamic_state.clone())
     }
 
     pub fn reload_config(&self, new_cfg: &crate::core::SpectraConfig, raw_content: String) -> Result<Arc<DynamicGatewayState>> {
@@ -538,6 +739,8 @@ impl ProxyHttp for CompositeServiceProxy {
                     ctx.proxy_context.target_upstream_addr = Some(*addr);
                 }
             }
+        } else if let Some(addr) = dynamic.named_upstreams.get("default") {
+            ctx.proxy_context.target_upstream_addr = Some(*addr);
         }
 
         match self.get_service_config_and_handle_by_path(path) {
@@ -561,8 +764,11 @@ impl ProxyHttp for CompositeServiceProxy {
         _session: &mut Session,
         ctx: &mut Self::CTX,
     ) -> pingora::Result<Box<HttpPeer>> {
+        let dynamic = self.dynamic_state.load();
         let upstream_addr = if let Some(target) = ctx.proxy_context.target_upstream_addr {
             target
+        } else if let Some(default_addr) = dynamic.named_upstreams.get("default") {
+            *default_addr
         } else if let Some(handle) = ctx.service_handle {
             let service_config = self.get_service_config(handle);
             service_config.upstream_addr
@@ -1581,6 +1787,49 @@ enabled = true
         let loaded2 = arc_swap_state.load();
         assert_eq!(loaded2.version, 2);
         assert!(loaded2.routes.contains_key("updatedOp"));
+    }
+
+    #[test]
+    fn test_dynamic_dns_status_and_rescan() {
+        let toml_str = r#"
+bind_addr = "0.0.0.0:8000"
+
+[upstream]
+name = "default"
+addr = "127.0.0.1:4000"
+
+[upstreams.inventory]
+name = "inv"
+addr = "127.0.0.1:4001"
+
+[dns]
+enabled = true
+interval_secs = 10
+
+[dispatch]
+method = "nats"
+addr = "127.0.0.1:4222"
+name = "default"
+"#;
+        let cfg = crate::core::SpectraConfig::from_toml_str(toml_str).unwrap();
+        let state = DynamicGatewayState::new_from_config(&cfg, toml_str.to_string(), 1).unwrap();
+        let dynamic_state = Arc::new(arc_swap::ArcSwap::from_pointee(state));
+
+        // 1. Test get_dns_status
+        let status = DynamicGatewayState::get_dns_status(&dynamic_state);
+        assert!(status.enabled);
+        assert_eq!(status.interval_secs, 10);
+        assert_eq!(status.total_upstreams, 3);
+        assert!(status.upstreams.iter().any(|u| u.name == "default" && u.target == "127.0.0.1:4000"));
+        assert!(status.upstreams.iter().any(|u| u.name == "inventory" && u.target == "127.0.0.1:4001"));
+        assert!(status.upstreams.iter().any(|u| u.name == "inv" && u.target == "127.0.0.1:4001"));
+
+        // 2. Test rescan_dns
+        let rescan = DynamicGatewayState::rescan_dns(&dynamic_state).unwrap();
+        assert_eq!(rescan.status, "success");
+        assert_eq!(rescan.total_upstreams, 3);
+        assert_eq!(rescan.changed_count, 0);
+        assert!(rescan.duration_ms >= 0.0);
     }
 }
 

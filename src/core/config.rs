@@ -248,6 +248,27 @@ pub struct SpectraTelemetryConfig {
     pub error_capture: ErrorCaptureConfig,
 }
 
+fn default_dns_interval_secs() -> u64 {
+    15
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct SpectraDnsConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "default_dns_interval_secs")]
+    pub interval_secs: u64,
+}
+
+impl Default for SpectraDnsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            interval_secs: default_dns_interval_secs(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct SpectraDispatchConfig {
     pub name: String,
@@ -472,6 +493,8 @@ pub struct SpectraConfig {
     pub telemetry: SpectraTelemetryConfig,
     #[serde(default)]
     pub config_store: SpectraConfigStoreConfig,
+    #[serde(default)]
+    pub dns: SpectraDnsConfig,
 }
 
 impl SpectraConfig {
@@ -505,7 +528,9 @@ impl SpectraConfig {
             .set_default("telemetry.error_capture.max_body_bytes", 4096)?
             .set_default("config_store.backend", "memory")?
             .set_default("config_store.table_name", "spectragql_config")?
-            .set_default("config_store.key", "active")
+            .set_default("config_store.key", "active")?
+            .set_default("dns.enabled", true)?
+            .set_default("dns.interval_secs", 15)
     }
 
     pub fn new() -> Result<Self, ConfigError> {
@@ -594,8 +619,15 @@ impl SpectraConfig {
     pub fn resolve_all_upstreams(
         &self,
     ) -> Result<HashMap<String, SocketAddr>, std::io::Error> {
+        self.resolve_all_upstreams_with_targets().map(|(addrs, _)| addrs)
+    }
+
+    pub fn resolve_all_upstreams_with_targets(
+        &self,
+    ) -> Result<(HashMap<String, SocketAddr>, HashMap<String, String>), std::io::Error> {
         use std::net::ToSocketAddrs;
         let mut map = HashMap::new();
+        let mut targets = HashMap::new();
 
         // 1. Default upstream
         let def_addr_str = &self.gql_upstream().addr;
@@ -609,7 +641,11 @@ impl SpectraConfig {
                 )
             })?;
         map.insert("default".to_string(), def_addr);
-        map.insert(self.gql_upstream().name.clone(), def_addr);
+        targets.insert("default".to_string(), def_addr_str.clone());
+        if !self.gql_upstream().name.is_empty() && self.gql_upstream().name != "default" {
+            map.insert(self.gql_upstream().name.clone(), def_addr);
+            targets.insert(self.gql_upstream().name.clone(), def_addr_str.clone());
+        }
 
         // 2. Named upstreams
         for (key, cfg) in &self.upstreams {
@@ -624,12 +660,14 @@ impl SpectraConfig {
                     )
                 })?;
             map.insert(key.clone(), addr);
+            targets.insert(key.clone(), cfg.addr.clone());
             if !cfg.name.is_empty() && cfg.name != "default" {
                 map.insert(cfg.name.clone(), addr);
+                targets.insert(cfg.name.clone(), cfg.addr.clone());
             }
         }
 
-        Ok(map)
+        Ok((map, targets))
     }
 
     #[allow(dead_code)]
@@ -1153,5 +1191,37 @@ enabled = true
         let roundtripped = SpectraConfig::from_toml_str(&serialized).expect("Roundtrip parsing should succeed");
         assert_eq!(roundtripped.bind_addr, "0.0.0.0:8000");
         assert!(roundtripped.gql.routes.contains_key("submitFeedback"));
+    }
+
+    #[test]
+    fn test_dns_config_and_upstream_targets_resolution() {
+        let toml_str = r#"
+bind_addr = "0.0.0.0:8000"
+
+[upstream]
+name = "default"
+addr = "127.0.0.1:8080"
+
+[upstreams.inventory]
+name = "inv"
+addr = "127.0.0.1:8081"
+
+[dns]
+enabled = true
+interval_secs = 30
+
+[dispatch]
+method = "nats"
+addr = "127.0.0.1:4222"
+name = "default"
+"#;
+        let cfg = SpectraConfig::from_toml_str(toml_str).unwrap();
+        assert!(cfg.dns.enabled);
+        assert_eq!(cfg.dns.interval_secs, 30);
+
+        let (addrs, targets) = cfg.resolve_all_upstreams_with_targets().unwrap();
+        assert_eq!(targets.get("default").unwrap(), "127.0.0.1:8080");
+        assert_eq!(targets.get("inventory").unwrap(), "127.0.0.1:8081");
+        assert_eq!(addrs.get("default").unwrap().to_string(), "127.0.0.1:8080");
     }
 }

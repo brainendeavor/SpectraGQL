@@ -50,6 +50,10 @@ fn main() -> Result<()> {
         }
     };
 
+    if spectra_configuration.dns.enabled {
+        composite_service.spawn_dns_refresher();
+    }
+
     let mut proxy_service =
         http_proxy_service_with_name(&server.configuration, composite_service, "SpectraGQL");
 

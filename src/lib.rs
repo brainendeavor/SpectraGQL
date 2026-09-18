@@ -147,7 +147,7 @@ pub fn build_composite_service(spectra_configuration: &SpectraConfig) -> Result<
         }
     };
 
-    let named_upstreams = effective_cfg.resolve_all_upstreams()?;
+    let (named_upstreams, upstream_targets) = effective_cfg.resolve_all_upstreams_with_targets()?;
     let subscription_hub = Arc::new(crate::subscriptions::SubscriptionHub::new());
     let traffic_recorder = Arc::new(crate::admin::TrafficRecorder::new(250));
     let worker_registry = Arc::new(crate::admin::WorkerRegistry::default());
@@ -166,8 +166,9 @@ pub fn build_composite_service(spectra_configuration: &SpectraConfig) -> Result<
     let interceptor_manager = InterceptorManager::from_config(&effective_cfg)?;
 
     let mut composite_service = CompositeService::new()
-        .with_routing(
+        .with_routing_with_targets(
             named_upstreams,
+            upstream_targets,
             effective_cfg.gql.mode_a.clone(),
             effective_cfg.gql.routes.clone(),
         )

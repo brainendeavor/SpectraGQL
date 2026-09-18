@@ -254,6 +254,8 @@ impl AdminEngine {
                 AdminRoute::ConfigValidate => self.handle_config_validate(session).await,
                 AdminRoute::ConfigUpdate => self.handle_config_update(session).await,
                 AdminRoute::ConfigReload => self.handle_config_reload(session).await,
+                AdminRoute::DnsStatus => self.handle_dns_status(session).await,
+                AdminRoute::DnsRescan => self.handle_dns_rescan(session).await,
             }
         } else {
             self.handle_not_found(session, &path).await
@@ -435,9 +437,14 @@ impl AdminEngine {
         }
         named_upstreams_list.sort_by(|a, b| a.name.cmp(&b.name));
 
+        let default_addr = named_upstreams
+            .get("default")
+            .map(|a| a.to_string())
+            .unwrap_or_else(|| self.default_upstream_addr.clone());
+
         let routes_resp = AdminRoutesResponse {
             default_upstream: self.default_upstream_name.clone(),
-            default_upstream_addr: self.default_upstream_addr.clone(),
+            default_upstream_addr: default_addr,
             named_upstreams: named_upstreams_list,
             routes: route_entries,
         };
@@ -1003,6 +1010,52 @@ impl AdminEngine {
         self.respond_json(session, 200, &resp).await
     }
 
+    async fn handle_dns_status(&self, session: &mut Session) -> pingora::Result<bool> {
+        let resp = if let Some(dynamic_state) = &self.dynamic_state {
+            DynamicGatewayState::get_dns_status(dynamic_state)
+        } else {
+            crate::admin::api::AdminDnsStatusResponse {
+                enabled: false,
+                interval_secs: 0,
+                total_upstreams: 0,
+                upstreams: vec![],
+            }
+        };
+        self.respond_json(session, 200, &resp).await
+    }
+
+    async fn handle_dns_rescan(&self, session: &mut Session) -> pingora::Result<bool> {
+        if !self.is_write_authorized(session) {
+            let body = serde_json::json!({
+                "error": "Unauthorized",
+                "message": "Missing or invalid admin authorization token (set SPECTRA_ADMIN_TOKEN or provide valid Authorization: Bearer <token>)"
+            });
+            return self.respond_json(session, 401, &body).await;
+        }
+
+        let resp = if let Some(dynamic_state) = &self.dynamic_state {
+            match DynamicGatewayState::rescan_dns(dynamic_state) {
+                Ok(res) => res,
+                Err(e) => {
+                    log::error!("DNS rescan failed: {}", e);
+                    let body = serde_json::json!({
+                        "error": "DNS Rescan Failed",
+                        "message": format!("DNS rescan encountered an error: {}", e)
+                    });
+                    return self.respond_json(session, 500, &body).await;
+                }
+            }
+        } else {
+            let body = serde_json::json!({
+                "error": "No Dynamic State",
+                "message": "Dynamic gateway state is not initialized"
+            });
+            return self.respond_json(session, 500, &body).await;
+        };
+
+        self.respond_json(session, 200, &resp).await
+    }
+
     async fn handle_not_found(&self, session: &mut Session, path: &str) -> pingora::Result<bool> {
         let body = serde_json::json!({
             "error": "Not Found",
@@ -1023,7 +1076,9 @@ impl AdminEngine {
                 "/admin/api/v1/idempotency",
                 "/admin/api/v1/config",
                 "/admin/api/v1/config/validate",
-                "/admin/api/v1/config/reload"
+                "/admin/api/v1/config/reload",
+                "/admin/api/v1/dns",
+                "/admin/api/v1/dns/rescan"
             ]
         });
         self.respond_json(session, 404, &body).await
@@ -1141,6 +1196,9 @@ mod tests {
         assert!(ADMIN_HTML.contains("Mutation Routing Breakdown"));
         assert!(ADMIN_HTML.contains("/admin/api/v1/status"));
         assert!(ADMIN_HTML.contains("/admin/api/v1/schema"));
+        assert!(ADMIN_HTML.contains("/admin/api/v1/dns/rescan"));
+        assert!(ADMIN_HTML.contains("Rescan DNS"));
+        assert!(ADMIN_HTML.contains("toast-notification"));
     }
 
     #[test]
@@ -1200,5 +1258,43 @@ mod tests {
         let idemp_json = serde_json::to_string(&idemp).unwrap();
         assert!(idemp_json.contains("\"backend\":\"memory\""));
         assert!(idemp_json.contains("\"active_records\":42"));
+    }
+
+    #[test]
+    fn test_admin_dns_responses_serialization() {
+        let status = crate::admin::api::AdminDnsStatusResponse {
+            enabled: true,
+            interval_secs: 15,
+            total_upstreams: 1,
+            upstreams: vec![crate::admin::api::AdminDnsUpstreamEntry {
+                name: "default".to_string(),
+                target: "api.internal.service:8080".to_string(),
+                current_addr: "10.0.0.2:8080".to_string(),
+                previous_addr: None,
+                changed: false,
+            }],
+        };
+        let status_json = serde_json::to_string(&status).unwrap();
+        assert!(status_json.contains("\"enabled\":true"));
+        assert!(status_json.contains("\"interval_secs\":15"));
+        assert!(status_json.contains("\"api.internal.service:8080\""));
+
+        let rescan = crate::admin::api::AdminDnsRescanResponse {
+            status: "success".to_string(),
+            total_upstreams: 1,
+            changed_count: 1,
+            duration_ms: 2.5,
+            upstreams: vec![crate::admin::api::AdminDnsUpstreamEntry {
+                name: "default".to_string(),
+                target: "api.internal.service:8080".to_string(),
+                current_addr: "10.0.0.2:8080".to_string(),
+                previous_addr: Some("10.0.0.1:8080".to_string()),
+                changed: true,
+            }],
+        };
+        let rescan_json = serde_json::to_string(&rescan).unwrap();
+        assert!(rescan_json.contains("\"status\":\"success\""));
+        assert!(rescan_json.contains("\"changed_count\":1"));
+        assert!(rescan_json.contains("\"changed\":true"));
     }
 }
