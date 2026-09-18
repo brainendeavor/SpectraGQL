@@ -724,25 +724,37 @@
                 </div>
                 ${r.queryPreview ? `
                   <div style="margin-top: 8px;">
-                    <div class="meta-key" style="margin-bottom: 4px;">GraphQL Query:</div>
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                      <span class="meta-key">GraphQL Query:</span>
+                      <button class="btn btn-sm" onclick="copyDrawerCode(this)" title="Copy GraphQL Query">Copy</button>
+                    </div>
                     <div class="code-box" style="white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; line-height: 1.5; color: #cbd5e1; background: #0b1329; border: 1px solid #1e293b; padding: 10px; border-radius: 6px;">${escapeHtml(r.queryPreview)}</div>
                   </div>
                 ` : ''}
                 ${r.variablesPreview ? `
                   <div style="margin-top: 8px;">
-                    <div class="meta-key" style="margin-bottom: 4px;">GraphQL Variables:</div>
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                      <span class="meta-key">GraphQL Variables:</span>
+                      <button class="btn btn-sm" onclick="copyDrawerCode(this)" title="Copy Variables JSON">Copy</button>
+                    </div>
                     <div class="code-box" style="white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; line-height: 1.5; color: #cbd5e1; background: #0b1329; border: 1px solid #1e293b; padding: 10px; border-radius: 6px;">${escapeHtml(formattedVars)}</div>
                   </div>
                 ` : ''}
                 ${r.errorPreview ? `
                   <div style="margin-top: 8px;">
-                    <div class="meta-key" style="margin-bottom: 4px; color: var(--danger); font-weight: 600;">Upstream Error Response Preview (Bounded 4KB):</div>
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                      <span class="meta-key" style="color: var(--danger); font-weight: 600;">Upstream Error Response Preview (Bounded 4KB):</span>
+                      <button class="btn btn-sm" onclick="copyDrawerCode(this)" title="Copy Error JSON">Copy</button>
+                    </div>
                     <div class="code-box" style="white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; line-height: 1.5; color: #f87171; background: #1c1012; border: 1px solid rgba(248, 81, 73, 0.4); padding: 10px; border-radius: 6px;">${escapeHtml(formattedError)}</div>
                   </div>
                 ` : ''}
                 ${r.responsePreview && !r.errorPreview ? `
                   <div style="margin-top: 8px;">
-                    <div class="meta-key" style="margin-bottom: 4px; color: var(--accent-cyan); font-weight: 600;">Audited Response Body Preview (Bounded 4KB):</div>
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                      <span class="meta-key" style="color: var(--accent-cyan); font-weight: 600;">Audited Response Body Preview (Bounded 4KB):</span>
+                      <button class="btn btn-sm" onclick="copyDrawerCode(this)" title="Copy Response JSON">Copy</button>
+                    </div>
                     <div class="code-box" style="white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; line-height: 1.5; color: #7ee787; background: #050911; border: 1px solid var(--border); padding: 10px; border-radius: 6px;">${escapeHtml(formattedResponse)}</div>
                   </div>
                 ` : ''}
@@ -807,6 +819,25 @@
 
     function escapeHtml(str) {
       return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    function copyDrawerCode(btn) {
+      const codeBox = btn.closest('div').nextElementSibling;
+      if (!codeBox) return;
+      const text = codeBox.innerText;
+      navigator.clipboard.writeText(text).then(() => {
+        const orig = btn.innerText;
+        btn.innerText = 'Copied!';
+        btn.style.borderColor = 'var(--primary)';
+        btn.style.color = 'var(--primary)';
+        setTimeout(() => {
+          btn.innerText = orig;
+          btn.style.borderColor = '';
+          btn.style.color = '';
+        }, 1500);
+      }).catch(err => {
+        console.error('Clipboard copy failed:', err);
+      });
     }
 
     // 3. Load Routes & Schema
@@ -1180,7 +1211,7 @@
         return;
       }
 
-      if (isInput) return;
+      if (isInput || e.metaKey || e.ctrlKey || e.altKey) return;
 
       if (e.key === '/' || e.key === 's') {
         e.preventDefault();
@@ -1199,7 +1230,7 @@
       } else if (e.key === 'p' || e.key === ' ') {
         e.preventDefault();
         toggleAutoRefresh();
-      } else if (e.key === 'c') {
+      } else if (e.key === 'C') {
         e.preventDefault();
         clearTraffic();
       } else if (e.key === 't') {
@@ -1422,7 +1453,7 @@
           <div style="font-weight: 700; color: var(--text-muted); font-size: 11px; text-transform: uppercase; margin-bottom: 10px;">Actions &amp; Controls</div>
           <div style="display: flex; justify-content: space-between; margin-bottom: 9px;"><span style="color: var(--text-bright);">Refresh All Data</span> <kbd>r</kbd></div>
           <div style="display: flex; justify-content: space-between; margin-bottom: 9px;"><span style="color: var(--text-bright);">Play / Pause Polling</span> <span><kbd>p</kbd> or <kbd>Space</kbd></span></div>
-          <div style="display: flex; justify-content: space-between; margin-bottom: 9px;"><span style="color: var(--text-bright);">Clear Traffic Log</span> <kbd>c</kbd></div>
+          <div style="display: flex; justify-content: space-between; margin-bottom: 9px;"><span style="color: var(--text-bright);">Clear Traffic Log</span> <kbd>Shift+C</kbd></div>
           <div style="display: flex; justify-content: space-between; margin-bottom: 9px;"><span style="color: var(--text-bright);">Close Modals / Blur</span> <kbd>Esc</kbd></div>
           <div style="display: flex; justify-content: space-between;"><span style="color: var(--text-bright);">Show Help Dialog</span> <kbd>?</kbd></div>
         </div>
