@@ -1,18 +1,26 @@
 bind_addr = "0.0.0.0:8000"
 
-# Default Upstream (e.g. Core Monolith or primary query backend)
+# =============================================================================
+# Default Upstream Service (Mode A Query Resolution & REST Pass-Through)
+# =============================================================================
+# Target address for upstream GraphQL queries and REST traffic.
+# Format: "hostname:port" or "ip:port" (e.g. "your-app:8080", "127.0.0.1:4000", "api.railway.internal:8080").
 [upstream]
-addr = "127.0.0.1:4000"
+addr = "your-app:8080"
 name = "default"
 
-# Additional Named Microservice Upstreams
-[upstreams.inventory]
-addr = "127.0.0.1:5001"
-name = "inventory"
+# =============================================================================
+# Named Microservice Upstreams (Optional)
+# =============================================================================
+# Additional backend targets for federated routes or chassis appliances.
+[upstreams.spectral_flux]
+addr = "127.0.0.1:8081"
+name = "spectral_flux"
 
-[upstreams.crm]
-addr = "127.0.0.1:5002"
-name = "crm"
+# Example: Additional Named Microservice Upstream
+# [upstreams.billing]
+# addr = "billing-service:5001"
+# name = "billing"
 
 [gql]
 paths = "/gql,/graphql"
@@ -27,40 +35,10 @@ enabled = true
 dispatch_policy = "response_with_failure"
 timeout_ms = 3000
 
-# Route Overrides: Route specific mutations to dedicated microservices
-[gql.routes.inventory_update]
-operation = "adjustInventory"
-strategy = "sync"
-upstream = "inventory"
-
-[gql.routes.customer_address]
-operation = "updateCustomerAddress"
-strategy = "sync"
-upstream = "crm"
-# Route-specific interceptors (appended after global interceptors)
-# interceptors = ["leak_guard"]
-
-[upstreams.spectral_flux]
-addr = "127.0.0.1:8081"
-name = "spectral_flux"
-
-# Asynchronous Route Overrides: Pure async command receipts (edge-terminated)
-[gql.routes.bulk_import]
-operation = "importCatalog"
-strategy = "async"
-receipt_status = "ACCEPTED"
-
-[gql.routes.magic_link]
-operation = "requestMagicLink"
-strategy = "async"
-receipt_status = "ACCEPTED"
-
-[gql.routes.webhook_dispatch]
-operation = "dispatchWebhook"
-strategy = "async"
-receipt_status = "ACCEPTED"
-
-# Remote Fluxcell Deployment Routes (Disabled by default for production security)
+# =============================================================================
+# Remote Fluxcell Deployment Routes (Chassis Management)
+# =============================================================================
+# Edge endpoints for hot-swapping WASM fluxcells into the downstream chassis.
 [gql.routes.fluxcell_deploy]
 operation = "deployFluxcell"
 strategy = "async"
@@ -82,13 +60,70 @@ enabled = false
 receipt_status = "ACCEPTED"
 interceptors = ["deploy_guard"]
 
+# Example: Custom Asynchronous Mutation Route
+# [gql.routes.submit_order]
+# operation = "submitOrder"
+# strategy = "async"
+# receipt_status = "ACCEPTED"
+
+# =============================================================================
+# Multi-Tenant & Multi-App Domain Routing (Optional)
+# =============================================================================
+# SpectraGQL can host multiple applications or tenants on a single gateway instance.
+# Incoming requests are resolved to an app based on:
+#   1. HTTP Header: `X-App-ID` or `X-Tenant-ID`
+#   2. Host Header: Matches any domain in `domains = [...]`
+#   3. URI Path Prefix: Matches any prefix in `path_prefixes = [...]`
+#   4. Fallback: `default_app` if configured
+#
+# Optional: Set default fallback app ID when no domain/header matches:
+# default_app = "your-app"
+#
+# To configure an application, uncomment and customize the [[apps]] block below:
+# [[apps]]
+# id = "your-app"                                  # Unique app identifier (used in telemetry & metrics)
+# name = "Your Application Name"                  # Human-readable title
+# domains = ["api.yourdomain.com", "yourdomain.com"] # Domains that route to this app
+# path_prefixes = ["/v1", "/app"]                 # Path prefixes that route to this app
+# upstream = "default"                            # Target upstream name (matches [upstream] or [upstreams.<name>])
+# subject_prefix = "mutation.your_app"            # Event broker subject/topic prefix for Mode B mutation dispatch
+#
+# Additional tenants/apps can be added by repeating the [[apps]] block:
+# [[apps]]
+# id = "second-app"
+# name = "Second Application"
+# domains = ["second-api.yourdomain.com"]
+# upstream = "default"
+# subject_prefix = "mutation.second_app"
+
+# =============================================================================
+# Event Sink Broker Dispatch (Mode B Mutation Sink & Real-time Telemetry)
+# =============================================================================
+# Configures the append-only event stream broker where asynchronous command payloads
+# and edge receipts are dispatched.
+#
+# Supported Broker Methods & Options:
+#   - "NATS"          : High-throughput NATS JetStream (default reference implementation).
+#                       Default addr: "127.0.0.1:4222" (or "nats.railway.internal:4222")
+#   - "KAFKA"         : Apache Kafka or Redpanda distributed partition log.
+#                       Default addr: "127.0.0.1:9092"
+#   - "REDIS_STREAMS" : Redis or Valkey Streams (XADD/XREADGROUP).
+#                       Default addr: "redis://127.0.0.1:6379"
+#   - "IGGY"          : High-throughput zero-copy Rust streaming protocol over TCP/QUIC.
+#                       Default addr: "iggy://127.0.0.1:8090"
+#   - "SIERRADB"      : Monotonic causal event store over Redis protocol.
+#                       Default addr: "redis://127.0.0.1:7379"
+#   - "RABBITMQ"      : AMQP 0-9-1 broker routing.
+#                       Default addr: "amqp://guest:guest@127.0.0.1:5672/%2f"
+#
 [dispatch]
-# Options: "NATS", "KAFKA", "RABBITMQ", "IGGY", "REDIS_STREAMS", "SIERRADB", "WEBHOOK"
 method = "NATS"
 addr = "127.0.0.1:4222"
 name = "default"
-# Adaptive Reconnection Profile: "auto" (default: dev profile if TTY attached, prod profile in daemon/k8s),
-# "production" (aggressive recovery: 10ms initial, 2s max), or "development" (gentle: 250ms initial, 5s max)
+# Adaptive Reconnection Profile:
+#   - "auto"        : Dev profile if TTY attached, prod profile in daemon/containers (default)
+#   - "production"  : Aggressive recovery (10ms initial, 2s max)
+#   - "development" : Gentle recovery (250ms initial, 5s max)
 reconnect_profile = "auto"
 # Optional overrides:
 # reconnect_initial_ms = 10
@@ -193,7 +228,7 @@ expr = "!body.contains('internal_secret_key')"
 #   SPECTRA_CONFIG_STORE_BACKEND="postgres" | "file" | "redis" | "memory"
 #   SPECTRA_DATABASE_URL="postgres://user:pass@host:5432/dbname"
 #   SPECTRA_REDIS_URL="redis://127.0.0.1:6379"
-#   SPECTRA_CONFIG_FILE_PATH="/data/spectra.toml"
+#   SPECTRA_CONFIG_FILE="/data/spectra.toml"
 #
 [config_store]
 backend = "memory"
