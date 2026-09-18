@@ -3,11 +3,13 @@
 # SpectraGQL Gateway Dockerfile (Standalone Production Gateway)
 # ------------------------------------------------------------------------------
 
-FROM rust:1.85-slim-bookworm AS builder
+FROM rust:1-slim-bookworm AS builder
 
 WORKDIR /usr/src/spectragql
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    cmake \
     pkg-config \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
