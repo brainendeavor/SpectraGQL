@@ -256,6 +256,7 @@ impl AdminEngine {
                 AdminRoute::ConfigReload => self.handle_config_reload(session).await,
                 AdminRoute::DnsStatus => self.handle_dns_status(session).await,
                 AdminRoute::DnsRescan => self.handle_dns_rescan(session).await,
+                AdminRoute::AuthVerify => self.handle_auth_verify(session).await,
             }
         } else {
             self.handle_not_found(session, &path).await
@@ -365,6 +366,14 @@ impl AdminEngine {
                 )
             };
 
+        let auth_required = std::env::var("SPECTRA_ADMIN_TOKEN")
+            .ok()
+            .or_else(|| std::env::var("SPECTRA_DEPLOY_TOKEN").ok())
+            .or_else(|| std::env::var("SPECTRAGQL_DEPLOY_TOKEN").ok())
+            .or_else(|| self.config.deploy_token.clone())
+            .map(|t| !t.trim().is_empty())
+            .unwrap_or(false);
+
         let status_resp = AdminStatusResponse {
             version: env!("CARGO_PKG_VERSION").to_string(),
             uptime_seconds: self.start_time.elapsed().as_secs(),
@@ -380,6 +389,7 @@ impl AdminEngine {
             broker_addr: self.broker_addr.clone(),
             broker_status: "online".to_string(),
             apps,
+            auth_required,
         };
         self.respond_json(session, 200, &status_resp).await
     }
@@ -1056,6 +1066,37 @@ impl AdminEngine {
         self.respond_json(session, 200, &resp).await
     }
 
+    async fn handle_auth_verify(&self, session: &mut Session) -> pingora::Result<bool> {
+        let auth_required = std::env::var("SPECTRA_ADMIN_TOKEN")
+            .ok()
+            .or_else(|| std::env::var("SPECTRA_DEPLOY_TOKEN").ok())
+            .or_else(|| std::env::var("SPECTRAGQL_DEPLOY_TOKEN").ok())
+            .or_else(|| self.config.deploy_token.clone())
+            .map(|t| !t.trim().is_empty())
+            .unwrap_or(false);
+
+        if self.is_write_authorized(session) {
+            let body = serde_json::json!({
+                "authenticated": true,
+                "auth_required": auth_required,
+                "message": if auth_required {
+                    "Admin token verified successfully"
+                } else {
+                    "Admin write operations open (no SPECTRA_ADMIN_TOKEN configured)"
+                }
+            });
+            self.respond_json(session, 200, &body).await
+        } else {
+            let body = serde_json::json!({
+                "authenticated": false,
+                "auth_required": auth_required,
+                "error": "Unauthorized",
+                "message": "Missing or invalid admin authorization token (set SPECTRA_ADMIN_TOKEN or provide valid Authorization: Bearer <token>)"
+            });
+            self.respond_json(session, 401, &body).await
+        }
+    }
+
     async fn handle_not_found(&self, session: &mut Session, path: &str) -> pingora::Result<bool> {
         let body = serde_json::json!({
             "error": "Not Found",
@@ -1063,6 +1104,7 @@ impl AdminEngine {
             "available_endpoints": [
                 "/admin",
                 "/admin/api/v1/status",
+                "/admin/api/v1/auth/verify",
                 "/admin/api/v1/eventsink",
                 "/admin/api/v1/traffic",
                 "/admin/api/v1/traffic/clear",
@@ -1197,7 +1239,10 @@ mod tests {
         assert!(ADMIN_HTML.contains("/admin/api/v1/status"));
         assert!(ADMIN_HTML.contains("/admin/api/v1/schema"));
         assert!(ADMIN_HTML.contains("/admin/api/v1/dns/rescan"));
+        assert!(ADMIN_HTML.contains("/admin/api/v1/auth/verify"));
         assert!(ADMIN_HTML.contains("Rescan DNS"));
+        assert!(ADMIN_HTML.contains("admin-settings-modal"));
+        assert!(ADMIN_HTML.contains("Admin UI Settings &amp; Authentication"));
         assert!(ADMIN_HTML.contains("toast-notification"));
     }
 
@@ -1218,6 +1263,7 @@ mod tests {
             broker_addr: "127.0.0.1:4222".to_string(),
             broker_status: "online".to_string(),
             apps: vec![],
+            auth_required: false,
         };
         let status_json = serde_json::to_string(&status).unwrap();
         assert!(status_json.contains("\"version\":\"0.1.0\""));

@@ -25,6 +25,8 @@ pub struct AdminStatusResponse {
     pub broker_status: String,
     #[serde(default)]
     pub apps: Vec<SpectraAppSummary>,
+    #[serde(default)]
+    pub auth_required: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

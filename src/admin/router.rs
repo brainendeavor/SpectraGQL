@@ -23,6 +23,7 @@ pub enum AdminRoute {
     ConfigReload,
     DnsStatus,
     DnsRescan,
+    AuthVerify,
 }
 
 #[derive(Clone)]
@@ -87,6 +88,8 @@ impl AdminRouter {
             ("/admin/api/config", AdminRoute::ConfigGet),
             ("/admin/api/v1/dns", AdminRoute::DnsStatus),
             ("/admin/api/dns", AdminRoute::DnsStatus),
+            ("/admin/api/v1/auth/verify", AdminRoute::AuthVerify),
+            ("/admin/api/auth/verify", AdminRoute::AuthVerify),
         ];
 
         for (pattern, route) in get_routes {
@@ -113,6 +116,8 @@ impl AdminRouter {
             ("/admin/api/config", AdminRoute::ConfigUpdate),
             ("/admin/api/v1/dns/rescan", AdminRoute::DnsRescan),
             ("/admin/api/dns/rescan", AdminRoute::DnsRescan),
+            ("/admin/api/v1/auth/verify", AdminRoute::AuthVerify),
+            ("/admin/api/auth/verify", AdminRoute::AuthVerify),
         ];
 
         for (pattern, route) in post_routes {
@@ -329,6 +334,16 @@ mod tests {
         assert_eq!(
             router.match_route(&Method::POST, "/admin/api/v1/dns/rescan").map(|(r, _)| r),
             Some(AdminRoute::DnsRescan)
+        );
+
+        // Auth Verify routes
+        assert_eq!(
+            router.match_route(&Method::POST, "/admin/api/v1/auth/verify").map(|(r, _)| r),
+            Some(AdminRoute::AuthVerify)
+        );
+        assert_eq!(
+            router.match_route(&Method::GET, "/admin/api/v1/auth/verify").map(|(r, _)| r),
+            Some(AdminRoute::AuthVerify)
         );
 
         // Unknown

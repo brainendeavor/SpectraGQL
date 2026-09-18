@@ -131,6 +131,9 @@
         <button class="btn" onclick="openConfigModal()" style="font-size: 12px; padding: 4px 10px; display: flex; align-items: center; gap: 6px;" title="Gateway Configuration (c)">
           ⚙️ Config <kbd>c</kbd>
         </button>
+        <button class="btn" onclick="openAdminSettingsModal()" id="btn-admin-auth-header" style="font-size: 12px; padding: 4px 10px; display: flex; align-items: center; gap: 6px;" title="Admin UI Settings &amp; Auth (a)">
+          <span>🛡️</span> <span id="header-auth-label">Admin Auth</span> <span id="header-auth-dot" style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--text-muted); transition: background 0.3s;"></span> <kbd>a</kbd>
+        </button>
         <button class="btn" onclick="openHelpModal()" style="font-size: 12px; padding: 4px 10px; display: flex; align-items: center; gap: 6px;" title="Appliance Help &amp; Shortcuts (?)">
           Help <kbd>?</kbd>
         </button>
@@ -365,6 +368,7 @@
           <button id="btn-matrix-sync" class="btn btn-sm" onclick="setMatrixFilter('sync')">🔀 Targeted (Mode A)</button>
           <button id="btn-matrix-fallback" class="btn btn-sm" onclick="setMatrixFilter('fallback')">🌐 Monolith</button>
           <button id="btn-matrix-override" class="btn btn-sm" onclick="setMatrixFilter('override')">🔧 Policy Override</button>
+          <button id="btn-matrix-chassis" class="btn btn-sm" onclick="setMatrixFilter('chassis')">🛠️ Chassis</button>
           <button id="btn-matrix-drift" class="btn btn-sm" onclick="setMatrixFilter('drift')">⚠️ Drifted</button>
         </div>
       </div>
@@ -424,15 +428,250 @@
       loadEventSink();
     }
 
+    // =========================================================================
+    // Unified Admin Authentication & Settings Management
+    // =========================================================================
+    function getAdminToken() {
+      return localStorage.getItem('spectra_admin_token') || sessionStorage.getItem('spectra_admin_token') || '';
+    }
+
+    function isTokenInLocalStorage() {
+      return localStorage.getItem('spectra_admin_token') !== null;
+    }
+
+    function setAdminToken(token, useLocal = true) {
+      const clean = (token || '').trim();
+      if (useLocal) {
+        if (clean) localStorage.setItem('spectra_admin_token', clean);
+        else localStorage.removeItem('spectra_admin_token');
+        sessionStorage.removeItem('spectra_admin_token');
+      } else {
+        if (clean) sessionStorage.setItem('spectra_admin_token', clean);
+        else sessionStorage.removeItem('spectra_admin_token');
+        localStorage.removeItem('spectra_admin_token');
+      }
+      updateAuthUIState();
+    }
+
+    function clearAdminToken() {
+      localStorage.removeItem('spectra_admin_token');
+      sessionStorage.removeItem('spectra_admin_token');
+      updateAuthUIState();
+    }
+
+    function getAuthHeaders(customHeaders = {}) {
+      const headers = Object.assign({}, customHeaders);
+      const token = getAdminToken();
+      if (token) {
+        headers['Authorization'] = 'Bearer ' + token;
+        headers['x-spectra-admin-token'] = token;
+      }
+      return headers;
+    }
+
+    async function adminFetch(url, options = {}) {
+      const opts = Object.assign({}, options);
+      opts.headers = getAuthHeaders(opts.headers);
+      const resp = await fetch(url, opts);
+      if (resp.status === 401) {
+        showToast('⚠️ Unauthorized: Valid SPECTRA_ADMIN_TOKEN required', 'error');
+        updateAuthUIState(false);
+        openAdminSettingsModal(true);
+      }
+      return resp;
+    }
+
     async function fetchJSON(url, options = {}) {
       try {
-        const res = await fetch(url, options);
+        const opts = Object.assign({}, options);
+        opts.headers = getAuthHeaders(opts.headers);
+        const res = await fetch(url, opts);
         if (!res.ok) return null;
         return await res.json();
       } catch (e) {
         console.error('Fetch error for', url, e);
         return null;
       }
+    }
+
+    function updateAuthUIState(verified = null) {
+      const token = getAdminToken();
+      const dot = document.getElementById('header-auth-dot');
+      const label = document.getElementById('header-auth-label');
+      const authRequired = cachedStatus && cachedStatus.auth_required;
+
+      if (token) {
+        if (dot) {
+          dot.style.background = '#3fb950';
+          dot.style.boxShadow = '0 0 6px rgba(63, 185, 80, 0.6)';
+        }
+        if (label) label.innerText = 'Admin Auth';
+      } else if (authRequired) {
+        if (dot) {
+          dot.style.background = '#e3b341';
+          dot.style.boxShadow = '0 0 6px rgba(227, 179, 65, 0.6)';
+        }
+        if (label) label.innerText = 'Auth Required';
+      } else {
+        if (dot) {
+          dot.style.background = 'var(--text-muted)';
+          dot.style.boxShadow = 'none';
+        }
+        if (label) label.innerText = 'Admin Auth';
+      }
+
+      const modalInput = document.getElementById('admin-token-input');
+      if (modalInput && document.activeElement !== modalInput) {
+        modalInput.value = token;
+      }
+
+      const radioLocal = document.getElementById('storage-mode-local');
+      const radioSession = document.getElementById('storage-mode-session');
+      if (radioLocal && radioSession) {
+        if (isTokenInLocalStorage() || !token) {
+          radioLocal.checked = true;
+        } else {
+          radioSession.checked = true;
+        }
+      }
+
+      const descEl = document.getElementById('settings-auth-status-desc');
+      const pillEl = document.getElementById('settings-auth-pill');
+      if (descEl && pillEl) {
+        if (authRequired) {
+          descEl.innerText = 'Appliance enforces authentication (SPECTRA_ADMIN_TOKEN active).';
+          pillEl.className = 'pill pill-warning';
+          pillEl.innerText = 'ENFORCED';
+        } else {
+          descEl.innerText = 'Appliance write operations open (no SPECTRA_ADMIN_TOKEN set).';
+          pillEl.className = 'pill pill-success';
+          pillEl.innerText = 'OPEN / DEV';
+        }
+      }
+
+      const cfgTokenInput = document.getElementById('config-auth-token');
+      if (cfgTokenInput && document.activeElement !== cfgTokenInput) {
+        cfgTokenInput.value = token;
+      }
+    }
+
+    function openAdminSettingsModal(isAuthPrompt = false) {
+      const modal = document.getElementById('admin-settings-modal');
+      if (!modal) return;
+      modal.style.display = 'flex';
+
+      const input = document.getElementById('admin-token-input');
+      if (input) {
+        input.value = getAdminToken();
+        if (isAuthPrompt) {
+          setTimeout(() => { input.focus(); input.select(); }, 50);
+        }
+      }
+
+      const resultBox = document.getElementById('token-test-result');
+      if (resultBox) resultBox.style.display = 'none';
+
+      updateAuthUIState();
+    }
+
+    function closeAdminSettingsModal() {
+      const modal = document.getElementById('admin-settings-modal');
+      if (modal) modal.style.display = 'none';
+    }
+
+    function toggleAdminSettingsModal() {
+      const modal = document.getElementById('admin-settings-modal');
+      if (!modal) return;
+      if (modal.style.display === 'flex') closeAdminSettingsModal();
+      else openAdminSettingsModal();
+    }
+
+    function toggleTokenVisibility() {
+      const input = document.getElementById('admin-token-input');
+      const btn = document.getElementById('btn-toggle-token-vis');
+      if (!input) return;
+      if (input.type === 'password') {
+        input.type = 'text';
+        if (btn) btn.innerText = '🔒';
+      } else {
+        input.type = 'password';
+        if (btn) btn.innerText = '👁️';
+      }
+    }
+
+    function onAdminTokenInputChanged() {
+      const resultBox = document.getElementById('token-test-result');
+      if (resultBox) resultBox.style.display = 'none';
+    }
+
+    function onStorageModeChanged() {
+      const token = document.getElementById('admin-token-input')?.value?.trim() || getAdminToken();
+      const useLocal = document.getElementById('storage-mode-local')?.checked ?? true;
+      if (token) {
+        setAdminToken(token, useLocal);
+      }
+    }
+
+    async function testAdminToken() {
+      const input = document.getElementById('admin-token-input');
+      const token = input ? input.value.trim() : '';
+      const resultBox = document.getElementById('token-test-result');
+      const btn = document.getElementById('btn-test-token');
+      if (!resultBox) return;
+
+      if (btn) { btn.disabled = true; btn.innerText = '⏳ Testing...'; }
+      resultBox.style.display = 'block';
+
+      try {
+        const headers = {};
+        if (token) {
+          headers['Authorization'] = 'Bearer ' + token;
+          headers['x-spectra-admin-token'] = token;
+        }
+        const res = await fetch('/admin/api/v1/auth/verify', {
+          method: 'POST',
+          headers
+        });
+        const data = await res.json();
+        if (res.ok && data.authenticated) {
+          resultBox.style.background = 'rgba(63, 185, 80, 0.15)';
+          resultBox.style.border = '1px solid var(--success)';
+          resultBox.style.color = '#3fb950';
+          resultBox.innerHTML = `✅ <strong>Verified:</strong> ${escapeHtml(data.message || 'Token accepted by gateway')}`;
+          const useLocal = document.getElementById('storage-mode-local')?.checked ?? true;
+          setAdminToken(token, useLocal);
+        } else {
+          resultBox.style.background = 'rgba(248, 81, 73, 0.15)';
+          resultBox.style.border = '1px solid var(--danger)';
+          resultBox.style.color = '#f85149';
+          resultBox.innerHTML = `❌ <strong>Rejected:</strong> ${escapeHtml(data.message || data.error || 'Token rejected (HTTP 401)')}`;
+        }
+      } catch (err) {
+        resultBox.style.background = 'rgba(248, 81, 73, 0.15)';
+        resultBox.style.border = '1px solid var(--danger)';
+        resultBox.style.color = '#f85149';
+        resultBox.innerHTML = `❌ <strong>Error:</strong> Failed to reach /admin/api/v1/auth/verify (${escapeHtml(err.message)})`;
+      } finally {
+        if (btn) { btn.disabled = false; btn.innerText = '⚡ Test'; }
+      }
+    }
+
+    function saveAdminSettingsAndClose() {
+      const input = document.getElementById('admin-token-input');
+      const token = input ? input.value.trim() : '';
+      const useLocal = document.getElementById('storage-mode-local')?.checked ?? true;
+      setAdminToken(token, useLocal);
+      showToast(token ? '🛡️ Admin token saved successfully' : 'ℹ️ Admin token cleared', 'success');
+      closeAdminSettingsModal();
+    }
+
+    function clearAdminTokenAndNotify() {
+      clearAdminToken();
+      const input = document.getElementById('admin-token-input');
+      if (input) input.value = '';
+      const resultBox = document.getElementById('token-test-result');
+      if (resultBox) resultBox.style.display = 'none';
+      showToast('🗑️ Admin token removed from browser storage', 'info');
     }
 
     function formatUptime(secs) {
@@ -448,6 +687,7 @@
       const status = await fetchJSON('/admin/api/v1/status');
       if (status) {
         cachedStatus = status;
+        updateAuthUIState();
         document.getElementById('uptime-display').innerText = 'Uptime: ' + formatUptime(status.uptime_seconds);
         document.getElementById('kpi-broker-method').innerText = status.broker_method;
         document.getElementById('kpi-broker-addr').innerText = 'Target: ' + status.broker_addr;
@@ -896,7 +1136,7 @@
 
     function setMatrixFilter(filter) {
       matrixFilter = filter;
-      const buttons = ['all', 'async', 'sync', 'fallback', 'override', 'drift'];
+      const buttons = ['all', 'async', 'sync', 'fallback', 'override', 'chassis', 'drift'];
       buttons.forEach(b => {
         const btn = document.getElementById(`btn-matrix-${b}`);
         if (btn) {
@@ -974,20 +1214,23 @@
         });
       }
 
-      // 2. Process configured routes not in schema (drifted or uninspected)
+      // 2. Process configured routes not in schema (chassis, drifted or uninspected)
       for (const r of routes) {
         if (!processedRouteOps.has(r.operation)) {
           const isModeB = r.mode === 'Async' || r.mode === 'B';
-          const isDrifted = cachedSchema && (cachedSchema.total_mutations > 0 || (cachedSchema.drifted_routes && cachedSchema.drifted_routes.length > 0));
+          const isChassis = (r.interceptors && r.interceptors.includes('deploy_guard')) ||
+            ['deployFluxcell', 'activateFluxcell', 'removeFluxcell'].includes(r.operation);
+          const isDrifted = !isChassis && (r.enabled !== false) && cachedSchema && (cachedSchema.total_mutations > 0 || (cachedSchema.drifted_routes && cachedSchema.drifted_routes.length > 0));
           rows.push({
             operation: r.operation,
             routeId: r.name,
             mode: isModeB ? 'Async (Mode B)' : 'Sync (Mode A)',
             isModeB: isModeB,
-            isTargeted: !isModeB && r.upstream !== 'default',
-            isFallback: !isModeB && r.upstream === 'default',
-            upstream: r.upstream,
-            upstreamAddr: r.upstream_addr,
+            isChassis: isChassis,
+            isTargeted: !isModeB && !isChassis && r.upstream !== 'default',
+            isFallback: !isModeB && !isChassis && r.upstream === 'default',
+            upstream: isChassis ? 'edge (spectra-flux)' : r.upstream,
+            upstreamAddr: isChassis ? 'chassis internal' : r.upstream_addr,
             dispatchPolicy: r.dispatch_policy,
             isOverride: r.is_policy_override,
             receiptStatus: r.receipt_status,
@@ -1017,8 +1260,10 @@
         filtered = filtered.filter(r => r.isFallback);
       } else if (matrixFilter === 'override') {
         filtered = filtered.filter(r => r.isOverride);
+      } else if (matrixFilter === 'chassis') {
+        filtered = filtered.filter(r => r.isChassis);
       } else if (matrixFilter === 'drift') {
-        filtered = filtered.filter(r => r.isDrifted || !r.enabled);
+        filtered = filtered.filter(r => r.isDrifted);
       }
 
       if (matrixSearchQuery) {
@@ -1061,7 +1306,9 @@
           : '<span class="pill pill-strangled">🔀 Sync (Mode A)</span>';
 
         let targetHtml = '';
-        if (r.isModeB) {
+        if (r.isChassis) {
+          targetHtml = `<div><span class="pill pill-mode-b">Edge Chassis</span></div><div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">spectra-flux worker</div>`;
+        } else if (r.isModeB) {
           targetHtml = `<div><span class="pill pill-mode-b">Event Sink</span></div><div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">Receipt: <code>${escapeHtml(r.receiptStatus || 'ACCEPTED')}</code></div>`;
         } else if (r.upstream && r.upstream !== 'default') {
           targetHtml = `<div><span class="pill pill-upstream">${escapeHtml(r.upstream)}</span></div><div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;"><code>${escapeHtml(r.upstreamAddr)}</code></div>`;
@@ -1070,7 +1317,9 @@
         }
 
         let policyPill = '';
-        if (r.isModeB) {
+        if (r.isChassis) {
+          policyPill = '<span class="pill pill-mode-b" style="font-size: 11px;">deploy_guard</span>';
+        } else if (r.isModeB) {
           policyPill = '<span class="pill pill-monolith" style="font-size: 11px;">— (Async Receipt)</span>';
         } else {
           const pol = r.dispatchPolicy || 'response_with_failure';
@@ -1087,10 +1336,14 @@
         }
 
         let statusPill = '';
-        if (r.isDrifted) {
+        if (r.enabled === false) {
+          statusPill = r.isChassis
+            ? '<span class="pill pill-monolith">⏸ Chassis (Disabled)</span>'
+            : '<span class="pill pill-danger">⏸ Disabled</span>';
+        } else if (r.isChassis) {
+          statusPill = '<span class="pill pill-mode-b">⚡ Chassis Management</span>';
+        } else if (r.isDrifted) {
           statusPill = '<span class="pill pill-warning">⚠️ Schema Drift</span>';
-        } else if (r.enabled === false) {
-          statusPill = '<span class="pill pill-danger">⏸ Disabled</span>';
         } else if (r.isModeB) {
           statusPill = '<span class="pill pill-success">✓ Edge Terminated</span>';
         } else if (r.isTargeted) {
@@ -1175,7 +1428,7 @@
         btn.disabled = true;
       }
       try {
-        const resp = await fetch('/admin/api/v1/dns/rescan', { method: 'POST' });
+        const resp = await adminFetch('/admin/api/v1/dns/rescan', { method: 'POST' });
         const data = await resp.json();
         if (resp.ok) {
           const changed = data.changed_count || 0;
@@ -1299,8 +1552,8 @@
       const m = document.getElementById('config-modal');
       if (!m) return;
       const tokenInput = document.getElementById('config-auth-token');
-      if (tokenInput && !tokenInput.value) {
-        tokenInput.value = sessionStorage.getItem('spectra_admin_token') || '';
+      if (tokenInput) {
+        tokenInput.value = getAdminToken();
       }
       m.style.display = 'flex';
       loadConfigData();
@@ -1374,16 +1627,14 @@
       if (!textarea) return;
       const content = textarea.value;
       const token = document.getElementById('config-auth-token')?.value?.trim();
-
-      const headers = { 'Content-Type': 'application/json' };
-      if (token) {
-        sessionStorage.setItem('spectra_admin_token', token);
-        headers['Authorization'] = 'Bearer ' + token;
-        headers['x-spectra-admin-token'] = token;
+      if (token && token !== getAdminToken()) {
+        setAdminToken(token, isTokenInLocalStorage());
       }
 
+      const headers = getAuthHeaders({ 'Content-Type': 'application/json' });
+
       try {
-        const res = await fetch('/admin/api/v1/config', {
+        const res = await adminFetch('/admin/api/v1/config', {
           method: 'POST',
           headers,
           body: JSON.stringify({ content, reload: true })
@@ -1409,16 +1660,13 @@
 
     async function reloadConfigFromStore() {
       const token = document.getElementById('config-auth-token')?.value?.trim();
-      const headers = {};
-      if (token) {
-        sessionStorage.setItem('spectra_admin_token', token);
-        headers['Authorization'] = 'Bearer ' + token;
-        headers['x-spectra-admin-token'] = token;
+      if (token && token !== getAdminToken()) {
+        setAdminToken(token, isTokenInLocalStorage());
       }
       try {
-        const res = await fetch('/admin/api/v1/config/reload', {
+        const res = await adminFetch('/admin/api/v1/config/reload', {
           method: 'POST',
-          headers
+          headers: getAuthHeaders()
         });
         const data = await res.json();
         if (res.ok && data.success) {
@@ -1497,9 +1745,14 @@
       );
 
       if (e.key === 'Escape') {
+        const adminSettingsModal = document.getElementById('admin-settings-modal');
         const configModal = document.getElementById('config-modal');
         const helpModal = document.getElementById('help-modal');
         const workerLogsModal = document.getElementById('worker-logs-modal');
+        if (adminSettingsModal && adminSettingsModal.style.display === 'flex') {
+          closeAdminSettingsModal();
+          return;
+        }
         if (configModal && configModal.style.display === 'flex') {
           closeConfigModal();
           return;
@@ -1535,6 +1788,9 @@
       } else if (e.key === '?') {
         e.preventDefault();
         toggleHelpModal();
+      } else if (e.key === 'a') {
+        e.preventDefault();
+        toggleAdminSettingsModal();
       } else if (e.key === 'c') {
         e.preventDefault();
         toggleConfigModal();
@@ -1658,8 +1914,9 @@
     }
 
     // Initial load and periodic polling
+    updateAuthUIState();
     refreshAll();
-    setInterval(refreshAll, 2000);
+    let pollingIntervalId = setInterval(refreshAll, 2000);
   </script>
 
   <!-- Consumer Worker Logs Modal -->
@@ -1745,6 +2002,89 @@
     </div>
   </div>
 
+  <!-- Admin UI Settings & Authentication Modal -->
+  <div id="admin-settings-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.8); z-index:9999; justify-content:center; align-items:center; backdrop-filter:blur(4px);" onclick="if(event.target===this) closeAdminSettingsModal()">
+    <div style="width: 580px; max-width: 94vw; display: flex; flex-direction: column; background: #0d1117; border: 1px solid #30363d; border-radius: 10px; box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.85); overflow: hidden; box-sizing: border-box;">
+      <!-- Header -->
+      <div style="padding: 14px 20px; border-bottom: 1px solid #30363d; display: flex; justify-content: space-between; align-items: center; background: #161b22;">
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <span style="font-size: 18px;">🛡️</span>
+          <h3 style="margin: 0; font-size: 16px; color: var(--text-bright);">Admin UI Settings &amp; Authentication</h3>
+        </div>
+        <button class="btn btn-sm" onclick="closeAdminSettingsModal()" style="background:#21262d; color:#c9d1d9; font-weight: bold; padding: 4px 10px;">✕</button>
+      </div>
+
+      <!-- Body -->
+      <div style="padding: 20px; display: flex; flex-direction: column; gap: 18px; font-size: 13px; color: var(--text);">
+        <!-- Server Enforced Status Banner -->
+        <div id="settings-auth-banner" style="background: rgba(56, 189, 248, 0.08); border: 1px solid rgba(56, 189, 248, 0.25); border-radius: 6px; padding: 12px 14px; font-size: 12.5px; display: flex; align-items: center; justify-content: space-between;">
+          <div>
+            <div style="font-weight: 600; color: var(--text-bright);">Appliance Auth Mode:</div>
+            <div id="settings-auth-status-desc" style="color: var(--text-muted); margin-top: 2px;">Checking gateway status...</div>
+          </div>
+          <span id="settings-auth-pill" class="pill pill-monolith">CHECKING</span>
+        </div>
+
+        <!-- Token Input Section -->
+        <div>
+          <label style="display: block; font-weight: 600; color: var(--text-bright); margin-bottom: 6px;">
+            🔑 Admin Authorization Token (<code style="font-size: 12px;">SPECTRA_ADMIN_TOKEN</code>)
+          </label>
+          <div style="font-size: 12px; color: var(--text-muted); margin-bottom: 8px; line-height: 1.4;">
+            Required to authorize protected administrative operations: DNS rescans, dynamic configuration updates, hot reloads, and chassis deployments.
+          </div>
+          <div style="display: flex; gap: 8px; align-items: center;">
+            <div style="position: relative; flex: 1;">
+              <input type="password" id="admin-token-input" class="filter-input" placeholder="Paste your SPECTRA_ADMIN_TOKEN here..." style="width: 100%; padding-right: 36px; font-family: ui-monospace, monospace; font-size: 13px;" oninput="onAdminTokenInputChanged()">
+              <button type="button" onclick="toggleTokenVisibility()" style="position: absolute; right: 8px; top: 50%; transform: translateY(-50%); background: none; border: none; cursor: pointer; color: var(--text-muted); font-size: 14px;" title="Show/Hide Token" id="btn-toggle-token-vis">👁️</button>
+            </div>
+            <button class="btn btn-sm" onclick="testAdminToken()" id="btn-test-token" title="Verify token with gateway">⚡ Test</button>
+          </div>
+          <div id="token-test-result" style="display: none; margin-top: 8px; font-size: 12px; padding: 6px 10px; border-radius: 4px;"></div>
+        </div>
+
+        <!-- Persistence Options -->
+        <div>
+          <label style="display: block; font-weight: 600; color: var(--text-bright); margin-bottom: 6px;">
+            💾 Token Browser Storage
+          </label>
+          <div style="display: flex; gap: 16px; font-size: 12.5px; flex-wrap: wrap;">
+            <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+              <input type="radio" name="token-storage-mode" value="local" id="storage-mode-local" checked onchange="onStorageModeChanged()">
+              <span>Remember in LocalStorage <span style="color: var(--text-muted); font-size: 11px;">(persists across tabs/reloads)</span></span>
+            </label>
+            <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+              <input type="radio" name="token-storage-mode" value="session" id="storage-mode-session" onchange="onStorageModeChanged()">
+              <span>Session Only <span style="color: var(--text-muted); font-size: 11px;">(cleared on tab close)</span></span>
+            </label>
+          </div>
+        </div>
+
+        <!-- UI Polling Rate Preference -->
+        <div>
+          <label style="display: block; font-weight: 600; color: var(--text-bright); margin-bottom: 6px;">
+            ⏱️ Dashboard Auto-Refresh Rate
+          </label>
+          <select id="setting-poll-rate" class="filter-input" style="width: 100%; font-size: 12.5px; padding: 6px 10px;" onchange="onPollRateChanged(this.value)">
+            <option value="2000" selected>High Velocity (2 seconds)</option>
+            <option value="5000">Standard (5 seconds)</option>
+            <option value="10000">Relaxed (10 seconds)</option>
+            <option value="0">Paused / Manual only</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Footer Actions -->
+      <div style="padding: 12px 20px; background: #161b22; border-top: 1px solid #30363d; display: flex; justify-content: space-between; align-items: center;">
+        <button class="btn btn-sm" onclick="clearAdminTokenAndNotify()" style="background: rgba(248, 81, 73, 0.15); border-color: var(--danger); color: #f85149;">🗑️ Clear Token</button>
+        <div style="display: flex; gap: 8px;">
+          <button class="btn btn-sm" onclick="closeAdminSettingsModal()" style="background:#21262d; color:#c9d1d9;">Cancel</button>
+          <button class="btn btn-sm btn-primary" onclick="saveAdminSettingsAndClose()">💾 Save Settings</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- Help & Shortcuts Modal -->
   <div id="help-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.75); z-index:9999; justify-content:center; align-items:center; backdrop-filter:blur(3px);" onclick="if(event.target===this) closeHelpModal()">
     <div style="width: 720px; height: 560px; max-width: 94vw; max-height: 88vh; display: flex; flex-direction: column; background: #0f172a; border: 1px solid #334155; border-radius: 10px; box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.7); overflow: hidden; box-sizing: border-box;">
@@ -1824,6 +2164,7 @@
         </div>
         <div>
           <div style="font-weight: 700; color: var(--text-muted); font-size: 11px; text-transform: uppercase; margin-bottom: 10px;">Actions &amp; Controls</div>
+          <div style="display: flex; justify-content: space-between; margin-bottom: 9px;"><span style="color: var(--text-bright);">Admin Auth &amp; Settings</span> <kbd>a</kbd></div>
           <div style="display: flex; justify-content: space-between; margin-bottom: 9px;"><span style="color: var(--text-bright);">Open Config Editor</span> <kbd>c</kbd></div>
           <div style="display: flex; justify-content: space-between; margin-bottom: 9px;"><span style="color: var(--text-bright);">Refresh All Data</span> <kbd>r</kbd></div>
           <div style="display: flex; justify-content: space-between; margin-bottom: 9px;"><span style="color: var(--text-bright);">Play / Pause Polling</span> <span><kbd>p</kbd> or <kbd>Space</kbd></span></div>
