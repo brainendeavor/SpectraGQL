@@ -1184,7 +1184,8 @@
         const routeId = matchedRoute ? matchedRoute.name : (m.route_name || null);
         const isModeB = (matchedRoute && (matchedRoute.mode === 'Async' || matchedRoute.mode === 'B')) || m.classification === 'AsyncReceipt' || m.classification === 'EdgeTerminatedModeB';
         const isTargeted = !isModeB && ((matchedRoute && matchedRoute.upstream && matchedRoute.upstream !== 'default') || m.classification === 'TargetedService' || m.classification === 'Strangled');
-        const isFallback = !isModeB && !isTargeted;
+        const isConfiguredRoute = !isModeB && !isTargeted && (routeId !== null || m.classification === 'ConfiguredRoute');
+        const isFallback = !isModeB && !isTargeted && !isConfiguredRoute;
 
         const modeLabel = isModeB ? 'Async (Mode B)' : 'Sync (Mode A)';
         const upstreamName = matchedRoute ? matchedRoute.upstream : (m.target_upstream || 'default');
@@ -1201,6 +1202,7 @@
           mode: modeLabel,
           isModeB: isModeB,
           isTargeted: isTargeted,
+          isConfiguredRoute: isConfiguredRoute,
           isFallback: isFallback,
           upstream: upstreamName,
           upstreamAddr: upstreamAddr,
@@ -1227,8 +1229,9 @@
             mode: isModeB ? 'Async (Mode B)' : 'Sync (Mode A)',
             isModeB: isModeB,
             isChassis: isChassis,
-            isTargeted: !isModeB && !isChassis && r.upstream !== 'default',
-            isFallback: !isModeB && !isChassis && r.upstream === 'default',
+            isTargeted: !isModeB && !isChassis && r.upstream && r.upstream !== 'default',
+            isConfiguredRoute: !isModeB && !isChassis && (!r.upstream || r.upstream === 'default'),
+            isFallback: false,
             upstream: isChassis ? 'edge (spectra-flux)' : r.upstream,
             upstreamAddr: isChassis ? 'chassis internal' : r.upstream_addr,
             dispatchPolicy: r.dispatch_policy,
@@ -1255,7 +1258,7 @@
       if (matrixFilter === 'async') {
         filtered = filtered.filter(r => r.isModeB);
       } else if (matrixFilter === 'sync') {
-        filtered = filtered.filter(r => r.isTargeted);
+        filtered = filtered.filter(r => r.isTargeted || r.isConfiguredRoute);
       } else if (matrixFilter === 'fallback') {
         filtered = filtered.filter(r => r.isFallback);
       } else if (matrixFilter === 'override') {
@@ -1348,6 +1351,8 @@
           statusPill = '<span class="pill pill-success">✓ Edge Terminated</span>';
         } else if (r.isTargeted) {
           statusPill = '<span class="pill pill-success">✓ Strangled</span>';
+        } else if (r.isConfiguredRoute) {
+          statusPill = '<span class="pill pill-primary">🔀 Configured Route</span>';
         } else {
           statusPill = '<span class="pill pill-monolith">🌐 Monolith Fallback</span>';
         }
@@ -1548,9 +1553,89 @@
       }
     }
 
+    function initEditorKeybindings() {
+      const textarea = document.getElementById('config-editor-textarea');
+      if (!textarea || textarea.dataset.shortcutsBound) return;
+      textarea.dataset.shortcutsBound = 'true';
+
+      textarea.addEventListener('keydown', (e) => {
+        // 1. Toggle Comment: Cmd+/ (Mac) or Ctrl+/ (Win/Linux)
+        if ((e.metaKey || e.ctrlKey) && (e.key === '/' || e.code === 'Slash')) {
+          e.preventDefault();
+          const val = textarea.value;
+          const selStart = textarea.selectionStart;
+          const selEnd = textarea.selectionEnd;
+
+          // Find start of first selected line
+          const lineStart = val.lastIndexOf('\n', selStart - 1) + 1;
+
+          // Find end of last selected line
+          let lineEnd = val.indexOf('\n', selEnd);
+          if (lineEnd === -1) lineEnd = val.length;
+          if (selEnd > selStart && val[selEnd - 1] === '\n') {
+            lineEnd = selEnd - 1;
+          }
+
+          const selectedBlock = val.substring(lineStart, lineEnd);
+          const lines = selectedBlock.split('\n');
+
+          // Check if all non-empty lines are commented
+          const nonEmpties = lines.filter(l => l.trim().length > 0);
+          const allCommented = nonEmpties.length > 0 && nonEmpties.every(l => /^\s*#/.test(l));
+
+          let transformed;
+          if (allCommented) {
+            // Uncomment: strip leading '#' and optional single space
+            transformed = lines.map(l => l.replace(/^(\s*)#\s?/, '$1'));
+          } else {
+            // Comment: prepend '# ' (preserving empty lines in multiline)
+            transformed = lines.map(l => {
+              if (l.trim().length === 0 && lines.length > 1) return l;
+              return l.replace(/^(\s*)(.*)$/, '$1# $2');
+            });
+          }
+
+          const newBlock = transformed.join('\n');
+          textarea.setRangeText(newBlock, lineStart, lineEnd, 'select');
+          textarea.dispatchEvent(new Event('input', { bubbles: true }));
+          return;
+        }
+
+        // 2. Tab / Shift+Tab Indentation
+        if (e.key === 'Tab') {
+          e.preventDefault();
+          const val = textarea.value;
+          const selStart = textarea.selectionStart;
+          const selEnd = textarea.selectionEnd;
+
+          if (!e.shiftKey && selStart === selEnd) {
+            textarea.setRangeText('  ', selStart, selEnd, 'end');
+            textarea.dispatchEvent(new Event('input', { bubbles: true }));
+          } else {
+            const lineStart = val.lastIndexOf('\n', selStart - 1) + 1;
+            let lineEnd = val.indexOf('\n', selEnd);
+            if (lineEnd === -1) lineEnd = val.length;
+            if (selEnd > selStart && val[selEnd - 1] === '\n') {
+              lineEnd = selEnd - 1;
+            }
+
+            const lines = val.substring(lineStart, lineEnd).split('\n');
+            const transformed = e.shiftKey
+              ? lines.map(l => l.replace(/^ {1,2}/, ''))
+              : lines.map(l => '  ' + l);
+
+            const newBlock = transformed.join('\n');
+            textarea.setRangeText(newBlock, lineStart, lineEnd, 'select');
+            textarea.dispatchEvent(new Event('input', { bubbles: true }));
+          }
+        }
+      });
+    }
+
     function openConfigModal() {
       const m = document.getElementById('config-modal');
       if (!m) return;
+      initEditorKeybindings();
       const tokenInput = document.getElementById('config-auth-token');
       if (tokenInput) {
         tokenInput.value = getAdminToken();
@@ -1971,7 +2056,8 @@
         <div>
           Store: <strong id="config-descriptor" style="color: var(--accent-cyan); font-family: monospace;">--</strong>
         </div>
-        <div style="display: flex; gap: 16px;">
+        <div style="display: flex; gap: 16px; align-items: center;">
+          <span style="color: #64748b; font-size: 11px;">Shortcuts: <kbd style="background:#21262d; padding:1px 5px; border-radius:3px; border:1px solid #30363d;">Cmd+/</kbd> Comment &bull; <kbd style="background:#21262d; padding:1px 5px; border-radius:3px; border:1px solid #30363d;">Tab</kbd> Indent</span>
           <div>Revision: <strong id="config-version" style="color: var(--primary);">#1</strong></div>
           <div>SHA: <strong id="config-hash" style="color: #c084fc; font-family: monospace;">--</strong></div>
         </div>
@@ -2168,7 +2254,8 @@
           <div style="display: flex; justify-content: space-between; margin-bottom: 9px;"><span style="color: var(--text-bright);">Open Config Editor</span> <kbd>c</kbd></div>
           <div style="display: flex; justify-content: space-between; margin-bottom: 9px;"><span style="color: var(--text-bright);">Refresh All Data</span> <kbd>r</kbd></div>
           <div style="display: flex; justify-content: space-between; margin-bottom: 9px;"><span style="color: var(--text-bright);">Play / Pause Polling</span> <span><kbd>p</kbd> or <kbd>Space</kbd></span></div>
-          <div style="display: flex; justify-content: space-between; margin-bottom: 9px;"><span style="color: var(--text-bright);">Clear Traffic Log</span> <kbd>Shift+C</kbd></div>
+          <div style="display: flex; justify-content: space-between; margin-bottom: 9px;"><span style="color: var(--text-bright);">Toggle Comment</span> <span><kbd>Cmd+/</kbd> or <kbd>Ctrl+/</kbd></span></div>
+          <div style="display: flex; justify-content: space-between; margin-bottom: 9px;"><span style="color: var(--text-bright);">Indent / Outdent</span> <span><kbd>Tab</kbd> / <kbd>Shift+Tab</kbd></span></div>
           <div style="display: flex; justify-content: space-between; margin-bottom: 9px;"><span style="color: var(--text-bright);">Close Modals / Blur</span> <kbd>Esc</kbd></div>
           <div style="display: flex; justify-content: space-between;"><span style="color: var(--text-bright);">Show Help Dialog</span> <kbd>?</kbd></div>
         </div>
