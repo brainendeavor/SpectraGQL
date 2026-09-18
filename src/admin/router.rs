@@ -4,6 +4,7 @@ use matchit::Router;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AdminRoute {
     Dashboard,
+    Favicon,
     Status,
     Routes,
     Schema,
@@ -44,6 +45,14 @@ impl AdminRouter {
             let _ = get_router.insert("/admin", AdminRoute::Dashboard);
             let _ = get_router.insert("/admin/", AdminRoute::Dashboard);
             let _ = get_router.insert("/admin/index.html", AdminRoute::Dashboard);
+        }
+
+        // Favicon routes
+        let _ = get_router.insert(format!("{}/favicon.svg", clean_prefix), AdminRoute::Favicon);
+        let _ = get_router.insert(format!("{}/favicon.ico", clean_prefix), AdminRoute::Favicon);
+        if clean_prefix != "/admin" {
+            let _ = get_router.insert("/admin/favicon.svg", AdminRoute::Favicon);
+            let _ = get_router.insert("/admin/favicon.ico", AdminRoute::Favicon);
         }
 
         // GET endpoints
@@ -244,6 +253,16 @@ mod tests {
         assert_eq!(route, AdminRoute::WorkerLogs);
         assert_eq!(params.get("id").map(|s| s.as_str()), Some("order-worker-42"));
 
+        // Favicon
+        assert_eq!(
+            router.match_route(&Method::GET, "/admin/favicon.svg").map(|(r, _)| r),
+            Some(AdminRoute::Favicon)
+        );
+        assert_eq!(
+            router.match_route(&Method::GET, "/admin/favicon.ico").map(|(r, _)| r),
+            Some(AdminRoute::Favicon)
+        );
+
         // Unknown
         assert_eq!(router.match_route(&Method::GET, "/admin/api/unknown"), None);
     }
@@ -255,6 +274,14 @@ mod tests {
         assert_eq!(
             router.match_route(&Method::GET, "/spectra-admin").map(|(r, _)| r),
             Some(AdminRoute::Dashboard)
+        );
+        assert_eq!(
+            router.match_route(&Method::GET, "/spectra-admin/favicon.svg").map(|(r, _)| r),
+            Some(AdminRoute::Favicon)
+        );
+        assert_eq!(
+            router.match_route(&Method::GET, "/spectra-admin/favicon.ico").map(|(r, _)| r),
+            Some(AdminRoute::Favicon)
         );
         assert_eq!(
             router.match_route(&Method::GET, "/spectra-admin/api/v1/status").map(|(r, _)| r),

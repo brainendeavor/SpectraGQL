@@ -28,6 +28,7 @@ use crate::idempotency::IdempotencyEngine;
 use crate::subscriptions::SubscriptionHub;
 
 pub const ADMIN_HTML: &str = include_str!("assets/admin.html");
+pub const FAVICON_SVG: &str = include_str!("assets/favicon.svg");
 
 /// Checks if a client IP address matches any pattern in the allowlist.
 /// Supports both exact IP matches ("127.0.0.1", "::1") and CIDR ranges ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16").
@@ -205,6 +206,7 @@ impl AdminEngine {
         if let Some((route, params)) = self.router.match_route(&method, &path) {
             match route {
                 AdminRoute::Dashboard => self.handle_dashboard(session).await,
+                AdminRoute::Favicon => self.handle_favicon(session).await,
                 AdminRoute::Status => self.handle_status(session).await,
                 AdminRoute::Routes => self.handle_routes(session).await,
                 AdminRoute::Schema => self.handle_schema(session).await,
@@ -244,6 +246,26 @@ impl AdminEngine {
             "message": format!("Access denied for IP '{}'. Configure allowed_ips in spectra.toml to grant access.", client_ip)
         });
         self.respond_json(session, 403, &body).await
+    }
+
+    async fn handle_favicon(&self, session: &mut Session) -> pingora::Result<bool> {
+        let svg = FAVICON_SVG;
+        let mut header = ResponseHeader::build(200, None)?;
+        let _ = header.insert_header("content-type", "image/svg+xml");
+        let _ = header.insert_header("content-length", svg.len().to_string());
+        let _ = header.insert_header("cache-control", "public, max-age=86400, immutable");
+        if let Err(e) = session.write_response_header(Box::new(header), false).await {
+            log::debug!("Client disconnected before favicon header write: {}", e);
+            return Ok(true);
+        }
+        if let Err(e) = session
+            .write_response_body(Some(bytes::Bytes::from_static(svg.as_bytes())), true)
+            .await
+        {
+            log::debug!("Client disconnected before favicon body write: {}", e);
+            return Ok(true);
+        }
+        Ok(true)
     }
 
     async fn handle_dashboard(&self, session: &mut Session) -> pingora::Result<bool> {

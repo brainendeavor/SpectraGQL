@@ -4,12 +4,17 @@ use pingora::proxy::Session;
 /// without forwarding to upstream services.
 pub struct FaviconFilter;
 
-static FAVICON_SVG: &str = include_str!("../../../assets/favicon.svg");
+pub const FAVICON_SVG: &str = crate::admin::FAVICON_SVG;
 
 impl FaviconFilter {
     #[inline]
     pub fn is_favicon_request(path: &str) -> bool {
-        path == "/favicon.ico" || path == "/favicon.svg"
+        path == "/favicon.ico"
+            || path == "/favicon.svg"
+            || path == "/admin/favicon.ico"
+            || path == "/admin/favicon.svg"
+            || path == "/apple-touch-icon.png"
+            || path == "/apple-touch-icon-precomposed.png"
     }
 
     pub async fn handle(session: &mut Session) -> pingora::Result<bool> {
@@ -45,6 +50,10 @@ mod tests {
     fn test_is_favicon_request() {
         assert!(FaviconFilter::is_favicon_request("/favicon.ico"));
         assert!(FaviconFilter::is_favicon_request("/favicon.svg"));
+        assert!(FaviconFilter::is_favicon_request("/admin/favicon.ico"));
+        assert!(FaviconFilter::is_favicon_request("/admin/favicon.svg"));
+        assert!(FaviconFilter::is_favicon_request("/apple-touch-icon.png"));
+        assert!(FaviconFilter::is_favicon_request("/apple-touch-icon-precomposed.png"));
         assert!(!FaviconFilter::is_favicon_request("/favicon.png"));
         assert!(!FaviconFilter::is_favicon_request("/graphql"));
         assert!(!FaviconFilter::is_favicon_request("/"));
