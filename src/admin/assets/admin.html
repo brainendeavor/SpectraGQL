@@ -128,6 +128,9 @@
         </div>
       </div>
       <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
+        <button class="btn" onclick="openConfigModal()" style="font-size: 12px; padding: 4px 10px; display: flex; align-items: center; gap: 6px;" title="Gateway Configuration (c)">
+          ⚙️ Config <kbd>c</kbd>
+        </button>
         <button class="btn" onclick="openHelpModal()" style="font-size: 12px; padding: 4px 10px; display: flex; align-items: center; gap: 6px;" title="Appliance Help &amp; Shortcuts (?)">
           Help <kbd>?</kbd>
         </button>
@@ -1139,6 +1142,176 @@
       }
     }
 
+    async function loadConfigData() {
+      const banner = document.getElementById('config-alert-banner');
+      if (banner) banner.style.display = 'none';
+      const data = await fetchJSON('/admin/api/v1/config');
+      if (!data) return;
+
+      const badge = document.getElementById('config-backend-badge');
+      if (badge) {
+        badge.innerText = data.backend.toUpperCase();
+        if (data.backend === 'postgres') {
+          badge.className = 'pill pill-strangled';
+        } else if (data.backend === 'redis') {
+          badge.className = 'pill pill-danger';
+        } else if (data.backend === 'file') {
+          badge.className = 'pill pill-mode-b';
+        } else {
+          badge.className = 'pill pill-monolith';
+        }
+      }
+
+      const descEl = document.getElementById('config-descriptor');
+      if (descEl) descEl.innerText = data.descriptor;
+
+      const verEl = document.getElementById('config-version');
+      if (verEl) verEl.innerText = '#' + data.version;
+
+      const hashEl = document.getElementById('config-hash');
+      if (hashEl) hashEl.innerText = data.hash ? data.hash.substring(0, 12) + '...' : '--';
+
+      const textarea = document.getElementById('config-editor-textarea');
+      if (textarea) textarea.value = data.content;
+    }
+
+    function openConfigModal() {
+      const m = document.getElementById('config-modal');
+      if (!m) return;
+      m.style.display = 'flex';
+      loadConfigData();
+    }
+
+    function closeConfigModal() {
+      const m = document.getElementById('config-modal');
+      if (m) m.style.display = 'none';
+    }
+
+    function toggleConfigModal() {
+      const m = document.getElementById('config-modal');
+      if (!m) return;
+      if (m.style.display === 'flex') closeConfigModal();
+      else openConfigModal();
+    }
+
+    function showConfigBanner(isSuccess, message, details = '') {
+      const banner = document.getElementById('config-alert-banner');
+      if (!banner) return;
+      banner.style.display = 'block';
+      if (isSuccess) {
+        banner.style.background = 'rgba(63, 185, 80, 0.15)';
+        banner.style.borderColor = 'var(--success)';
+        banner.style.color = '#3fb950';
+      } else {
+        banner.style.background = 'rgba(248, 81, 73, 0.15)';
+        banner.style.borderColor = 'var(--danger)';
+        banner.style.color = '#f85149';
+      }
+      banner.innerHTML = `<div><strong>${isSuccess ? '✅ Success' : '❌ Validation Error'}:</strong> ${escapeHtml(message)}</div>` +
+        (details ? `<div style="margin-top: 4px; font-size: 11.5px; opacity: 0.9;">${details}</div>` : '');
+    }
+
+    async function validateConfigCandidate() {
+      const textarea = document.getElementById('config-editor-textarea');
+      if (!textarea) return;
+      const content = textarea.value;
+      try {
+        const res = await fetch('/admin/api/v1/config/validate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content })
+        });
+        const data = await res.json();
+        if (data.valid) {
+          let summaryDetails = '';
+          if (data.summary) {
+            summaryDetails = `Apps: ${data.summary.apps_count} | Routes: ${data.summary.routes_count} | Upstreams: ${data.summary.named_upstreams_count} | Interceptors: ${data.summary.interceptors_count} | Dispatch: ${data.summary.broker_method} (${data.summary.broker_addr})`;
+          }
+          if (data.warnings && data.warnings.length > 0) {
+            summaryDetails += `<br><span style="color: var(--warning);">⚠️ ${escapeHtml(data.warnings.join(', '))}</span>`;
+          }
+          showConfigBanner(true, 'Configuration syntax & upstreams validated successfully.', summaryDetails);
+        } else {
+          showConfigBanner(false, 'Configuration failed validation.', data.errors ? data.errors.join('<br>') : 'Syntax error');
+        }
+      } catch (e) {
+        showConfigBanner(false, 'Validation request failed: ' + e.message);
+      }
+    }
+
+    async function saveAndHotReloadConfig() {
+      const textarea = document.getElementById('config-editor-textarea');
+      if (!textarea) return;
+      const content = textarea.value;
+      const token = document.getElementById('config-auth-token')?.value?.trim();
+
+      const headers = { 'Content-Type': 'application/json' };
+      if (token) {
+        headers['Authorization'] = 'Bearer ' + token;
+        headers['x-spectra-admin-token'] = token;
+      }
+
+      try {
+        const res = await fetch('/admin/api/v1/config', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ content, reload: true })
+        });
+        const data = await res.json();
+        if (res.ok && data.success) {
+          showConfigBanner(true, `Revision #${data.version} saved and hot-reloaded into gateway runtime!`, `SHA: ${data.hash}`);
+          const verEl = document.getElementById('config-version');
+          if (verEl) verEl.innerText = '#' + data.version;
+          const hashEl = document.getElementById('config-hash');
+          if (hashEl) hashEl.innerText = data.hash ? data.hash.substring(0, 12) + '...' : '--';
+          loadStatus();
+          loadRoutes();
+          loadSchema();
+        } else {
+          showConfigBanner(false, data.message || data.error || 'Failed to save configuration');
+        }
+      } catch (e) {
+        showConfigBanner(false, 'Save request failed: ' + e.message);
+      }
+    }
+
+    async function reloadConfigFromStore() {
+      const token = document.getElementById('config-auth-token')?.value?.trim();
+      const headers = {};
+      if (token) {
+        headers['Authorization'] = 'Bearer ' + token;
+        headers['x-spectra-admin-token'] = token;
+      }
+      try {
+        const res = await fetch('/admin/api/v1/config/reload', {
+          method: 'POST',
+          headers
+        });
+        const data = await res.json();
+        if (res.ok && data.success) {
+          showConfigBanner(true, `Hot-reloaded revision #${data.version} from persistent store!`, `SHA: ${data.hash}`);
+          loadConfigData();
+          loadStatus();
+          loadRoutes();
+          loadSchema();
+        } else {
+          showConfigBanner(false, data.message || data.error || 'Reload failed');
+        }
+      } catch (e) {
+        showConfigBanner(false, 'Reload request failed: ' + e.message);
+      }
+    }
+
+    function copyConfigToClipboard() {
+      const textarea = document.getElementById('config-editor-textarea');
+      if (!textarea) return;
+      navigator.clipboard.writeText(textarea.value).then(() => {
+        showConfigBanner(true, 'Configuration copied to clipboard.');
+      }).catch(err => {
+        showConfigBanner(false, 'Failed to copy to clipboard: ' + err.message);
+      });
+    }
+
     function openHelpModal(tab) {
       const m = document.getElementById('help-modal');
       if (!m) return;
@@ -1191,8 +1364,13 @@
       );
 
       if (e.key === 'Escape') {
+        const configModal = document.getElementById('config-modal');
         const helpModal = document.getElementById('help-modal');
         const workerLogsModal = document.getElementById('worker-logs-modal');
+        if (configModal && configModal.style.display === 'flex') {
+          closeConfigModal();
+          return;
+        }
         if (helpModal && helpModal.style.display === 'flex') {
           closeHelpModal();
           return;
@@ -1224,6 +1402,9 @@
       } else if (e.key === '?') {
         e.preventDefault();
         toggleHelpModal();
+      } else if (e.key === 'c') {
+        e.preventDefault();
+        toggleConfigModal();
       } else if (e.key === 'r') {
         e.preventDefault();
         refreshAll();
@@ -1372,6 +1553,54 @@
     </div>
   </div>
 
+  <!-- Configuration Editor Modal -->
+  <div id="config-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.8); z-index:9999; justify-content:center; align-items:center; backdrop-filter:blur(3px);" onclick="if(event.target===this) closeConfigModal()">
+    <div style="width: 920px; height: 740px; max-width: 95vw; max-height: 92vh; display: flex; flex-direction: column; background: #0d1117; border: 1px solid #30363d; border-radius: 10px; box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.8); overflow: hidden; box-sizing: border-box;">
+      <!-- Header -->
+      <div style="padding: 14px 20px; border-bottom: 1px solid #30363d; display: flex; justify-content: space-between; align-items: center; background: #161b22; flex-shrink: 0;">
+        <div style="display: flex; align-items: center; gap: 10px;">
+          <span style="font-size: 18px;">⚙️</span>
+          <h3 style="margin: 0; font-size: 16px; color: var(--text-bright);">Gateway Configuration &amp; Control Plane</h3>
+          <span id="config-backend-badge" class="pill pill-success" style="font-size: 11px;">MEMORY</span>
+        </div>
+        <button class="btn btn-sm" onclick="closeConfigModal()" style="background:#21262d; color:#c9d1d9;">✕</button>
+      </div>
+
+      <!-- Metadata / Status Banner -->
+      <div style="padding: 8px 20px; background: #161b22; border-bottom: 1px solid #30363d; display: flex; justify-content: space-between; align-items: center; font-size: 12px; color: var(--text-muted); flex-wrap: wrap; gap: 10px;">
+        <div>
+          Store: <strong id="config-descriptor" style="color: var(--accent-cyan); font-family: monospace;">--</strong>
+        </div>
+        <div style="display: flex; gap: 16px;">
+          <div>Revision: <strong id="config-version" style="color: var(--primary);">#1</strong></div>
+          <div>SHA: <strong id="config-hash" style="color: #c084fc; font-family: monospace;">--</strong></div>
+        </div>
+      </div>
+
+      <!-- Diagnostics / Validation Alert Banner -->
+      <div id="config-alert-banner" style="display: none; padding: 10px 20px; font-size: 12.5px; border-bottom: 1px solid #30363d;"></div>
+
+      <!-- TOML Editor Textarea -->
+      <div style="flex: 1; display: flex; flex-direction: column; padding: 14px 20px; background: #050911; min-height: 0;">
+        <textarea id="config-editor-textarea" spellcheck="false" style="width: 100%; height: 100%; resize: none; background: transparent; color: #7ee787; border: none; outline: none; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12.5px; line-height: 1.5; white-space: pre; tab-size: 2;" placeholder="# Loading configuration TOML..."></textarea>
+      </div>
+
+      <!-- Auth Token Input & Action Toolbar -->
+      <div style="padding: 12px 20px; background: #161b22; border-top: 1px solid #30363d; display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap;">
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <label for="config-auth-token" style="font-size: 12px; color: var(--text-muted); font-weight: 500;">Admin Token:</label>
+          <input type="password" id="config-auth-token" class="filter-input" placeholder="Bearer / Admin Token" style="padding: 4px 8px; font-size: 12px; width: 170px;" title="Required if SPECTRA_ADMIN_TOKEN or deploy_token is set">
+        </div>
+        <div style="display: flex; gap: 8px; align-items: center;">
+          <button class="btn btn-sm" onclick="copyConfigToClipboard()">📋 Copy</button>
+          <button class="btn btn-sm" onclick="reloadConfigFromStore()">🔄 Reload from Store</button>
+          <button class="btn btn-sm" onclick="validateConfigCandidate()">🔍 Validate</button>
+          <button class="btn btn-sm btn-primary" onclick="saveAndHotReloadConfig()">💾 Save &amp; Hot Reload</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- Help & Shortcuts Modal -->
   <div id="help-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.75); z-index:9999; justify-content:center; align-items:center; backdrop-filter:blur(3px);" onclick="if(event.target===this) closeHelpModal()">
     <div style="width: 720px; height: 560px; max-width: 94vw; max-height: 88vh; display: flex; flex-direction: column; background: #0f172a; border: 1px solid #334155; border-radius: 10px; box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.7); overflow: hidden; box-sizing: border-box;">
@@ -1451,6 +1680,7 @@
         </div>
         <div>
           <div style="font-weight: 700; color: var(--text-muted); font-size: 11px; text-transform: uppercase; margin-bottom: 10px;">Actions &amp; Controls</div>
+          <div style="display: flex; justify-content: space-between; margin-bottom: 9px;"><span style="color: var(--text-bright);">Open Config Editor</span> <kbd>c</kbd></div>
           <div style="display: flex; justify-content: space-between; margin-bottom: 9px;"><span style="color: var(--text-bright);">Refresh All Data</span> <kbd>r</kbd></div>
           <div style="display: flex; justify-content: space-between; margin-bottom: 9px;"><span style="color: var(--text-bright);">Play / Pause Polling</span> <span><kbd>p</kbd> or <kbd>Space</kbd></span></div>
           <div style="display: flex; justify-content: space-between; margin-bottom: 9px;"><span style="color: var(--text-bright);">Clear Traffic Log</span> <kbd>Shift+C</kbd></div>

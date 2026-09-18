@@ -17,12 +17,17 @@ pub enum AdminRoute {
     TelemetryReport,
     Workers,
     WorkerLogs,
+    ConfigGet,
+    ConfigValidate,
+    ConfigUpdate,
+    ConfigReload,
 }
 
 #[derive(Clone)]
 pub struct AdminRouter {
     get_router: Router<AdminRoute>,
     post_router: Router<AdminRoute>,
+    put_router: Router<AdminRoute>,
     path_prefix: String,
 }
 
@@ -36,6 +41,7 @@ impl AdminRouter {
 
         let mut get_router = Router::new();
         let mut post_router = Router::new();
+        let mut put_router = Router::new();
 
         // UI Dashboard
         let _ = get_router.insert(&clean_prefix, AdminRoute::Dashboard);
@@ -75,6 +81,8 @@ impl AdminRouter {
             ("/admin/api/workers", AdminRoute::Workers),
             ("/admin/api/v1/workers/{id}/logs", AdminRoute::WorkerLogs),
             ("/admin/api/workers/{id}/logs", AdminRoute::WorkerLogs),
+            ("/admin/api/v1/config", AdminRoute::ConfigGet),
+            ("/admin/api/config", AdminRoute::ConfigGet),
         ];
 
         for (pattern, route) in get_routes {
@@ -93,6 +101,12 @@ impl AdminRouter {
             ("/admin/api/traffic/clear", AdminRoute::TrafficClear),
             ("/admin/api/v1/telemetry/report", AdminRoute::TelemetryReport),
             ("/admin/api/telemetry/report", AdminRoute::TelemetryReport),
+            ("/admin/api/v1/config/validate", AdminRoute::ConfigValidate),
+            ("/admin/api/config/validate", AdminRoute::ConfigValidate),
+            ("/admin/api/v1/config/reload", AdminRoute::ConfigReload),
+            ("/admin/api/config/reload", AdminRoute::ConfigReload),
+            ("/admin/api/v1/config", AdminRoute::ConfigUpdate),
+            ("/admin/api/config", AdminRoute::ConfigUpdate),
         ];
 
         for (pattern, route) in post_routes {
@@ -103,9 +117,24 @@ impl AdminRouter {
             }
         }
 
+        // PUT endpoints
+        let put_routes = [
+            ("/admin/api/v1/config", AdminRoute::ConfigUpdate),
+            ("/admin/api/config", AdminRoute::ConfigUpdate),
+        ];
+
+        for (pattern, route) in put_routes {
+            let _ = put_router.insert(pattern, route);
+            if clean_prefix != "/admin" {
+                let custom_pattern = pattern.replacen("/admin", &clean_prefix, 1);
+                let _ = put_router.insert(custom_pattern, route);
+            }
+        }
+
         AdminRouter {
             get_router,
             post_router,
+            put_router,
             path_prefix: clean_prefix,
         }
     }
@@ -118,6 +147,7 @@ impl AdminRouter {
         let router = match *method {
             http::Method::GET => &self.get_router,
             http::Method::POST => &self.post_router,
+            http::Method::PUT => &self.put_router,
             _ => return None,
         };
 
@@ -261,6 +291,28 @@ mod tests {
         assert_eq!(
             router.match_route(&Method::GET, "/admin/favicon.ico").map(|(r, _)| r),
             Some(AdminRoute::Favicon)
+        );
+
+        // Config routes
+        assert_eq!(
+            router.match_route(&Method::GET, "/admin/api/v1/config").map(|(r, _)| r),
+            Some(AdminRoute::ConfigGet)
+        );
+        assert_eq!(
+            router.match_route(&Method::POST, "/admin/api/v1/config/validate").map(|(r, _)| r),
+            Some(AdminRoute::ConfigValidate)
+        );
+        assert_eq!(
+            router.match_route(&Method::POST, "/admin/api/v1/config").map(|(r, _)| r),
+            Some(AdminRoute::ConfigUpdate)
+        );
+        assert_eq!(
+            router.match_route(&Method::PUT, "/admin/api/v1/config").map(|(r, _)| r),
+            Some(AdminRoute::ConfigUpdate)
+        );
+        assert_eq!(
+            router.match_route(&Method::POST, "/admin/api/v1/config/reload").map(|(r, _)| r),
+            Some(AdminRoute::ConfigReload)
         );
 
         // Unknown

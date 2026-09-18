@@ -19,12 +19,16 @@ use pingora::http::ResponseHeader;
 use pingora::proxy::Session;
 
 use crate::admin::api::{
+    AdminConfigReloadResponse, AdminConfigResponse, AdminConfigSummary, AdminConfigUpdateRequest,
+    AdminConfigUpdateResponse, AdminConfigValidateRequest, AdminConfigValidateResponse,
     AdminIdempotencyResponse, AdminNamedUpstream, AdminRouteEntry, AdminRoutesResponse,
     AdminStatusResponse, AdminSubscriptionsResponse,
 };
 use crate::admin::schema_inspector::SchemaInspector;
 use crate::core::config::{SpectraAdminConfig, SpectraConfig, SpectraRouteConfig};
+use crate::gateway::DynamicGatewayState;
 use crate::idempotency::IdempotencyEngine;
+use crate::interceptors::request::constant_time_eq;
 use crate::subscriptions::SubscriptionHub;
 
 pub const ADMIN_HTML: &str = include_str!("assets/admin.html");
@@ -137,6 +141,8 @@ pub struct AdminEngine {
     pub worker_registry: Arc<WorkerRegistry>,
     pub apps: Vec<crate::admin::api::SpectraAppSummary>,
     pub router: AdminRouter,
+    pub dynamic_state: Option<Arc<arc_swap::ArcSwap<crate::gateway::DynamicGatewayState>>>,
+    pub config_store: Option<Arc<dyn crate::core::ConfigStore>>,
 }
 
 impl AdminEngine {
@@ -184,7 +190,25 @@ impl AdminEngine {
             worker_registry,
             apps,
             router,
+            dynamic_state: None,
+            config_store: None,
         }
+    }
+
+    pub fn with_dynamic_state(
+        mut self,
+        dynamic_state: Arc<arc_swap::ArcSwap<crate::gateway::DynamicGatewayState>>,
+    ) -> Self {
+        self.dynamic_state = Some(dynamic_state);
+        self
+    }
+
+    pub fn with_config_store(
+        mut self,
+        config_store: Arc<dyn crate::core::ConfigStore>,
+    ) -> Self {
+        self.config_store = Some(config_store);
+        self
     }
 
     /// Handles an incoming administrative request directly in Pingora request_filter.
@@ -226,6 +250,10 @@ impl AdminEngine {
                     let worker_id = params.get("id").map(|s| s.as_str()).unwrap_or("");
                     self.handle_worker_logs(session, worker_id).await
                 }
+                AdminRoute::ConfigGet => self.handle_config_get(session).await,
+                AdminRoute::ConfigValidate => self.handle_config_validate(session).await,
+                AdminRoute::ConfigUpdate => self.handle_config_update(session).await,
+                AdminRoute::ConfigReload => self.handle_config_reload(session).await,
             }
         } else {
             self.handle_not_found(session, &path).await
@@ -295,37 +323,77 @@ impl AdminEngine {
     }
 
     async fn handle_status(&self, session: &mut Session) -> pingora::Result<bool> {
-        let async_count = self
-            .routes
-            .values()
-            .filter(|r| r.mode.is_async_command_receipt())
-            .count();
+        let (async_count, mode_a_enabled, mode_a_dispatch_policy, mode_a_timeout_ms, apps) =
+            if let Some(ds) = &self.dynamic_state {
+                let state = ds.load();
+                let count = state
+                    .routes
+                    .values()
+                    .filter(|r| r.mode.is_async_command_receipt())
+                    .count();
+                let app_summaries = state
+                    .apps
+                    .iter()
+                    .map(|a| crate::admin::api::SpectraAppSummary {
+                        id: a.id.clone(),
+                        name: a.name.clone(),
+                        domains: a.domains.clone(),
+                        upstream: a.upstream.clone(),
+                    })
+                    .collect();
+                (
+                    count,
+                    state.mode_a.enabled,
+                    state.mode_a.dispatch_policy.as_str().to_string(),
+                    state.mode_a.timeout_ms,
+                    app_summaries,
+                )
+            } else {
+                let count = self
+                    .routes
+                    .values()
+                    .filter(|r| r.mode.is_async_command_receipt())
+                    .count();
+                (
+                    count,
+                    self.mode_a_enabled,
+                    self.mode_a_dispatch_policy.clone(),
+                    self.mode_a_timeout_ms,
+                    self.apps.clone(),
+                )
+            };
 
         let status_resp = AdminStatusResponse {
             version: env!("CARGO_PKG_VERSION").to_string(),
             uptime_seconds: self.start_time.elapsed().as_secs(),
-            sync_enabled: self.mode_a_enabled,
-            sync_dispatch_policy: self.mode_a_dispatch_policy.clone(),
-            sync_timeout_ms: self.mode_a_timeout_ms,
+            sync_enabled: mode_a_enabled,
+            sync_dispatch_policy: mode_a_dispatch_policy.clone(),
+            sync_timeout_ms: mode_a_timeout_ms,
             async_routes_count: async_count,
-            mode_a_enabled: self.mode_a_enabled,
-            mode_a_dispatch_policy: self.mode_a_dispatch_policy.clone(),
-            mode_a_timeout_ms: self.mode_a_timeout_ms,
+            mode_a_enabled,
+            mode_a_dispatch_policy,
+            mode_a_timeout_ms,
             mode_b_routes_count: async_count,
             broker_method: self.broker_method.clone(),
             broker_addr: self.broker_addr.clone(),
             broker_status: "online".to_string(),
-            apps: self.apps.clone(),
+            apps,
         };
         self.respond_json(session, 200, &status_resp).await
     }
 
     async fn handle_routes(&self, session: &mut Session) -> pingora::Result<bool> {
+        let (routes, named_upstreams, mode_a_dispatch_policy) = if let Some(ds) = &self.dynamic_state {
+            let state = ds.load();
+            (state.routes.clone(), state.named_upstreams.clone(), state.mode_a.dispatch_policy.as_str().to_string())
+        } else {
+            (self.routes.clone(), self.named_upstreams.clone(), self.mode_a_dispatch_policy.clone())
+        };
+
         let mut route_entries = Vec::new();
-        for (name, r) in self.routes.iter() {
+        for (name, r) in routes.iter() {
             let target_name = r.upstream.clone().unwrap_or_else(|| "default".to_string());
-            let target_addr = self
-                .named_upstreams
+            let target_addr = named_upstreams
                 .get(&target_name)
                 .map(|a| a.to_string())
                 .unwrap_or_else(|| self.default_upstream_addr.clone());
@@ -338,7 +406,7 @@ impl AdminEngine {
                     if let Some(policy) = r.dispatch_policy {
                         (policy.as_str().to_string(), true)
                     } else {
-                        (self.mode_a_dispatch_policy.clone(), false)
+                        (mode_a_dispatch_policy.clone(), false)
                     }
                 }
             };
@@ -359,7 +427,7 @@ impl AdminEngine {
         route_entries.sort_by(|a, b| a.name.cmp(&b.name));
 
         let mut named_upstreams_list = Vec::new();
-        for (name, addr) in self.named_upstreams.iter() {
+        for (name, addr) in named_upstreams.iter() {
             named_upstreams_list.push(AdminNamedUpstream {
                 name: name.clone(),
                 addr: addr.to_string(),
@@ -594,6 +662,347 @@ impl AdminEngine {
         self.handle_not_found(session, &format!("/admin/api/v1/workers/{}/logs", worker_id)).await
     }
 
+    fn is_write_authorized(&self, session: &Session) -> bool {
+        let expected_token = std::env::var("SPECTRA_ADMIN_TOKEN")
+            .ok()
+            .or_else(|| std::env::var("SPECTRA_DEPLOY_TOKEN").ok())
+            .or_else(|| std::env::var("SPECTRAGQL_DEPLOY_TOKEN").ok())
+            .or_else(|| self.config.deploy_token.clone());
+
+        let expected = match expected_token {
+            Some(t) if !t.trim().is_empty() => t,
+            _ => {
+                log::warn!("Admin write operation authorized without configured token (set SPECTRA_ADMIN_TOKEN for authenticated control plane)");
+                return true;
+            }
+        };
+
+        let req_header = session.req_header();
+        let auth_val = req_header
+            .headers
+            .get(http::header::AUTHORIZATION)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|h| h.strip_prefix("Bearer ").or_else(|| h.strip_prefix("bearer ")))
+            .or_else(|| {
+                req_header
+                    .headers
+                    .get("x-spectra-admin-token")
+                    .and_then(|v| v.to_str().ok())
+            })
+            .or_else(|| {
+                req_header
+                    .headers
+                    .get("x-spectra-deploy-token")
+                    .and_then(|v| v.to_str().ok())
+            })
+            .or_else(|| {
+                req_header
+                    .headers
+                    .get("x-spectra-deploy-key")
+                    .and_then(|v| v.to_str().ok())
+            });
+
+        match auth_val {
+            Some(provided) => constant_time_eq(provided.trim().as_bytes(), expected.trim().as_bytes()),
+            None => false,
+        }
+    }
+
+    async fn handle_config_get(&self, session: &mut Session) -> pingora::Result<bool> {
+        let backend = self
+            .config_store
+            .as_ref()
+            .map(|cs| cs.backend_name().to_string())
+            .unwrap_or_else(|| "memory".to_string());
+        let descriptor = self
+            .config_store
+            .as_ref()
+            .map(|cs| cs.descriptor())
+            .unwrap_or_else(|| "in-memory (ephemeral)".to_string());
+
+        let (version, updated_at_epoch_ms, hash, content) = if let Some(ds) = &self.dynamic_state {
+            let state = ds.load();
+            (
+                state.version,
+                state.updated_at_epoch_ms,
+                state.config_hash.clone(),
+                state.raw_config.as_ref().clone(),
+            )
+        } else {
+            let raw = if let Some(store) = &self.config_store {
+                store.load_config().await.ok().flatten().unwrap_or_default()
+            } else {
+                String::new()
+            };
+            (1, 0, String::new(), raw)
+        };
+
+        let resp = AdminConfigResponse {
+            backend,
+            descriptor,
+            version,
+            updated_at_epoch_ms,
+            hash,
+            content,
+        };
+        self.respond_json(session, 200, &resp).await
+    }
+
+    async fn handle_config_validate(&self, session: &mut Session) -> pingora::Result<bool> {
+        let mut body_bytes = Vec::new();
+        while let Some(chunk) = session.read_request_body().await? {
+            body_bytes.extend_from_slice(&chunk);
+            if body_bytes.len() > 2 * 1024 * 1024 {
+                break;
+            }
+        }
+
+        let content = match serde_json::from_slice::<AdminConfigValidateRequest>(&body_bytes) {
+            Ok(req) => req.content,
+            Err(_) => match String::from_utf8(body_bytes) {
+                Ok(s) => s,
+                Err(_) => {
+                    let resp = AdminConfigValidateResponse {
+                        valid: false,
+                        errors: vec!["Request body is neither valid JSON nor valid UTF-8".to_string()],
+                        warnings: vec![],
+                        summary: None,
+                    };
+                    return self.respond_json(session, 400, &resp).await;
+                }
+            },
+        };
+
+        match SpectraConfig::from_toml_str(&content) {
+            Ok(cfg) => {
+                let mut warnings = Vec::new();
+
+                if let Err(e) = cfg.resolve_all_upstreams() {
+                    warnings.push(format!("Upstream resolution warning: {}", e));
+                }
+
+                for (name, r) in &cfg.gql.routes {
+                    if !r.enabled {
+                        warnings.push(format!("Route '{}' ({}) is disabled", name, r.operation));
+                    }
+                }
+
+                let summary = AdminConfigSummary {
+                    apps_count: cfg.apps.len(),
+                    routes_count: cfg.gql.routes.len(),
+                    named_upstreams_count: cfg.upstreams.len(),
+                    interceptors_count: cfg.interceptors.len(),
+                    broker_method: cfg.gql_dispatch().method.clone(),
+                    broker_addr: cfg.gql_dispatch().addr.clone(),
+                };
+
+                let resp = AdminConfigValidateResponse {
+                    valid: true,
+                    errors: vec![],
+                    warnings,
+                    summary: Some(summary),
+                };
+                self.respond_json(session, 200, &resp).await
+            }
+            Err(e) => {
+                let resp = AdminConfigValidateResponse {
+                    valid: false,
+                    errors: vec![e.to_string()],
+                    warnings: vec![],
+                    summary: None,
+                };
+                self.respond_json(session, 200, &resp).await
+            }
+        }
+    }
+
+    async fn handle_config_update(&self, session: &mut Session) -> pingora::Result<bool> {
+        if !self.is_write_authorized(session) {
+            let body = serde_json::json!({
+                "error": "Unauthorized",
+                "message": "Missing or invalid admin authorization token (set SPECTRA_ADMIN_TOKEN or provide valid Authorization: Bearer <token>)"
+            });
+            return self.respond_json(session, 401, &body).await;
+        }
+
+        let mut body_bytes = Vec::new();
+        while let Some(chunk) = session.read_request_body().await? {
+            body_bytes.extend_from_slice(&chunk);
+            if body_bytes.len() > 2 * 1024 * 1024 {
+                break;
+            }
+        }
+
+        let (content, reload) = match serde_json::from_slice::<AdminConfigUpdateRequest>(&body_bytes) {
+            Ok(req) => (req.content, req.reload),
+            Err(_) => match String::from_utf8(body_bytes) {
+                Ok(s) => (s, true),
+                Err(_) => {
+                    let body = serde_json::json!({
+                        "error": "Bad Request",
+                        "message": "Request body is neither valid JSON nor valid UTF-8"
+                    });
+                    return self.respond_json(session, 400, &body).await;
+                }
+            },
+        };
+
+        let parsed_cfg = match SpectraConfig::from_toml_str(&content) {
+            Ok(cfg) => cfg,
+            Err(e) => {
+                let body = serde_json::json!({
+                    "error": "Invalid Configuration",
+                    "message": format!("Configuration parsing error: {}", e)
+                });
+                return self.respond_json(session, 400, &body).await;
+            }
+        };
+
+        if let Some(store) = &self.config_store {
+            if let Err(e) = store.save_config(&content).await {
+                log::error!("Failed to persist configuration to store: {}", e);
+                let body = serde_json::json!({
+                    "error": "Storage Error",
+                    "message": format!("Failed to persist configuration to store: {}", e)
+                });
+                return self.respond_json(session, 500, &body).await;
+            }
+        }
+
+        let (version, hash, updated_at) = if reload {
+            if let Some(dynamic_state) = &self.dynamic_state {
+                let prev = dynamic_state.load();
+                let new_version = prev.version + 1;
+                match DynamicGatewayState::new_from_config(&parsed_cfg, content, new_version) {
+                    Ok(new_state) => {
+                        let v = new_state.version;
+                        let h = new_state.config_hash.clone();
+                        let u = new_state.updated_at_epoch_ms;
+                        dynamic_state.store(Arc::new(new_state));
+                        log::info!("Admin: Hot-reloaded configuration to version #{}", v);
+                        (v, h, u)
+                    }
+                    Err(e) => {
+                        log::error!("Hot reload failed after persisting config: {}", e);
+                        let body = serde_json::json!({
+                            "error": "Reload Error",
+                            "message": format!("Configuration saved to store, but hot-reload failed: {}", e)
+                        });
+                        return self.respond_json(session, 500, &body).await;
+                    }
+                }
+            } else {
+                (1, "untracked".to_string(), 0)
+            }
+        } else {
+            let (v, h, u) = if let Some(ds) = &self.dynamic_state {
+                let s = ds.load();
+                (s.version, s.config_hash.clone(), s.updated_at_epoch_ms)
+            } else {
+                (1, "untracked".to_string(), 0)
+            };
+            (v, h, u)
+        };
+
+        let resp = AdminConfigUpdateResponse {
+            success: true,
+            version,
+            hash,
+            updated_at_epoch_ms: updated_at,
+            reloaded: reload,
+            message: if reload {
+                "Configuration saved and runtime hot-reloaded successfully".to_string()
+            } else {
+                "Configuration saved to store (hot-reload skipped)".to_string()
+            },
+        };
+        self.respond_json(session, 200, &resp).await
+    }
+
+    async fn handle_config_reload(&self, session: &mut Session) -> pingora::Result<bool> {
+        if !self.is_write_authorized(session) {
+            let body = serde_json::json!({
+                "error": "Unauthorized",
+                "message": "Missing or invalid admin authorization token (set SPECTRA_ADMIN_TOKEN or provide valid Authorization: Bearer <token>)"
+            });
+            return self.respond_json(session, 401, &body).await;
+        }
+
+        let store = match &self.config_store {
+            Some(s) => s,
+            None => {
+                let body = serde_json::json!({
+                    "error": "No Config Store",
+                    "message": "No persistent config store is configured on this gateway instance"
+                });
+                return self.respond_json(session, 400, &body).await;
+            }
+        };
+
+        let content = match store.load_config().await {
+            Ok(Some(c)) => c,
+            Ok(None) => {
+                let body = serde_json::json!({
+                    "error": "Not Found",
+                    "message": "No configuration found in persistent store"
+                });
+                return self.respond_json(session, 404, &body).await;
+            }
+            Err(e) => {
+                let body = serde_json::json!({
+                    "error": "Storage Error",
+                    "message": format!("Failed to read configuration from store: {}", e)
+                });
+                return self.respond_json(session, 500, &body).await;
+            }
+        };
+
+        let parsed_cfg = match SpectraConfig::from_toml_str(&content) {
+            Ok(cfg) => cfg,
+            Err(e) => {
+                let body = serde_json::json!({
+                    "error": "Invalid Configuration In Store",
+                    "message": format!("Configuration in store failed parsing: {}", e)
+                });
+                return self.respond_json(session, 500, &body).await;
+            }
+        };
+
+        let (version, hash, updated_at) = if let Some(dynamic_state) = &self.dynamic_state {
+            let prev = dynamic_state.load();
+            let new_version = prev.version + 1;
+            match DynamicGatewayState::new_from_config(&parsed_cfg, content, new_version) {
+                Ok(new_state) => {
+                    let v = new_state.version;
+                    let h = new_state.config_hash.clone();
+                    let u = new_state.updated_at_epoch_ms;
+                    dynamic_state.store(Arc::new(new_state));
+                    log::info!("Admin: Hot-reloaded configuration from persistent store to version #{}", v);
+                    (v, h, u)
+                }
+                Err(e) => {
+                    let body = serde_json::json!({
+                        "error": "Reload Error",
+                        "message": format!("Failed to apply configuration from store: {}", e)
+                    });
+                    return self.respond_json(session, 500, &body).await;
+                }
+            }
+        } else {
+            (1, "untracked".to_string(), 0)
+        };
+
+        let resp = AdminConfigReloadResponse {
+            success: true,
+            version,
+            hash,
+            updated_at_epoch_ms: updated_at,
+            reloaded: true,
+            message: "Configuration reloaded from store and hot-swapped into gateway runtime".to_string(),
+        };
+        self.respond_json(session, 200, &resp).await
+    }
+
     async fn handle_not_found(&self, session: &mut Session, path: &str) -> pingora::Result<bool> {
         let body = serde_json::json!({
             "error": "Not Found",
@@ -611,7 +1020,10 @@ impl AdminEngine {
                 "/admin/api/v1/schema",
                 "/admin/api/v1/schema/refresh",
                 "/admin/api/v1/subscriptions",
-                "/admin/api/v1/idempotency"
+                "/admin/api/v1/idempotency",
+                "/admin/api/v1/config",
+                "/admin/api/v1/config/validate",
+                "/admin/api/v1/config/reload"
             ]
         });
         self.respond_json(session, 404, &body).await

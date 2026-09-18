@@ -111,5 +111,67 @@ pub struct AdminIdempotencyResponse {
     pub active_records: usize,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AdminConfigResponse {
+    pub backend: String,
+    pub descriptor: String,
+    pub version: u64,
+    pub updated_at_epoch_ms: u64,
+    pub hash: String,
+    pub content: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AdminConfigValidateRequest {
+    pub content: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AdminConfigSummary {
+    pub apps_count: usize,
+    pub routes_count: usize,
+    pub named_upstreams_count: usize,
+    pub interceptors_count: usize,
+    pub broker_method: String,
+    pub broker_addr: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AdminConfigValidateResponse {
+    pub valid: bool,
+    #[serde(default)]
+    pub errors: Vec<String>,
+    #[serde(default)]
+    pub warnings: Vec<String>,
+    pub summary: Option<AdminConfigSummary>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AdminConfigUpdateRequest {
+    pub content: String,
+    #[serde(default = "default_true")]
+    pub reload: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AdminConfigUpdateResponse {
+    pub success: bool,
+    pub version: u64,
+    pub hash: String,
+    pub updated_at_epoch_ms: u64,
+    pub reloaded: bool,
+    pub message: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AdminConfigReloadResponse {
+    pub success: bool,
+    pub version: u64,
+    pub hash: String,
+    pub updated_at_epoch_ms: u64,
+    pub reloaded: bool,
+    pub message: String,
+}
+
 pub use crate::admin::eventsink::{ConsumerMetrics, EventSinkResponse, StreamMetrics};
 pub use crate::admin::traffic::{TrafficRecord, TrafficResponse, TrafficStats};
