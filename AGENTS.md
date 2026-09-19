@@ -49,6 +49,14 @@ Every microsecond, heap allocation, and mutex lock on the request/dispatch hot p
   * HTTP headers must use compile-time static constants (`HeaderValue::from_static(...)`) or fallible conversion (`HeaderValue::try_from(...)`).
   * Concurrency locks must use poison-safe recovery (`lock().unwrap_or_else(|e| e.into_inner())`) or lock-free atomics.
 
+### Invariant 6: Bounded L1 Security Caches & Zero-Copy Claims
+* **Rule:** Security evaluators (JWT validation, RBAC checks) must NEVER allocate unbounded memory or execute cryptographic signature verification repeatedly on cached requests.
+* **Bad:** Validating RS256/Ed25519 signatures synchronously on every incoming request, or allocating unbounded HashMaps for token caching.
+* **Good:**
+  * Cache cryptographically verified tokens in a bounded LRU cache (10,000 capacity).
+  * Use borrowed string slices for operation matching (`op_name.as_deref().unwrap_or("")`).
+  * Use compile-time `std::sync::LazyLock` pre-allocated `cel::objects::Key` instances for ABAC CEL evaluations.
+
 ---
 
 ## 3. Event Sink Philosophy & Least-Common-Denominator Capabilities

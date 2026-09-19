@@ -122,6 +122,13 @@ Every operation is tagged with:
 - **UUIDv7**: Monotonically increasing time-ordered identifiers (`x-spectra-request-id`).
 - **Hybrid Logical Clocks (HLC)**: Nanosecond-precision physical clock combined with a logical counter (`x-spectra-hlc`) to provide strict causal ordering across distributed gateways without distributed coordination.
 
+### 6. Wire-Speed Edge RBAC, ABAC & Identity Injection
+SpectraGQL enforces sub-microsecond authentication and authorization at the network perimeter:
+- **Bounded L1 LRU Cache:** 10,000-entry capacity caching cryptographically verified tokens to neutralize token-flooding DoS attacks.
+- **Trusted Identity Header Injection:** Verifies JWTs (local secrets or remote JWKS with periodic rotation) and injects sanitized headers (`x-user-id`, `x-tenant-id`, `x-user-roles`) to upstream services.
+- **Log Poisoning Shield:** Blocks unauthorized mutations before they enter append-only event logs (Kafka/NATS) in Mode B.
+- **Standalone Value:** Operates 100% independently of downstream execution engines like SpectraFlux.
+
 ---
 
 ## Core Documentation
@@ -129,6 +136,7 @@ Every operation is tagged with:
 - **[Philosophy & Core Thesis](docs/philosophy.md)**: Deconstructing the mutation debate, CQRS, and durable event sourcing across microservices.
 - **[Architecture & Strategy](docs/architecture-and-strategy.md)**: Deep dive into the Pingora pipeline, filter architecture, and design patterns.
 - **[Modes of Operation](docs/modes-of-operation.md)**: Sequence diagrams and failure policies for Mode A and Mode B.
+- **[Wire-Speed Edge RBAC & ABAC](docs/auth-and-rbac.md)**: Zero-trust edge authentication, declarative operation roles, CEL attributes, and identity header injection.
 - **[Application Integration Guide](docs/app-integration.md)**: Upstream service integration patterns, dynamic DNS re-resolution hooks, and typed context helpers.
 - **[Subscriptions & Realtime](docs/subscriptions-and-realtime.md)**: Reverse event queues, WebSocket (`graphql-ws`) termination, and live updates.
 - **[Local Appliance Setup](docs/dev-appliances.md)**: Quick-start Docker Compose environments for local NATS, Kafka, Redis, and Iggy brokers.
