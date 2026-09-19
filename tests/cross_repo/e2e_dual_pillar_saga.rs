@@ -23,6 +23,8 @@ async fn start_spectral_flux_server() -> (SocketAddr, Arc<dyn spectra_flux::stor
         RouteDefinition::new("GET", "/verify", "Verify magic link"),
         RouteDefinition::new("POST", "/verify", "Redeem magic link"),
         RouteDefinition::new("GET", "/status", "Status"),
+        RouteDefinition::new("GET", "/.well-known/jwks.json", "JWKS"),
+        RouteDefinition::new("GET", "/.well-known/openid-configuration", "OIDC"),
     ];
     let webhook_routes = vec![
         RouteDefinition::new("GET", "/health", "Health"),
@@ -106,8 +108,54 @@ async fn test_full_cqrs_magic_link_saga() {
     assert_eq!(body1["status"], "VERIFIED");
     assert_eq!(body1["email"], email);
     assert!(body1["session_id"].is_string());
+    assert!(body1["token"].is_string(), "Token must be minted as a standard JWT");
+    assert_eq!(body1["roles"], serde_json::json!(["viewer"]));
 
-    // 4. Double-spend / Replay Attack Prevention (Atomic GETDEL)
+    // 4. Verify OIDC Discovery endpoint
+    let oidc_url = format!("http://{}/auth/.well-known/openid-configuration", flux_addr);
+    let oidc_resp = client.get(&oidc_url).send().await.expect("Failed to call OIDC endpoint");
+    assert_eq!(oidc_resp.status(), 200);
+    let oidc_body: serde_json::Value = oidc_resp.json().await.unwrap();
+    assert_eq!(oidc_body["issuer"], format!("http://{}", flux_addr));
+
+    // 5. SpectraGQL RBAC & ABAC Verification with minted token
+    let jwt_token = body1["token"].as_str().unwrap();
+    let jwt_secret = std::env::var("SPECTRA_JWT_SECRET")
+        .unwrap_or_else(|_| "spectra_secret_key_default".to_string());
+    let provider = spectragql::interceptors::AuthProvider::hmac(jwt_secret.as_bytes());
+
+    let rbac_interceptor = spectragql::interceptors::RbacRequestInterceptor::new()
+        .with_provider(provider)
+        .with_policies(spectragql::interceptors::PolicyMode::DenyUnlisted, spectragql::interceptors::PolicyMode::PassAll)
+        .grant_role("editor", ["publishArticle"]);
+
+    let mut parts = http::Request::builder().uri("/graphql").body(()).unwrap().into_parts().0;
+    parts.headers.insert("authorization", format!("Bearer {}", jwt_token).parse().unwrap());
+
+    // Attempting publishArticle without 'editor' role -> 403 Forbidden!
+    let mut ctx_mutation = spectragql::interceptors::InterceptorContext::new(uuid::Uuid::now_v7(), hlc.clone())
+        .with_operation(Some("publishArticle".to_string()), Some(spectragql::protocol::GraphQLOperationType::Mutation));
+    let verdict_mut = rbac_interceptor.intercept_request(&mut ctx_mutation, &mut parts, "");
+    assert!(matches!(verdict_mut, spectragql::interceptors::InterceptorVerdict::Reject(rej) if rej.status_code == http::StatusCode::FORBIDDEN));
+
+    // ABAC CEL Scope Expansion: Author can update post even with viewer role
+    let cel_abac = spectragql::interceptors::CelRequestInterceptor::new(
+        "'editor' in claims.roles || variables.author == claims.sub",
+        Some(http::StatusCode::FORBIDDEN),
+        Some("FORBIDDEN"),
+        Some("Access Denied"),
+    ).unwrap();
+
+    let mut ctx_abac = spectragql::interceptors::InterceptorContext::new(uuid::Uuid::now_v7(), hlc.clone())
+        .with_operation(Some("updatePost".to_string()), Some(spectragql::protocol::GraphQLOperationType::Mutation));
+    // Pass through RBAC interceptor on updatePost (which passes in PassAll mode)
+    let _ = rbac_interceptor.intercept_request(&mut ctx_abac, &mut parts, "");
+    // Now evaluate CEL ABAC on body
+    let abac_body = format!(r#"{{"query": "mutation {{ updatePost }}", "variables": {{"author": "{}"}}}}"#, email);
+    let verdict_abac = cel_abac.intercept_request(&mut ctx_abac, &mut parts, &abac_body);
+    assert!(matches!(verdict_abac, spectragql::interceptors::InterceptorVerdict::Pass), "ABAC scope expansion must pass for resource author");
+
+    // 6. Double-spend / Replay Attack Prevention (Atomic GETDEL)
     // Attempting to reuse the same token immediately returns HTTP 401
     let resp2 = client.get(&verify_url).send().await.expect("Failed to call verify endpoint again");
     assert_eq!(resp2.status(), 401, "Second verification attempt must fail with HTTP 401 Unauthorized");

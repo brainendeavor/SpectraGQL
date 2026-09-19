@@ -117,15 +117,38 @@ async fn test_e2e_gateway_mode_a_and_idempotency_replay() {
 
     let unreachable_dispatch_port = get_free_port().await;
 
-    // Spawn the real SpectraGQL gateway binary
+    let test_config = format!(
+        r#"
+bind_addr = "127.0.0.1:{gateway_port}"
+
+[upstream]
+addr = "127.0.0.1:{upstream_port}"
+
+[dispatch]
+method = "nats"
+addr = "127.0.0.1:{unreachable_dispatch_port}"
+
+[admin]
+enabled = true
+allowed_ips = ["127.0.0.1"]
+
+[gql]
+paths = "/graphql,/gql"
+ops_to_dispatch = "query, mutation, subscription"
+
+[gql.routes.bulk_import]
+operation = "importCatalog"
+strategy = "async"
+receipt_status = "ACCEPTED"
+"#,
+        gateway_port = gateway_port,
+        upstream_port = mock_upstream.addr.port(),
+        unreachable_dispatch_port = unreachable_dispatch_port,
+    );
+
+    // Spawn the real SpectraGQL gateway binary with explicit self-contained config
     let child = Command::new(bin_path)
-        .env("SPECTRA_BIND_ADDR", format!("127.0.0.1:{}", gateway_port))
-        .env("SPECTRA_UPSTREAM_ADDR", format!("127.0.0.1:{}", mock_upstream.addr.port()))
-        .env("SPECTRA_GQL_PATHS", "/graphql,/gql")
-        .env("SPECTRA_DISPATCH_METHOD", "nats")
-        .env("SPECTRA_DISPATCH_ADDR", format!("127.0.0.1:{}", unreachable_dispatch_port))
-        .env("SPECTRA_ADMIN_ENABLED", "true")
-        .env("SPECTRA_ADMIN_ALLOWED_IPS", "127.0.0.1")
+        .env("SPECTRA_CONFIG_CONTENT", test_config)
         .spawn()
         .expect("Failed to spawn spectragql binary");
 

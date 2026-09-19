@@ -80,6 +80,8 @@ pub enum InterceptorType {
     Cel,
     Wasm,
     Native,
+    Rbac,
+    Auth,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -107,6 +109,18 @@ pub struct InterceptorConfig {
     // Native configuration
     pub kind: Option<String>,
     pub token: Option<String>,
+    // RBAC / Auth configuration
+    pub provider: Option<String>,
+    pub jwks_url: Option<String>,
+    pub secret: Option<String>,
+    pub mutations_default: Option<String>,
+    pub queries_default: Option<String>,
+    pub unauthenticated_ops: Option<Vec<String>>,
+    pub roles: Option<HashMap<String, Vec<String>>>,
+    pub subject_path: Option<String>,
+    pub tenant_path: Option<String>,
+    pub roles_path: Option<String>,
+    pub permissions_path: Option<String>,
 }
 
 fn default_epoch_tick_interval_ms() -> u64 {

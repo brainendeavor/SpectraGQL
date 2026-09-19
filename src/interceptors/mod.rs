@@ -1,3 +1,4 @@
+pub mod auth;
 pub mod context;
 pub mod evaluators;
 pub mod manager;
@@ -6,10 +7,11 @@ pub mod response;
 pub mod rules;
 pub mod sanitizer;
 
+pub use auth::{AuthProvider, ClaimsMapping, JwksKey, PolicyMode, RbacRequestInterceptor};
 pub use manager::InterceptorManager;
 
 pub use context::{
-    InterceptorContext, InterceptorRejection, InterceptorVerdict, RuleEvaluationError,
+    AuthClaims, InterceptorContext, InterceptorRejection, InterceptorVerdict, RuleEvaluationError,
 };
 pub use evaluators::{
     CelRequestInterceptor, CelResponseInterceptor, CelRuleEvaluator, CircuitBreakerConfig,

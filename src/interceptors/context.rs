@@ -3,6 +3,44 @@ use uuid::Uuid;
 use crate::core::clock::HlcTimestamp;
 use crate::protocol::GraphQLOperationType;
 
+/// Structured authentication identity and authorization claims.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct AuthClaims {
+    pub subject: Option<String>,
+    pub tenant_id: Option<String>,
+    pub roles: Vec<String>,
+    pub permissions: Vec<String>,
+    #[serde(default)]
+    pub raw_claims: serde_json::Value,
+}
+
+impl AuthClaims {
+    pub fn new(subject: impl Into<String>) -> Self {
+        Self {
+            subject: Some(subject.into()),
+            tenant_id: None,
+            roles: Vec::new(),
+            permissions: Vec::new(),
+            raw_claims: serde_json::Value::Null,
+        }
+    }
+
+    pub fn with_roles(mut self, roles: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.roles = roles.into_iter().map(Into::into).collect();
+        self
+    }
+
+    pub fn with_tenant(mut self, tenant_id: impl Into<String>) -> Self {
+        self.tenant_id = Some(tenant_id.into());
+        self
+    }
+
+    pub fn with_permissions(mut self, permissions: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.permissions = permissions.into_iter().map(Into::into).collect();
+        self
+    }
+}
+
 /// Execution context passed through RequestInterceptor and ResponseInterceptor pipelines.
 #[derive(Debug, Clone)]
 pub struct InterceptorContext {
@@ -14,6 +52,7 @@ pub struct InterceptorContext {
     pub metadata: HashMap<String, String>,
     pub extensions: HashMap<String, serde_json::Value>,
     pub duration_ms: u64,
+    pub claims: Option<AuthClaims>,
 }
 
 impl InterceptorContext {
@@ -27,6 +66,7 @@ impl InterceptorContext {
             metadata: HashMap::new(),
             extensions: HashMap::new(),
             duration_ms: 0,
+            claims: None,
         }
     }
 
@@ -38,6 +78,40 @@ impl InterceptorContext {
         self.operation_name = name;
         self.operation_type = op_type;
         self
+    }
+
+    pub fn with_claims(mut self, claims: AuthClaims) -> Self {
+        self.claims = Some(claims);
+        self
+    }
+
+    pub fn is_authenticated(&self) -> bool {
+        self.claims.as_ref().map(|c| c.subject.is_some()).unwrap_or(false)
+    }
+
+    pub fn has_role(&self, role: &str) -> bool {
+        if let Some(ref c) = self.claims {
+            c.roles.iter().any(|r| r == role || r == "*")
+        } else {
+            false
+        }
+    }
+
+    pub fn has_any_role(&self, roles: &[&str]) -> bool {
+        if let Some(ref c) = self.claims {
+            c.roles.iter().any(|r| r == "*" || roles.contains(&r.as_str()))
+        } else {
+            false
+        }
+    }
+
+    pub fn has_permission(&self, perm: &str) -> bool {
+        if let Some(ref c) = self.claims {
+            c.permissions.iter().any(|p| p == perm || p == "*")
+                || c.roles.iter().any(|r| r == "admin" || r == "*")
+        } else {
+            false
+        }
     }
 }
 

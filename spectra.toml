@@ -200,6 +200,21 @@ kind = "deploy_auth"
 # Optional fallback if SPECTRA_DEPLOY_TOKEN environment variable is unset:
 # token = "sk_deploy_change_this_token_in_production"
 
+# Declarative RBAC / Auth Interceptor with Universal JWKS (OIDC) & Policy Modes
+# Default mutations policy is "audit_only" for great DX (never blocks unexpectedly,
+# logs audit warnings until you switch to "deny_unlisted").
+# [interceptors.rbac_guard]
+# stage = "request"
+# type = "rbac"
+# jwks_url = "http://127.0.0.1:8081/auth/.well-known/jwks.json" # or Clerk: "https://clerk.myapp.com/.well-known/jwks.json"
+# mutations_default = "audit_only" # "audit_only", "deny_unlisted", "allow_authenticated", "pass_all"
+# queries_default = "pass_all"
+# unauthenticated_ops = ["IntrospectionQuery", "__schema", "requestMagicLink", "verifyMagicLink"]
+# [interceptors.rbac_guard.roles]
+# admin = ["*"]
+# editor = ["createPost", "updatePost", "getPosts"]
+# viewer = ["getPosts"]
+
 [interceptors.auth_guard]
 stage = "request"
 type = "cel"

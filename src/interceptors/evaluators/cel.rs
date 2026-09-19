@@ -1,8 +1,23 @@
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use cel::{Context, Program, Value};
 use crate::interceptors::context::RuleEvaluationError;
 use crate::interceptors::rules::RuleEvaluator;
+
+// Pre-allocated static CEL map keys to eliminate per-request heap allocations on hot path
+static KEY_METHOD: LazyLock<cel::objects::Key> = LazyLock::new(|| cel::objects::Key::String(Arc::new("method".to_string())));
+static KEY_URI: LazyLock<cel::objects::Key> = LazyLock::new(|| cel::objects::Key::String(Arc::new("uri".to_string())));
+static KEY_PATH: LazyLock<cel::objects::Key> = LazyLock::new(|| cel::objects::Key::String(Arc::new("path".to_string())));
+static KEY_HEADERS: LazyLock<cel::objects::Key> = LazyLock::new(|| cel::objects::Key::String(Arc::new("headers".to_string())));
+
+static KEY_SUB: LazyLock<cel::objects::Key> = LazyLock::new(|| cel::objects::Key::String(Arc::new("sub".to_string())));
+static KEY_SUBJECT: LazyLock<cel::objects::Key> = LazyLock::new(|| cel::objects::Key::String(Arc::new("subject".to_string())));
+static KEY_TENANT_ID: LazyLock<cel::objects::Key> = LazyLock::new(|| cel::objects::Key::String(Arc::new("tenant_id".to_string())));
+static KEY_ORG_ID: LazyLock<cel::objects::Key> = LazyLock::new(|| cel::objects::Key::String(Arc::new("org_id".to_string())));
+static KEY_ROLES: LazyLock<cel::objects::Key> = LazyLock::new(|| cel::objects::Key::String(Arc::new("roles".to_string())));
+static KEY_PERMISSIONS: LazyLock<cel::objects::Key> = LazyLock::new(|| cel::objects::Key::String(Arc::new("permissions".to_string())));
+static KEY_IS_AUTHENTICATED: LazyLock<cel::objects::Key> = LazyLock::new(|| cel::objects::Key::String(Arc::new("is_authenticated".to_string())));
+static KEY_RAW: LazyLock<cel::objects::Key> = LazyLock::new(|| cel::objects::Key::String(Arc::new("raw".to_string())));
 
 /// Converts a `serde_json::Value` into an equivalent `cel::Value`.
 pub fn json_to_cel(val: &serde_json::Value) -> Value {
@@ -203,19 +218,19 @@ impl RequestInterceptor for CelRequestInterceptor {
         // 2. Request object: method, uri, path, headers
         let mut req_map = HashMap::new();
         req_map.insert(
-            cel::objects::Key::String(Arc::new("method".to_string())),
+            KEY_METHOD.clone(),
             Value::String(Arc::new(parts.method.to_string())),
         );
         req_map.insert(
-            cel::objects::Key::String(Arc::new("uri".to_string())),
+            KEY_URI.clone(),
             Value::String(Arc::new(parts.uri.to_string())),
         );
         req_map.insert(
-            cel::objects::Key::String(Arc::new("path".to_string())),
+            KEY_PATH.clone(),
             Value::String(Arc::new(parts.uri.path().to_string())),
         );
         req_map.insert(
-            cel::objects::Key::String(Arc::new("headers".to_string())),
+            KEY_HEADERS.clone(),
             headers_val,
         );
         cel_ctx.add_variable(
@@ -268,6 +283,59 @@ impl RequestInterceptor for CelRequestInterceptor {
             cel_ctx.add_variable("body", Value::String(Arc::new(body.to_string())));
         }
         cel_ctx.add_variable("raw_body", Value::String(Arc::new(body.to_string())));
+
+        // 5. Claims & Auth context (Subject, Roles, Tenant, Permissions)
+        let mut claims_map = HashMap::new();
+        if let Some(ref c) = ctx.claims {
+            claims_map.insert(
+                KEY_SUB.clone(),
+                c.subject.as_ref().map(|s| Value::String(Arc::new(s.clone()))).unwrap_or(Value::Null),
+            );
+            claims_map.insert(
+                KEY_SUBJECT.clone(),
+                c.subject.as_ref().map(|s| Value::String(Arc::new(s.clone()))).unwrap_or(Value::Null),
+            );
+            claims_map.insert(
+                KEY_TENANT_ID.clone(),
+                c.tenant_id.as_ref().map(|s| Value::String(Arc::new(s.clone()))).unwrap_or(Value::Null),
+            );
+            claims_map.insert(
+                KEY_ORG_ID.clone(),
+                c.tenant_id.as_ref().map(|s| Value::String(Arc::new(s.clone()))).unwrap_or(Value::Null),
+            );
+            let roles_list: Vec<Value> = c.roles.iter().map(|r| Value::String(Arc::new(r.clone()))).collect();
+            claims_map.insert(
+                KEY_ROLES.clone(),
+                Value::List(Arc::new(roles_list)),
+            );
+            let perms_list: Vec<Value> = c.permissions.iter().map(|p| Value::String(Arc::new(p.clone()))).collect();
+            claims_map.insert(
+                KEY_PERMISSIONS.clone(),
+                Value::List(Arc::new(perms_list)),
+            );
+            claims_map.insert(
+                KEY_IS_AUTHENTICATED.clone(),
+                Value::Bool(c.subject.is_some()),
+            );
+            claims_map.insert(
+                KEY_RAW.clone(),
+                json_to_cel(&c.raw_claims),
+            );
+        } else {
+            claims_map.insert(KEY_SUB.clone(), Value::Null);
+            claims_map.insert(KEY_SUBJECT.clone(), Value::Null);
+            claims_map.insert(KEY_TENANT_ID.clone(), Value::Null);
+            claims_map.insert(KEY_ORG_ID.clone(), Value::Null);
+            claims_map.insert(KEY_ROLES.clone(), Value::List(Arc::new(Vec::new())));
+            claims_map.insert(KEY_PERMISSIONS.clone(), Value::List(Arc::new(Vec::new())));
+            claims_map.insert(KEY_IS_AUTHENTICATED.clone(), Value::Bool(false));
+            claims_map.insert(KEY_RAW.clone(), Value::Null);
+        }
+        let claims_val = Value::Map(cel::objects::Map {
+            map: Arc::new(claims_map),
+        });
+        cel_ctx.add_variable("claims", claims_val.clone());
+        cel_ctx.add_variable("auth", claims_val);
 
         let eval_result = self.program.execute(&cel_ctx);
         match self.action {
@@ -574,5 +642,40 @@ mod tests {
             }
             other => panic!("Expected InterceptorVerdict::Reject, got: {:?}", other),
         }
+    }
+
+    #[test]
+    fn test_cel_request_rbac_and_abac_evaluation() {
+        use crate::interceptors::context::AuthClaims;
+
+        // Rule: 'editor' in claims.roles || variables.author_id == claims.sub
+        let interceptor = CelRequestInterceptor::new(
+            "'editor' in claims.roles || (has(variables.author_id) && variables.author_id == claims.sub)",
+            Some(http::StatusCode::FORBIDDEN),
+            Some("UNAUTHORIZED"),
+            Some("Access denied"),
+        )
+        .unwrap();
+
+        // Case 1: Unprivileged viewer who is the author -> Scope Expanded -> Passes!
+        let mut ctx1 = InterceptorContext::new(Uuid::now_v7(), HlcTimestamp::new(1000, 0))
+            .with_claims(AuthClaims::new("user_123").with_roles(["viewer"]));
+        let mut parts1 = http::Request::builder().uri("/graphql").body(()).unwrap().into_parts().0;
+        let body1 = r#"{"query": "mutation { updatePost }", "variables": {"author_id": "user_123"}}"#;
+        assert!(matches!(interceptor.intercept_request(&mut ctx1, &mut parts1, body1), InterceptorVerdict::Pass));
+
+        // Case 2: Unprivileged viewer who is NOT the author -> Rejected!
+        let mut ctx2 = InterceptorContext::new(Uuid::now_v7(), HlcTimestamp::new(1000, 0))
+            .with_claims(AuthClaims::new("user_456").with_roles(["viewer"]));
+        let mut parts2 = http::Request::builder().uri("/graphql").body(()).unwrap().into_parts().0;
+        let body2 = r#"{"query": "mutation { updatePost }", "variables": {"author_id": "user_123"}}"#;
+        assert!(matches!(interceptor.intercept_request(&mut ctx2, &mut parts2, body2), InterceptorVerdict::Reject(_)));
+
+        // Case 3: Editor editing someone else's post -> Has role -> Passes!
+        let mut ctx3 = InterceptorContext::new(Uuid::now_v7(), HlcTimestamp::new(1000, 0))
+            .with_claims(AuthClaims::new("editor_999").with_roles(["editor"]));
+        let mut parts3 = http::Request::builder().uri("/graphql").body(()).unwrap().into_parts().0;
+        let body3 = r#"{"query": "mutation { updatePost }", "variables": {"author_id": "user_123"}}"#;
+        assert!(matches!(interceptor.intercept_request(&mut ctx3, &mut parts3, body3), InterceptorVerdict::Pass));
     }
 }

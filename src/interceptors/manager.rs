@@ -5,6 +5,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use crate::core::config::{
     InterceptorStage, InterceptorType, SpectraConfig,
 };
+use crate::interceptors::auth::{AuthProvider, ClaimsMapping, PolicyMode, RbacRequestInterceptor};
 use crate::interceptors::evaluators::cel::{CelRequestInterceptor, CelResponseInterceptor};
 use crate::interceptors::evaluators::wasm::{
     CircuitBreakerConfig, WasmEngineConfig, WasmInterceptorEvaluator, WasmPluginConfig,
@@ -217,6 +218,64 @@ impl InterceptorManager {
                             );
                         }
                     }
+                }
+                InterceptorType::Rbac | InterceptorType::Auth => {
+                    let mut rbac = RbacRequestInterceptor::new();
+
+                    // Configure token verification provider
+                    if let Some(ref jwks) = ic.jwks_url {
+                        rbac = rbac.with_provider(AuthProvider::jwks(
+                            jwks,
+                            std::time::Duration::from_secs(3600),
+                        ));
+                    } else if let Some(ref sec) = ic.secret {
+                        rbac = rbac.with_provider(AuthProvider::hmac(sec.as_bytes()));
+                    }
+
+                    // Configure default policies (mutations defaults to AuditOnly for DX)
+                    let mut_pol = ic
+                        .mutations_default
+                        .as_deref()
+                        .map(PolicyMode::from_str)
+                        .unwrap_or(PolicyMode::AuditOnly);
+                    let qry_pol = ic
+                        .queries_default
+                        .as_deref()
+                        .map(PolicyMode::from_str)
+                        .unwrap_or(PolicyMode::PassAll);
+                    rbac = rbac.with_policies(mut_pol, qry_pol);
+
+                    // Configure unauthenticated operations
+                    if let Some(ref unauth) = ic.unauthenticated_ops {
+                        for op in unauth {
+                            rbac = rbac.allow_unauthenticated(op);
+                        }
+                    }
+
+                    // Configure claims extraction mapping
+                    let mut mapping = ClaimsMapping::default();
+                    if let Some(ref sub_p) = ic.subject_path {
+                        mapping.subject_path = sub_p.clone();
+                    }
+                    if let Some(ref tid_p) = ic.tenant_path {
+                        mapping.tenant_path = Some(tid_p.clone());
+                    }
+                    if let Some(ref r_p) = ic.roles_path {
+                        mapping.roles_path = r_p.clone();
+                    }
+                    if let Some(ref p_p) = ic.permissions_path {
+                        mapping.permissions_path = Some(p_p.clone());
+                    }
+                    rbac = rbac.with_claims_mapping(mapping);
+
+                    // Configure role grants
+                    if let Some(ref roles_map) = ic.roles {
+                        for (role, ops) in roles_map {
+                            rbac = rbac.grant_role(role, ops);
+                        }
+                    }
+
+                    request_interceptors.insert(name.clone(), Arc::new(rbac));
                 }
             }
         }
@@ -437,5 +496,51 @@ mod tests {
         assert!(res.is_err());
         let err_msg = res.unwrap_err().to_string();
         assert!(err_msg.contains("Invalid CEL request rule 'broken_cel'"));
+    }
+
+    #[test]
+    fn test_interceptor_manager_rbac_configuration() {
+        let toml_str = r#"
+            bind_addr = "0.0.0.0:8000"
+
+            [upstream]
+            addr = "127.0.0.1:4000"
+
+            [dispatch]
+            name = "default"
+            method = "NATS"
+            addr = "127.0.0.1:4222"
+
+            [interceptors.auth_guard]
+            type = "rbac"
+            stage = "request"
+            secret = "test_secret_key"
+            mutations_default = "audit_only"
+            queries_default = "allow_authenticated"
+            unauthenticated_ops = ["IntrospectionQuery", "requestMagicLink"]
+
+            [interceptors.auth_guard.roles]
+            admin = ["deleteUser"]
+            editor = ["updatePost", "createPost"]
+
+            [gql]
+            paths = "/graphql"
+            ops_to_dispatch = "query, mutation"
+            interceptors = ["auth_guard"]
+
+            [rest]
+            paths = "/api"
+        "#;
+
+        let cfg: SpectraConfig = config::Config::builder()
+            .add_source(config::File::from_str(toml_str, config::FileFormat::Toml))
+            .build()
+            .unwrap()
+            .try_deserialize()
+            .unwrap();
+
+        let manager = InterceptorManager::from_config(&cfg).expect("Manager should load RBAC interceptor");
+        let pipe = manager.get_request_pipeline(None);
+        assert_eq!(pipe.len(), 1);
     }
 }
